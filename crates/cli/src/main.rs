@@ -45,7 +45,7 @@ impl WaitLimits {
 fn wait_limits_from(config: Option<ConfigResponse>) -> WaitLimits {
     match config {
         Some(config) => WaitLimits {
-            default_seconds: config.wait_default_seconds,
+            default_seconds: config.wait_effective_default_seconds,
             max_seconds: config.wait_max_seconds,
         },
         None => WaitLimits::fallback(),
@@ -374,6 +374,7 @@ mod tests {
         let config = ConfigResponse {
             tick_seconds: 4.0,
             wait_default_seconds: 7.0,
+            wait_effective_default_seconds: 7.0,
             wait_max_seconds: 9.0,
             snapshot_interval_ticks: 120,
         };

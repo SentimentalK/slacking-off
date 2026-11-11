@@ -579,7 +579,8 @@ impl Server {
         };
         let result = ConfigResponse {
             tick_seconds: cfg.tick_seconds,
-            wait_default_seconds: cfg.wait_default_seconds(),
+            wait_default_seconds: cfg.wait.default_seconds,
+            wait_effective_default_seconds: cfg.wait_default_seconds(),
             wait_max_seconds: cfg.wait.max_seconds,
             snapshot_interval_ticks: cfg.persist.snapshot_interval_ticks,
         };

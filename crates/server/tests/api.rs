@@ -858,9 +858,9 @@ async fn restart_restores_immediate_and_queued_joins_without_a_snapshot() {
 #[tokio::test]
 async fn config_reports_the_live_wait_settings() {
     let cfg = Config {
-        tick_seconds: 2.0,
+        tick_seconds: 5.0,
         wait: loo_core::config::WaitConfig {
-            default_seconds: 3.0,
+            default_seconds: 2.0,
             max_seconds: 7.0,
         },
         ..Config::default()
@@ -868,8 +868,12 @@ async fn config_reports_the_live_wait_settings() {
     let server = new_server_with("config-endpoint", cfg);
     let envelope = server.config_response().await;
     let config = envelope.result.expect("config result");
-    assert_eq!(config.tick_seconds, 2.0);
-    assert_eq!(config.wait_default_seconds, 3.0);
+    assert_eq!(config.tick_seconds, 5.0);
+    assert_eq!(config.wait_default_seconds, 2.0, "the raw config value");
+    assert_eq!(
+        config.wait_effective_default_seconds, 5.0,
+        "the effective default covers one tick"
+    );
     assert_eq!(
         config.wait_max_seconds, 7.0,
         "a non-55 max is reported unchanged so the CLI can follow it"

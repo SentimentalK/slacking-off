@@ -388,7 +388,10 @@ pub struct RulesResponse {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ConfigResponse {
     pub tick_seconds: f64,
+    /// Configured `wait.default_seconds` value.
     pub wait_default_seconds: f64,
+    /// Effective default: max(default_seconds, tick_seconds), capped at max.
+    pub wait_effective_default_seconds: f64,
     pub wait_max_seconds: f64,
     pub snapshot_interval_ticks: u32,
 }
