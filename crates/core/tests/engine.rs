@@ -708,16 +708,17 @@ fn action_replaced_is_announced_and_new_action_wins() {
         &cfg,
     );
     assert_eq!(pos_of(&world, 1), Pos::new(2, 1));
+    let started = find_event(&events, |kind| {
+        matches!(kind, EventKind::ActionStarted { .. })
+    });
     assert!(
-        matches!(
-            find_event(&events, |kind| matches!(
-                kind,
-                EventKind::ActionStarted { .. }
-            ))
-            .kind,
-            EventKind::ActionStarted { .. }
-        ),
+        matches!(started.kind, EventKind::ActionStarted { .. }),
         "the first intent starts an action"
+    );
+    assert_eq!(started.subject(), Some(1));
+    assert!(
+        !started.visible_to(1, Some(pos_of(&world, 1)), &cfg),
+        "ActionStarted is log-only and never reaches its own agent"
     );
     assert!(
         !events
@@ -747,6 +748,10 @@ fn action_replaced_is_announced_and_new_action_wins() {
     assert_eq!(
         replaced.text(),
         "dev-1's action east three was replaced by south two"
+    );
+    assert!(
+        replaced.visible_to(1, Some(pos_of(&world, 1)), &cfg),
+        "ActionReplaced is announced to its own agent"
     );
     assert_eq!(
         pos_of(&world, 1),

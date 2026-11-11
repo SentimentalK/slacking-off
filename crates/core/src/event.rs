@@ -194,7 +194,16 @@ impl Event {
     /// Whether `viewer` may see this event: events about yourself always, other
     /// events only inside your view window (design §4.10). Events without a
     /// subject or a location are never visible to anyone else.
+    ///
+    /// `ActionStarted` is an internal state change: it only goes into the event
+    /// log (restore and the SQLite history), never into an agent's event stream.
+    /// The command that queued the action already answered; only
+    /// `ActionReplaced` is announced, because it overrides what the agent asked
+    /// for earlier.
     pub fn visible_to(&self, viewer: AgentId, viewer_pos: Option<Pos>, cfg: &Config) -> bool {
+        if matches!(self.kind, EventKind::ActionStarted { .. }) {
+            return false;
+        }
         if self.subject() == Some(viewer) {
             return true;
         }
