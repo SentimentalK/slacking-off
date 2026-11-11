@@ -1,4 +1,4 @@
-//! Minimal blocking HTTP client. Step 0 speaks plain HTTP + JSON (design §10).
+//! Minimal blocking HTTP client. The CLI speaks plain HTTP + JSON (design §10).
 
 use serde_json::Value;
 use std::time::Duration;

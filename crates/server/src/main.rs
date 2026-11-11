@@ -5,9 +5,12 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 #[derive(Parser)]
-#[command(about = "Company Time dev server (step 0)", version)]
+#[command(
+    about = "Company Time dev server: movement, vision, SQLite event log and snapshot replay",
+    version
+)]
 struct Args {
-    /// Step 0 only ships the dev server; this flag must be present.
+    /// The dev server needs no accounts yet; this flag must be present.
     #[arg(long)]
     dev: bool,
     #[arg(long, default_value = "127.0.0.1:18080")]
@@ -32,7 +35,7 @@ struct Args {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
     if !args.dev {
-        eprintln!("step 0 only runs in dev mode: pass --dev");
+        eprintln!("the dev server requires --dev");
         std::process::exit(2);
     }
 

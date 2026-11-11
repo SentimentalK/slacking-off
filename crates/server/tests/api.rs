@@ -448,7 +448,9 @@ async fn snapshot_plus_events_matches_live_world() {
         .expect("snapshot readable")
         .expect("snapshot written");
     assert_eq!(tick, 4, "a snapshot lands on every second tick");
-    let events = store.events_after(tick).expect("events readable");
+    let events = store
+        .events_after(tick, snapshot.last_seq)
+        .expect("events readable");
     let restored =
         loo_core::restore(&snapshot, &events, &cfg).expect("snapshot plus events restore");
     let live = server.world_state().await;
@@ -495,11 +497,11 @@ async fn restart_resumes_tick_and_log_without_gap() {
     );
     assert_eq!(looked.state.expect("state").pos, Some(Pos::new(3, 2)));
 
-    let before = settled_ticks(&server.recorded_events(0).await.expect("events readable"));
+    let before = settled_ticks(&server.recorded_events(0, 0).await.expect("events readable"));
     assert_eq!(before, vec![1, 2, 3]);
 
     server.tick_once().await;
-    let after = settled_ticks(&server.recorded_events(0).await.expect("events readable"));
+    let after = settled_ticks(&server.recorded_events(0, 0).await.expect("events readable"));
     assert_eq!(after, vec![1, 2, 3, 4], "the log resumes without a gap");
     assert!(after.windows(2).all(|pair| pair[1] == pair[0] + 1));
 
@@ -550,6 +552,7 @@ async fn recorded_seed_replays_the_tick_events_exactly() {
     .await;
 
     let before = server.world_state().await;
+    let (_, before_seq) = server.event_cursor().await;
     let intents = vec![
         Intent {
             agent: 1,
@@ -569,7 +572,7 @@ async fn recorded_seed_replays_the_tick_events_exactly() {
     server.tick_once().await;
 
     let recorded = server
-        .recorded_events(before.tick)
+        .recorded_events(before.tick, before_seq)
         .await
         .expect("events readable");
     let seed = recorded
@@ -774,4 +777,102 @@ async fn every_command_is_logged_including_rejections() {
         )
         .expect("count accepted moves");
     assert_eq!(accepted_moves, 1, "the accepted move keeps its intent");
+}
+
+#[tokio::test]
+async fn restart_restores_immediate_and_queued_joins_without_a_snapshot() {
+    let name = "join-restart";
+    let cfg = Config::default();
+    let dir = fresh_dir(name);
+    let server = open_in(&dir, cfg.clone());
+
+    let (token_a, _) = register(&server, "dev-a").await;
+    let (token_b, _) = register(&server, "dev-b").await;
+    join(&server, &token_a).await;
+    let queued = join(&server, &token_b).await;
+    assert!(matches!(
+        queued.result.expect("join result").placement,
+        Placement::Waiting { ahead: 0 }
+    ));
+
+    // Joins are persisted as events; no snapshot is written for them.
+    let store = Store::open(&dir, "test", TEST_MAP, 7).expect("second handle opens");
+    assert!(
+        store
+            .latest_snapshot()
+            .expect("snapshots readable")
+            .is_none(),
+        "join must not create a fallback snapshot"
+    );
+    let joins: Vec<(Tick, String)> = store
+        .events_after(0, 0)
+        .expect("events readable")
+        .into_iter()
+        .map(|event| (event.tick, event.kind.name().to_string()))
+        .collect();
+    assert_eq!(joins, vec![(0, "Joined".into()), (0, "Joined".into())]);
+    drop(server);
+    drop(store);
+
+    let def = map::parse(TEST_MAP).expect("test map parses");
+    let server = open_existing(name, cfg, def, TEST_MAP);
+    let world = server.world_state().await;
+    assert_eq!(world.tick, 0, "joins do not move the tick");
+    assert_eq!(world.agents.len(), 2);
+    assert_eq!(world.sessions.len(), 2);
+    assert_eq!(world.agents[&1].pos, Some(Pos::new(3, 2)));
+    assert_eq!(world.agents[&2].pos, None);
+    assert_eq!(world.entry_queue.len(), 1);
+
+    let state_b = server.status(&token_b).await.state.expect("state");
+    assert_eq!(state_b.placement, Some(loo_proto::PlacementKind::Waiting));
+    assert_eq!(state_b.queue_ahead, Some(1));
+
+    // The entrance is still taken, so a tick must not admit dev-b twice or move
+    // it into the world early.
+    server.tick_once().await;
+    let world = server.world_state().await;
+    assert_eq!(world.tick, 1);
+    assert_eq!(world.entry_queue.len(), 1);
+    assert_eq!(world.agents[&2].pos, None);
+    assert_eq!(world.sessions[&2].status, loo_core::SessionStatus::Waiting);
+
+    // After dev-a moves away, dev-b is admitted exactly once.
+    move_to(
+        &server,
+        &token_a,
+        MoveSpec::Steps {
+            dir: Dir::W,
+            count: 1,
+        },
+    )
+    .await;
+    server.tick_once().await;
+    server.tick_once().await;
+    let world = server.world_state().await;
+    assert!(world.entry_queue.is_empty());
+    assert_eq!(world.agents[&2].pos, Some(Pos::new(3, 2)));
+    assert_eq!(world.sessions[&2].status, loo_core::SessionStatus::Inside);
+}
+
+#[tokio::test]
+async fn config_reports_the_live_wait_settings() {
+    let cfg = Config {
+        tick_seconds: 2.0,
+        wait: loo_core::config::WaitConfig {
+            default_seconds: 3.0,
+            max_seconds: 7.0,
+        },
+        ..Config::default()
+    };
+    let server = new_server_with("config-endpoint", cfg);
+    let envelope = server.config_response().await;
+    let config = envelope.result.expect("config result");
+    assert_eq!(config.tick_seconds, 2.0);
+    assert_eq!(config.wait_default_seconds, 3.0);
+    assert_eq!(
+        config.wait_max_seconds, 7.0,
+        "a non-55 max is reported unchanged so the CLI can follow it"
+    );
+    assert_eq!(config.snapshot_interval_ticks, 120);
 }

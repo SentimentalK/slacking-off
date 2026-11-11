@@ -1,9 +1,10 @@
-//! Engine-level acceptance tests for step 0 (design §13 第 0 步).
+//! Engine-level acceptance tests for step 1 (design §13 第 1 步) and its
+//! replay/restore contracts.
 
 use loo_core::{
     diff_worlds, join, look, map, map_memory, replay, restore, step, ActionOutcome, Blocker,
     Config, Event, EventKind, Intent, IntentKind, JoinCommand, JoinOutcome, JoinRejectKind, Object,
-    SessionStatus, SiteKind, WorldState,
+    SessionStatus, SiteKind, Snapshot, WorldState,
 };
 use loo_proto::{Dir, Nick, Pos, Tick};
 use std::collections::BTreeMap;
@@ -19,7 +20,7 @@ fn nick(name: &str) -> Nick {
 }
 
 fn join_agent(world: &WorldState, cfg: &Config, agent: u64, name: &str) -> WorldState {
-    let (next, outcome) = join(
+    let (next, outcome, _events) = join(
         world,
         &JoinCommand {
             agent,
@@ -27,6 +28,8 @@ fn join_agent(world: &WorldState, cfg: &Config, agent: u64, name: &str) -> World
             session: agent * 10,
         },
         cfg,
+        0,
+        0,
     )
     .expect("join accepted");
     assert!(matches!(
@@ -264,6 +267,8 @@ fn entrance_takes_one_agent_and_the_queue_moves_up() {
             session: 99,
         },
         &cfg,
+        0,
+        0,
     )
     .unwrap_err();
     assert_eq!(err.kind, JoinRejectKind::AlreadyJoined);
@@ -936,11 +941,18 @@ grid
 
     let (_, late_events): (Vec<Event>, Vec<Event>) =
         events.iter().cloned().partition(|e| e.tick <= 15);
-    let restored = restore(&snapshot, &late_events, &cfg).expect("snapshot + events restores");
+    let last_seq = events
+        .iter()
+        .filter(|e| e.tick <= 15)
+        .map(|e| e.seq)
+        .max()
+        .unwrap_or(0);
+    let restored = restore(&Snapshot::at(snapshot, last_seq), &late_events, &cfg)
+        .expect("snapshot + events restores");
     let diffs = diff_worlds(&world, &restored);
     assert!(diffs.is_empty(), "restore from tick 15 differs: {diffs:?}");
 
-    let from_zero = restore(&initial, &events, &cfg).expect("full log restores");
+    let from_zero = restore(&Snapshot::new(initial), &events, &cfg).expect("full log restores");
     let diffs = diff_worlds(&world, &from_zero);
     assert!(diffs.is_empty(), "restore from tick 0 differs: {diffs:?}");
     assert_eq!(from_zero.tick, 36);
@@ -964,7 +976,7 @@ fn restore_rejects_a_gap_or_out_of_order_event() {
         events.extend(tick_events);
     }
     assert!(
-        restore(&start, &events, &cfg).is_ok(),
+        restore(&Snapshot::new(start.clone()), &events, &cfg).is_ok(),
         "the clean log restores"
     );
 
@@ -975,20 +987,128 @@ fn restore_rejects_a_gap_or_out_of_order_event() {
         .expect("tick 2 settled");
     let mut holed = events.clone();
     holed.remove(hole_at);
-    let err = restore(&start, &holed, &cfg).expect_err("a missing TickSettled is rejected");
+    let err = restore(&Snapshot::new(start.clone()), &holed, &cfg)
+        .expect_err("a missing TickSettled is rejected");
     assert_eq!(err.tick, 2);
     assert!(err.to_string().contains("not TickSettled"), "{err}");
 
     // Swapped sequence numbers are rejected.
     let mut shuffled = events.clone();
     shuffled.swap(1, 2);
-    let err = restore(&start, &shuffled, &cfg).expect_err("out-of-order events are rejected");
+    let err = restore(&Snapshot::new(start.clone()), &shuffled, &cfg)
+        .expect_err("out-of-order events are rejected");
     assert_eq!(err.tick, 1);
     assert!(err.to_string().contains("seq"), "{err}");
 
     // A whole missing tick is a gap.
     let gapped: Vec<Event> = events.iter().filter(|e| e.tick != 3).cloned().collect();
-    let err = restore(&start, &gapped, &cfg).expect_err("a tick gap is rejected");
+    let err =
+        restore(&Snapshot::new(start.clone()), &gapped, &cfg).expect_err("a tick gap is rejected");
     assert_eq!(err.tick, 4);
     assert!(err.to_string().contains("contiguous"), "{err}");
+}
+
+#[test]
+fn join_events_replay_immediate_and_queued_entries() {
+    let cfg = Config::default();
+    let initial = build(CORRIDOR);
+    assert_eq!(initial.tick, 0);
+
+    // Two joins in the same (tick 0) window: the first takes the entrance, the
+    // second queues because the entrance cell is occupied.
+    let (after_a, outcome_a, a_events) = join(
+        &initial,
+        &JoinCommand {
+            agent: 1,
+            nick: nick("dev-1"),
+            session: 10,
+        },
+        &cfg,
+        0,
+        0,
+    )
+    .expect("first join");
+    assert!(matches!(outcome_a, JoinOutcome::Inside { .. }));
+    assert_eq!(a_events.len(), 1);
+    match &a_events[0].kind {
+        EventKind::Joined {
+            session, agent, at, ..
+        } => {
+            assert_eq!((*session, *agent), (10, 1));
+            assert_eq!(*at, Some(Pos::new(1, 1)));
+        }
+        other => panic!("expected Joined, got {other:?}"),
+    }
+    assert_eq!((a_events[0].tick, a_events[0].seq), (0, 1));
+
+    let (joined, outcome_b, b_events) = join(
+        &after_a,
+        &JoinCommand {
+            agent: 2,
+            nick: nick("dev-2"),
+            session: 20,
+        },
+        &cfg,
+        a_events[0].seq,
+        0,
+    )
+    .expect("second join");
+    assert!(matches!(outcome_b, JoinOutcome::Waiting { ahead: 0 }));
+    assert_eq!(joined.entry_queue.len(), 1);
+    assert_eq!(joined.agents[&2].pos, None);
+    assert_eq!((b_events[0].tick, b_events[0].seq), (0, 2));
+    assert!(matches!(
+        b_events[0].kind,
+        EventKind::Joined { at: None, .. }
+    ));
+
+    let mut all = a_events.clone();
+    all.extend(b_events.clone());
+    let joined_once = join_events_restore(&initial, &all, &cfg);
+    assert!(diff_worlds(&joined_once, &joined).is_empty());
+
+    // A moves away; the queued join is admitted by the normal EnteredWorld
+    // event on the next tick.
+    let (after_move, tick_events) = step(&joined, &[move_intent(1, &[Dir::E])], 7, &cfg);
+    all.extend(tick_events);
+    let (next, tick_events) = step(&after_move, &[], 8, &cfg);
+    all.extend(tick_events);
+    assert_eq!(next.sessions[&20].status, SessionStatus::Inside);
+    assert_eq!(next.agents[&2].pos, Some(Pos::new(1, 1)));
+    assert!(next.entry_queue.is_empty());
+    let restored = join_events_restore(&initial, &all, &cfg);
+    assert!(
+        diff_worlds(&restored, &next).is_empty(),
+        "immediate + queued joins replay exactly: {:?}",
+        diff_worlds(&restored, &next)
+    );
+    assert_eq!(
+        restored.entry_queue.len(),
+        0,
+        "the queued session enters once"
+    );
+
+    // A snapshot taken after the first join continues with seq 2 of tick 0.
+    let partial = restore(
+        &Snapshot::at(after_a.clone(), a_events[0].seq),
+        &all[1..],
+        &cfg,
+    )
+    .expect("mid-tick join continuation restores");
+    assert!(
+        diff_worlds(&partial, &next).is_empty(),
+        "snapshot at seq 1 plus the rest of tick 0 restores"
+    );
+
+    // A skipped seq in the join stream is rejected.
+    let mut holed = all.clone();
+    holed[1].seq = 3;
+    let err =
+        restore(&Snapshot::new(initial), &holed, &cfg).expect_err("a skipped join seq is a gap");
+    assert_eq!(err.tick, 0);
+    assert!(err.to_string().contains("seq"), "{err}");
+}
+
+fn join_events_restore(initial: &WorldState, events: &[Event], cfg: &Config) -> WorldState {
+    restore(&Snapshot::new(initial.clone()), events, cfg).expect("join log restores")
 }

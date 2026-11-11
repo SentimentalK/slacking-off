@@ -10,7 +10,8 @@ use crate::event::{Event, EventKind};
 use crate::map::Terrain;
 use crate::state::{Agent, Object, Session, SessionStatus, WorldState};
 use crate::step::{mark_all_seen, step, Intent};
-use loo_proto::{AgentId, Pos, SessionId, Tick};
+use loo_proto::{AgentId, Nick, Pos, SessionId, Tick};
+use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::fmt;
 
@@ -42,51 +43,89 @@ fn fail(event: &Event, message: impl Into<String>) -> ReplayError {
     }
 }
 
+/// A world checkpoint plus the last event sequence already applied at its tick.
+///
+/// Snapshots are taken at tick boundaries, but joins append events to the
+/// current tick afterwards, so recovery needs the cursor, not just the tick.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Snapshot {
+    pub world: WorldState,
+    /// Last event seq applied at `world.tick`; joins continue after it.
+    pub last_seq: u32,
+    /// Shuffle seed of `world.tick` (0 when the tick has no settlement yet).
+    pub seed: u64,
+}
+
+impl Snapshot {
+    pub fn new(world: WorldState) -> Self {
+        Self {
+            world,
+            last_seq: 0,
+            seed: 0,
+        }
+    }
+
+    pub fn at(world: WorldState, last_seq: u32) -> Self {
+        Self {
+            world,
+            last_seq,
+            seed: 0,
+        }
+    }
+
+    pub fn with_seed(mut self, seed: u64) -> Self {
+        self.seed = seed;
+        self
+    }
+}
+
 /// Applies `events` to a clone of `snapshot` and returns the resulting world.
 ///
-/// Every tick must start with its `TickSettled` event (`seq == 1`) and ticks
-/// must be contiguous, starting at `snapshot.tick + 1`. Each tick ends with the
-/// same view update `step` performs, so `Session::seen` matches an in-memory
-/// world exactly.
+/// Events may continue the snapshot's own tick (join events appended after the
+/// snapshot) or start with the next tick's `TickSettled`. Every tick boundary
+/// must be contiguous, a tick starts with `TickSettled` (`seq == 1`), and seq
+/// numbers must not skip or repeat. Each tick ends with the same view update
+/// `step` performs, so `Session::seen` matches an in-memory world exactly.
 pub fn restore(
-    snapshot: &WorldState,
+    snapshot: &Snapshot,
     events: &[Event],
     cfg: &Config,
 ) -> Result<WorldState, ReplayError> {
-    let mut world = snapshot.clone();
+    let mut world = snapshot.world.clone();
     if events.is_empty() {
         return Ok(world);
     }
 
-    let mut expected_tick = snapshot.tick + 1;
-    let mut current_tick: Option<Tick> = None;
-    let mut expected_seq = 1;
-    let mut tick_seed = 0u64;
+    let mut current_tick = snapshot.world.tick;
+    let mut expected_seq = snapshot.last_seq + 1;
+    let mut tick_seed = snapshot.seed;
 
     for event in events {
-        if current_tick != Some(event.tick) {
-            if let Some(previous) = current_tick {
-                if event.tick <= previous {
-                    return Err(fail(
-                        event,
-                        format!(
-                            "tick {} comes after tick {previous}; events must be ordered",
-                            event.tick
-                        ),
-                    ));
-                }
-                mark_all_seen(&mut world, cfg);
-                expected_tick = previous + 1;
+        if event.tick == current_tick {
+            if matches!(event.kind, EventKind::TickSettled) {
+                return Err(fail(
+                    event,
+                    format!("tick {} has a second TickSettled", event.tick),
+                ));
             }
-            if event.tick != expected_tick {
+            if event.seq != expected_seq {
+                return Err(fail(
+                    event,
+                    format!("seq {} where {expected_seq} was expected", event.seq),
+                ));
+            }
+        } else if event.tick > current_tick {
+            if event.tick != current_tick + 1 {
                 return Err(fail(
                     event,
                     format!(
-                        "tick {} is not contiguous: expected tick {expected_tick}",
-                        event.tick
+                        "tick {} is not contiguous: expected tick {}",
+                        event.tick,
+                        current_tick + 1
                     ),
                 ));
             }
+            mark_all_seen(&mut world, cfg);
             if !matches!(event.kind, EventKind::TickSettled) {
                 return Err(fail(
                     event,
@@ -103,18 +142,20 @@ pub fn restore(
                     format!("TickSettled has seq {}, expected 1", event.seq),
                 ));
             }
-            current_tick = Some(event.tick);
-            expected_seq = 1;
+            current_tick = event.tick;
+            world.tick = current_tick;
             tick_seed = event.seed;
-            world.tick = event.tick;
-        }
-
-        if event.seq != expected_seq {
+            expected_seq = 1;
+        } else {
             return Err(fail(
                 event,
-                format!("seq {} where {expected_seq} was expected", event.seq),
+                format!(
+                    "tick {} comes after tick {current_tick}; events must be ordered",
+                    event.tick
+                ),
             ));
         }
+
         if event.seed != tick_seed {
             return Err(fail(
                 event,
@@ -135,6 +176,47 @@ pub fn restore(
 fn apply_event(world: &mut WorldState, event: &Event) -> Result<(), ReplayError> {
     match &event.kind {
         EventKind::TickSettled => {}
+        EventKind::Joined {
+            session,
+            agent,
+            nick,
+            at,
+        } => {
+            if world.agents.contains_key(agent) {
+                return Err(fail(event, format!("agent {agent} already exists")));
+            }
+            if world.sessions.contains_key(session) {
+                return Err(fail(event, format!("session {session} already exists")));
+            }
+            let nick = Nick::parse(nick)
+                .map_err(|message| fail(event, format!("invalid nick in join: {message}")))?;
+            world.agents.insert(
+                *agent,
+                Agent {
+                    id: *agent,
+                    nick,
+                    pos: *at,
+                    action: None,
+                    stun_until: 0,
+                },
+            );
+            world.sessions.insert(
+                *session,
+                Session {
+                    id: *session,
+                    agent: *agent,
+                    status: if at.is_some() {
+                        SessionStatus::Inside
+                    } else {
+                        SessionStatus::Waiting
+                    },
+                    seen: Default::default(),
+                },
+            );
+            if at.is_none() {
+                world.entry_queue.push_back(*session);
+            }
+        }
         EventKind::EnteredWorld {
             session, agent, at, ..
         } => {

@@ -103,7 +103,7 @@ pub struct WorldState {
     pub sessions: BTreeMap<SessionId, Session>,
     pub entrance: Pos,
     /// FIFO of sessions waiting outside the entrance. Step 5 replaces this with
-    /// queue cells on the map (design §2.1); step 0 only needs the order.
+    /// queue cells on the map (design §2.1); this step only needs the order.
     pub entry_queue: VecDeque<SessionId>,
 }
 

@@ -11,10 +11,12 @@
 //! let def = map::parse("grid\n.1.\n..E\n").unwrap();
 //! let cfg = Config::default();
 //! let world = WorldState::new(def);
-//! let (world, outcome) = join(
+//! let (world, outcome, _events) = join(
 //!     &world,
 //!     &JoinCommand { agent: 1, nick: Nick::parse("dev-1").unwrap(), session: 1 },
 //!     &cfg,
+//!     0,
+//!     0,
 //! )
 //! .unwrap();
 //! assert_eq!(outcome, JoinOutcome::Inside { at: world.entrance });
@@ -35,7 +37,7 @@ pub mod view;
 pub use config::Config;
 pub use event::{ActionOutcome, Blocker, Event, EventKind};
 pub use map::{Map, MapDef, MapError, Terrain};
-pub use replay::{diff_worlds, replay, restore, ReplayError, WorldDiff};
+pub use replay::{diff_worlds, replay, restore, ReplayError, Snapshot, WorldDiff};
 pub use state::{Action, Agent, Object, Session, SessionStatus, SiteKind, WorldState};
 pub use step::{
     join, step, Intent, IntentKind, JoinCommand, JoinOutcome, JoinReject, JoinRejectKind,

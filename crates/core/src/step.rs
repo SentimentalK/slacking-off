@@ -52,14 +52,16 @@ pub enum IntentKind {
 
 /// Places a joining agent at the entrance, or queues it outside.
 ///
-/// Step 0 keeps the queue as an ordered list rather than map cells (the entity
+/// This step keeps the queue as an ordered list rather than map cells (the entity
 /// queue of design §4.11 is step 5), but the entrance rule is already the real
 /// one: one agent at a time, no overlap, no shoving.
 pub fn join(
     world: &WorldState,
     cmd: &JoinCommand,
     cfg: &Config,
-) -> Result<(WorldState, JoinOutcome), JoinReject> {
+    start_seq: u32,
+    seed: u64,
+) -> Result<(WorldState, JoinOutcome, Vec<Event>), JoinReject> {
     if world.agents.contains_key(&cmd.agent) {
         return Err(JoinReject {
             kind: JoinRejectKind::AlreadyJoined,
@@ -77,6 +79,7 @@ pub fn join(
     }
 
     let mut next = world.clone();
+    let mut log = EventLog::starting_at(world.tick, seed, start_seq + 1);
     let entrance_free = next.agent_at(next.entrance).is_none();
     let room = next.inside_count() < cfg.max_on_field;
 
@@ -108,7 +111,13 @@ pub fn join(
             cfg.view.height,
         );
         let at = next.entrance;
-        return Ok((next, JoinOutcome::Inside { at }));
+        log.push(EventKind::Joined {
+            session: cmd.session,
+            agent: cmd.agent,
+            nick: cmd.nick.to_string(),
+            at: Some(at),
+        });
+        return Ok((next, JoinOutcome::Inside { at }, log.into_vec()));
     }
 
     if next.entry_queue.len() >= cfg.session.queue_capacity {
@@ -141,7 +150,13 @@ pub fn join(
         },
     );
     next.entry_queue.push_back(cmd.session);
-    Ok((next, JoinOutcome::Waiting { ahead }))
+    log.push(EventKind::Joined {
+        session: cmd.session,
+        agent: cmd.agent,
+        nick: cmd.nick.to_string(),
+        at: None,
+    });
+    Ok((next, JoinOutcome::Waiting { ahead }, log.into_vec()))
 }
 
 /// Settles one tick: verbs submitted earlier take effect now, the queue moves

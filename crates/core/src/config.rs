@@ -122,8 +122,7 @@ impl Default for ToiletConfig {
     }
 }
 
-/// Step 2+ fields. Step 0 only reads `interrupt_recovery_ticks` indirectly via
-/// nothing; they stay here so the numbers exist exactly once.
+/// Step 2+ fields; they stay here so the numbers exist exactly once.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct NeedConfig {

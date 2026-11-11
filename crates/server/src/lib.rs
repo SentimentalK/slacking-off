@@ -2,16 +2,18 @@
 //! command is persisted to SQLite, and a restart resumes from that store.
 //!
 //! Design §12: one process, world state in memory, `core` settles each tick.
-//! Step 0 has no accounts, SSE or web UI.
+//! Step 1 has movement, vision, collisions and SQLite replay; building, doors,
+//! toilets in use, combat, accounts, SSE and the web UI are later steps.
 
 use loo_core::{
-    Config, Intent, IntentKind, JoinCommand, JoinOutcome, JoinRejectKind, MapDef, WorldState,
+    Config, Intent, IntentKind, JoinCommand, JoinOutcome, JoinRejectKind, MapDef, Snapshot,
+    WorldState,
 };
 use loo_proto::{
-    ActionQueued, ActionState, AgentId, AgentView, ApiError, Briefing, Envelope, ErrorCode,
-    EventView, JoinRequest, JoinResponse, LookResponse, MapResponse, MoveRequest, Placement,
-    PlacementKind, RegisterRequest, RegisterResponse, RulesResponse, SentBy, SessionId, Tick,
-    WaitRequest, WaitResponse, WaitWake,
+    ActionQueued, ActionState, AgentId, AgentView, ApiError, Briefing, ConfigResponse, Envelope,
+    ErrorCode, EventView, JoinRequest, JoinResponse, LookResponse, MapResponse, MoveRequest,
+    Placement, PlacementKind, RegisterRequest, RegisterResponse, RulesResponse, SentBy, SessionId,
+    Tick, WaitRequest, WaitResponse, WaitWake,
 };
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
@@ -37,12 +39,16 @@ struct Inner {
     pending: BTreeMap<AgentId, Vec<IntentKind>>,
     agents: BTreeMap<AgentId, AgentMeta>,
     tokens: HashMap<String, AgentId>,
-    /// Current session per agent (step 0 has no leave/cleanup yet).
+    /// Current session per agent (leave and cleanup are not implemented yet).
     sessions: BTreeMap<AgentId, SessionId>,
     outbox: BTreeMap<SessionId, Vec<loo_core::Event>>,
     next_agent_id: AgentId,
     next_session_id: SessionId,
     seed_base: u64,
+    /// Last event seq committed at `world.tick`; joins continue after it.
+    last_seq: u32,
+    /// Shuffle seed of `world.tick` (0 before the first settlement).
+    tick_seed: u64,
 }
 
 struct AgentMeta {
@@ -76,12 +82,21 @@ impl Server {
         }
         let seed_base = store.seed_base()?;
 
-        let base = match store.latest_snapshot()? {
-            Some((_, world)) => world,
-            None => WorldState::new(def),
+        let (base, base_seq, base_seed) = match store.latest_snapshot()? {
+            Some((_, snapshot)) => (snapshot.world, snapshot.last_seq, snapshot.seed),
+            None => (WorldState::new(def), 0, 0),
         };
-        let events = store.events_after(base.tick)?;
+        let base = Snapshot {
+            world: base,
+            last_seq: base_seq,
+            seed: base_seed,
+        };
+        let events = store.events_after(base.world.tick, base.last_seq)?;
         let world = loo_core::restore(&base, &events, &cfg)?;
+        let (last_seq, tick_seed) = events
+            .last()
+            .map(|event| (event.seq, event.seed))
+            .unwrap_or((base_seq, base_seed));
         if let Some(stored_tick) = store.world_tick()? {
             if stored_tick != world.tick {
                 return Err(StoreError::Corrupt(format!(
@@ -126,6 +141,8 @@ impl Server {
                 sessions,
                 outbox: BTreeMap::new(),
                 seed_base,
+                last_seq,
+                tick_seed,
             }),
             tick_tx,
             store,
@@ -179,6 +196,8 @@ impl Server {
 
         inner.pending.clear();
         inner.world = world;
+        inner.last_seq = events.len() as u32;
+        inner.tick_seed = seed;
 
         {
             let Inner { world, outbox, .. } = &mut *inner;
@@ -198,7 +217,12 @@ impl Server {
         let tick = inner.world.tick;
         let interval = self.cfg.persist.snapshot_interval_ticks;
         if interval > 0 && tick % u64::from(interval) == 0 {
-            if let Err(error) = self.store.snapshot(&inner.world) {
+            let snapshot = Snapshot {
+                world: inner.world.clone(),
+                last_seq: inner.last_seq,
+                seed: inner.tick_seed,
+            };
+            if let Err(error) = self.store.snapshot(&snapshot) {
                 eprintln!("snapshot at tick {tick} failed: {error}");
             }
         }
@@ -212,18 +236,30 @@ impl Server {
         self.inner.lock().await.world.clone()
     }
 
-    /// Every event the store holds after `after_tick`, in settlement order.
+    /// Every event the store holds after the `(tick, seq)` cursor.
     pub async fn recorded_events(
         &self,
         after_tick: Tick,
+        after_seq: u32,
     ) -> Result<Vec<loo_core::Event>, StoreError> {
-        self.store.events_after(after_tick)
+        self.store.events_after(after_tick, after_seq)
+    }
+
+    /// The event cursor of the live world.
+    pub async fn event_cursor(&self) -> (Tick, u32) {
+        let inner = self.inner.lock().await;
+        (inner.world.tick, inner.last_seq)
     }
 
     /// Writes a snapshot of the live world now, for a graceful shutdown.
     pub async fn save_snapshot(&self) -> Result<(), StoreError> {
         let inner = self.inner.lock().await;
-        self.store.snapshot(&inner.world)
+        let snapshot = Snapshot {
+            world: inner.world.clone(),
+            last_seq: inner.last_seq,
+            seed: inner.tick_seed,
+        };
+        self.store.snapshot(&snapshot)
     }
 
     /// The configured default `loo wait` timeout in seconds.
@@ -369,7 +405,7 @@ impl Server {
                 &mut inner,
                 Some(agent),
                 ApiError::rule(format!(
-                    "you already have session {existing} in this world; step 0 has no leave yet"
+                    "you already have session {existing} in this world; leave is not implemented yet"
                 )),
             );
             drop(inner);
@@ -396,9 +432,33 @@ impl Server {
             session: session_id,
         };
 
-        let placement = match loo_core::join(&inner.world, &cmd, &self.cfg) {
-            Ok((world, outcome)) => {
+        let start_seq = inner.last_seq;
+        let tick_seed = inner.tick_seed;
+        let placement = match loo_core::join(&inner.world, &cmd, &self.cfg, start_seq, tick_seed) {
+            Ok((world, outcome, events)) => {
+                if let Err(error) = self.store.append_join_events(world.tick, &events) {
+                    eprintln!("join events for agent {agent} were not persisted: {error}");
+                    let env = failed_env::<JoinResponse>(
+                        &mut inner,
+                        Some(agent),
+                        ApiError::new(
+                            ErrorCode::Internal,
+                            "the join could not be recorded; try again",
+                        ),
+                    );
+                    drop(inner);
+                    return self.finish(
+                        "join",
+                        Some(agent),
+                        tick,
+                        env,
+                        started,
+                        "join not persisted",
+                        None,
+                    );
+                }
                 inner.world = world;
+                inner.last_seq = events.last().map(|event| event.seq).unwrap_or(start_seq);
                 inner.next_session_id += 1;
                 inner.sessions.insert(agent, session_id);
                 if let Some(meta) = inner.agents.get_mut(&agent) {
@@ -410,11 +470,6 @@ impl Server {
                         .update_agent_entry(agent, Some(req.sent_by.as_str()), &why)
                 {
                     eprintln!("agent {agent} join entry was not persisted: {error}");
-                }
-                // `join` changes the world without emitting an event, so a
-                // snapshot is the only way a restart can recover it.
-                if let Err(error) = self.store.snapshot(&inner.world) {
-                    eprintln!("snapshot after agent {agent} joined failed: {error}");
                 }
                 match outcome {
                     JoinOutcome::Inside { at } => {
@@ -513,6 +568,23 @@ impl Server {
         let env = ok_env(&mut inner, agent, ());
         drop(inner);
         self.finish("status", Some(agent), tick, env, started, "state", None)
+    }
+
+    /// Read-only timings for the CLI (no identity required, logged like rules).
+    pub async fn config_response(&self) -> Envelope<ConfigResponse> {
+        let started = Instant::now();
+        let (tick, cfg) = {
+            let inner = self.inner.lock().await;
+            (inner.world.tick, self.cfg.clone())
+        };
+        let result = ConfigResponse {
+            tick_seconds: cfg.tick_seconds,
+            wait_default_seconds: cfg.wait_default_seconds(),
+            wait_max_seconds: cfg.wait.max_seconds,
+            snapshot_interval_ticks: cfg.persist.snapshot_interval_ticks,
+        };
+        let env = Envelope::ok(result, Vec::new(), None);
+        self.finish("config", None, tick, env, started, "timings", None)
     }
 
     pub async fn rules(&self) -> Envelope<RulesResponse> {
@@ -874,7 +946,7 @@ fn next_nonce() -> u64 {
 fn rules_text(cfg: &Config, map_width: i32, map_height: i32) -> String {
     format!(
         "\
-Company Time — AI toilet world (step 0 dev server)
+Company Time — AI toilet world (step 1 dev server)
 
 You are an AI agent in a {w}x{h} grid world. Time runs in ticks; one tick is {tick} seconds on this server.
 Every command prints: this command's result, the events since your previous command that concern you or happened in your view, and your own state.
@@ -897,7 +969,7 @@ Commands
       Block until something happens that concerns you or is in your view, or until the timeout. A timeout is a normal result, not an error.
       The default timeout is max(wait.default_seconds = {wait_default}s, one tick = {tick}s); no wait exceeds {wait_max}s, and the server always allows at least one tick.
   loo rules
-      This text. Step 0 has no building, doors, toilets in use or combat yet.
+      This text. Movement, vision, collisions, SQLite logging and snapshot replay are implemented; building, doors, toilets in use, combat, accounts and the web UI are not.
 
 World facts
 - Every agent occupies one cell; two agents never share a cell.

@@ -384,6 +384,15 @@ pub struct RulesResponse {
     pub text: String,
 }
 
+/// Read-only server timings, so the CLI never hard-codes design §9 values.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ConfigResponse {
+    pub tick_seconds: f64,
+    pub wait_default_seconds: f64,
+    pub wait_max_seconds: f64,
+    pub snapshot_interval_ticks: u32,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AgentView {
     pub agent_id: AgentId,

@@ -1,5 +1,5 @@
 //! HTTP layer. Handlers are thin: they authenticate, call `Server`, and map the
-//! envelope to a status code. Step 0 has no SSE.
+//! envelope to a status code. SSE is a later step.
 
 use crate::Server;
 use axum::extract::State;
@@ -8,8 +8,8 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use loo_proto::{
-    ActionQueued, ApiError, Envelope, ErrorCode, JoinRequest, JoinResponse, MoveRequest,
-    RegisterRequest, WaitRequest,
+    ActionQueued, ApiError, ConfigResponse, Envelope, ErrorCode, JoinRequest, JoinResponse,
+    MoveRequest, RegisterRequest, WaitRequest,
 };
 use serde::Serialize;
 use std::sync::Arc;
@@ -22,6 +22,7 @@ pub fn router(server: Arc<Server>) -> Router {
         .route("/api/look", get(look))
         .route("/api/map", get(map_view))
         .route("/api/status", get(status))
+        .route("/api/config", get(config))
         .route("/api/rules", get(rules))
         .route("/api/move", post(move_cmd))
         .route("/api/wait", post(wait))
@@ -65,6 +66,10 @@ async fn map_view(State(server): State<Arc<Server>>, headers: HeaderMap) -> Resp
 
 async fn status(State(server): State<Arc<Server>>, headers: HeaderMap) -> Response {
     respond(server.status(&token(&headers)).await)
+}
+
+async fn config(State(server): State<Arc<Server>>) -> Response {
+    respond::<ConfigResponse>(server.config_response().await)
 }
 
 async fn rules(State(server): State<Arc<Server>>) -> Response {

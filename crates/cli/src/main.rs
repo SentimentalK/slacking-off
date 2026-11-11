@@ -9,8 +9,9 @@ mod render;
 
 use clap::{Parser, Subcommand, ValueEnum};
 use loo_proto::{
-    ActionQueued, Envelope, JoinRequest, JoinResponse, LookResponse, MapResponse, MoveRequest,
-    MoveSpec, Nick, RegisterResponse, RulesResponse, SentBy, WaitRequest, WaitResponse,
+    ActionQueued, ConfigResponse, Envelope, JoinRequest, JoinResponse, LookResponse, MapResponse,
+    MoveRequest, MoveSpec, Nick, RegisterResponse, RulesResponse, SentBy, WaitRequest,
+    WaitResponse,
 };
 use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
@@ -18,10 +19,48 @@ use std::time::Duration;
 
 const SHORT_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// Server-side ceiling for one `wait` call.
-const SERVER_WAIT_MAX_SECONDS: f64 = 55.0;
-/// Slack on top of the server ceiling, for network and scheduling.
+/// Used only when `/api/config` cannot be read; the server config is the
+/// authority whenever it is reachable.
+const FALLBACK_WAIT_MAX_SECONDS: f64 = 55.0;
+/// Slack on top of the effective server timeout, for network and scheduling.
 const CLIENT_WAIT_MARGIN_SECONDS: f64 = 20.0;
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct WaitLimits {
+    default_seconds: f64,
+    max_seconds: f64,
+}
+
+impl WaitLimits {
+    /// Without `/api/config`, wait for the server's documented ceiling so a
+    /// slow tick cannot turn into a client-side timeout ahead of the server.
+    fn fallback() -> Self {
+        Self {
+            default_seconds: FALLBACK_WAIT_MAX_SECONDS,
+            max_seconds: FALLBACK_WAIT_MAX_SECONDS,
+        }
+    }
+}
+
+fn wait_limits_from(config: Option<ConfigResponse>) -> WaitLimits {
+    match config {
+        Some(config) => WaitLimits {
+            default_seconds: config.wait_default_seconds,
+            max_seconds: config.wait_max_seconds,
+        },
+        None => WaitLimits::fallback(),
+    }
+}
+
+fn fetch_wait_limits(http: &client::Client) -> WaitLimits {
+    let config = http
+        .get("/api/config", SHORT_TIMEOUT)
+        .ok()
+        .and_then(|raw| serde_json::from_str::<Envelope<ConfigResponse>>(&raw.body).ok())
+        .filter(|envelope| envelope.ok)
+        .and_then(|envelope| envelope.result);
+    wait_limits_from(config)
+}
 
 #[derive(Parser)]
 #[command(name = "loo", about = "Company Time — agent toilet world", version)]
@@ -150,17 +189,18 @@ fn dispatch(cli: Cli) -> u8 {
             let request = WaitRequest {
                 timeout_seconds: timeout,
             };
-            let client_timeout = Duration::from_secs_f64(wait_client_timeout(timeout));
+            let limits = fetch_wait_limits(&http);
+            let client_timeout = Duration::from_secs_f64(wait_client_timeout(timeout, limits));
             let raw = http.post("/api/wait", to_value(request), client_timeout);
             print_env::<WaitResponse>(raw, "wait", json)
         }
     }
 }
 
-fn wait_client_timeout(requested: Option<f64>) -> f64 {
+fn wait_client_timeout(requested: Option<f64>, limits: WaitLimits) -> f64 {
     requested
-        .unwrap_or(SERVER_WAIT_MAX_SECONDS)
-        .clamp(0.0, SERVER_WAIT_MAX_SECONDS)
+        .unwrap_or(limits.default_seconds)
+        .clamp(0.0, limits.max_seconds)
         + CLIENT_WAIT_MARGIN_SECONDS
 }
 
@@ -310,23 +350,45 @@ fn to_value<T: serde::Serialize>(value: T) -> Value {
 mod tests {
     use super::*;
 
-    #[test]
-    fn wait_client_timeout_defaults_to_the_server_ceiling_plus_margin() {
-        assert_eq!(wait_client_timeout(None), 75.0);
+    fn limits(default_seconds: f64, max_seconds: f64) -> WaitLimits {
+        WaitLimits {
+            default_seconds,
+            max_seconds,
+        }
     }
 
     #[test]
-    fn wait_client_timeout_adds_the_margin_to_a_small_request() {
-        assert_eq!(wait_client_timeout(Some(3.0)), 23.0);
+    fn wait_client_timeout_follows_the_server_config() {
+        let server = limits(3.0, 7.0);
+        assert_eq!(wait_client_timeout(None, server), 23.0);
+        assert_eq!(wait_client_timeout(Some(1.0), server), 21.0);
+        assert_eq!(
+            wait_client_timeout(Some(1000.0), server),
+            27.0,
+            "the client must clamp to the server's max, not to 55"
+        );
     }
 
     #[test]
-    fn wait_client_timeout_clamps_requests_above_the_server_ceiling() {
-        assert_eq!(wait_client_timeout(Some(1000.0)), 75.0);
+    fn wait_client_timeout_uses_the_fallback_only_without_config() {
+        let config = ConfigResponse {
+            tick_seconds: 4.0,
+            wait_default_seconds: 7.0,
+            wait_max_seconds: 9.0,
+            snapshot_interval_ticks: 120,
+        };
+        let from_server = wait_limits_from(Some(config));
+        assert_eq!(from_server, limits(7.0, 9.0));
+        assert_eq!(wait_client_timeout(None, from_server), 27.0);
+        assert_eq!(wait_client_timeout(Some(1000.0), from_server), 29.0);
+
+        let fallback = wait_limits_from(None);
+        assert_eq!(fallback, WaitLimits::fallback());
+        assert_eq!(wait_client_timeout(None, fallback), 75.0);
     }
 
     #[test]
     fn wait_client_timeout_keeps_sub_second_requests() {
-        assert_eq!(wait_client_timeout(Some(0.05)), 20.05);
+        assert_eq!(wait_client_timeout(Some(0.05), limits(3.0, 7.0)), 20.05);
     }
 }

@@ -18,6 +18,14 @@ pub struct Event {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum EventKind {
+    /// A session joined between ticks. `at` is the entrance for an immediate
+    /// entry, or `None` when the session queued outside.
+    Joined {
+        session: SessionId,
+        agent: AgentId,
+        nick: String,
+        at: Option<Pos>,
+    },
     /// A queued session got the entrance cell.
     EnteredWorld {
         session: SessionId,
@@ -80,6 +88,7 @@ impl EventKind {
     /// Variant name, used as the SQLite event-type column.
     pub fn name(&self) -> &'static str {
         match self {
+            EventKind::Joined { .. } => "Joined",
             EventKind::EnteredWorld { .. } => "EnteredWorld",
             EventKind::AgentMoved { .. } => "AgentMoved",
             EventKind::AgentSwapped { .. } => "AgentSwapped",
@@ -121,7 +130,8 @@ impl Blocker {
 impl Event {
     pub fn subject(&self) -> Option<AgentId> {
         match &self.kind {
-            EventKind::EnteredWorld { agent, .. }
+            EventKind::Joined { agent, .. }
+            | EventKind::EnteredWorld { agent, .. }
             | EventKind::AgentMoved { agent, .. }
             | EventKind::AgentSwapped { agent, .. }
             | EventKind::ActionStarted { agent, .. }
@@ -133,6 +143,7 @@ impl Event {
 
     pub fn at(&self) -> Option<Pos> {
         match &self.kind {
+            EventKind::Joined { at, .. } => *at,
             EventKind::EnteredWorld { at, .. } | EventKind::ActionFinished { at, .. } => Some(*at),
             EventKind::AgentMoved { to, .. } | EventKind::AgentSwapped { to, .. } => Some(*to),
             EventKind::ActionStarted { .. }
@@ -145,6 +156,10 @@ impl Event {
     /// nicknames only, never another agent's free text (design §6).
     pub fn text(&self) -> String {
         match &self.kind {
+            EventKind::Joined { nick, at, .. } => match at {
+                Some(at) => format!("{nick} entered the world at {at}"),
+                None => format!("{nick} joined and waits outside the entrance"),
+            },
             EventKind::EnteredWorld { nick, at, .. } => {
                 format!("{nick} entered the world at {at}")
             }
@@ -221,14 +236,22 @@ impl Event {
 pub(crate) struct EventLog {
     tick: Tick,
     seed: u64,
+    first_seq: u32,
     events: Vec<Event>,
 }
 
 impl EventLog {
     pub(crate) fn new(tick: Tick, seed: u64) -> Self {
+        Self::starting_at(tick, seed, 1)
+    }
+
+    /// Builds a log whose first event gets `first_seq`. Join events continue
+    /// the sequence already used by the current tick.
+    pub(crate) fn starting_at(tick: Tick, seed: u64, first_seq: u32) -> Self {
         Self {
             tick,
             seed,
+            first_seq,
             events: Vec::new(),
         }
     }
@@ -236,7 +259,7 @@ impl EventLog {
     pub(crate) fn push(&mut self, kind: EventKind) {
         self.events.push(Event {
             tick: self.tick,
-            seq: self.events.len() as u32 + 1,
+            seq: self.first_seq + self.events.len() as u32,
             seed: self.seed,
             kind,
         });

@@ -5,7 +5,7 @@
 //! tick's events and the world's tick counter are written in one transaction, so
 //! a crash never leaves a tick half-recorded.
 
-use loo_core::{Event, IntentKind, WorldState};
+use loo_core::{Event, IntentKind, Snapshot, WorldState};
 use loo_proto::{AgentId, Tick};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::Value;
@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-/// Step 0 keeps a single world per database file.
+/// This server keeps a single world per database file.
 const WORLD_ID: i64 = 1;
 
 const SCHEMA: &str = "\
@@ -275,21 +275,50 @@ impl Store {
         Ok(())
     }
 
-    pub fn snapshot(&self, world: &WorldState) -> Result<(), StoreError> {
+    /// Appends between-tick events (joins) without advancing the world tick.
+    pub fn append_join_events(&self, tick: Tick, events: &[Event]) -> Result<(), StoreError> {
+        let mut conn = self.conn()?;
+        let tx = conn.transaction()?;
+        let ts_ms = now_ms() as i64;
+        {
+            let mut insert = tx.prepare(
+                "INSERT INTO events(world_id, tick, seq, seed, kind, payload, ts_ms) \
+                 VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            )?;
+            for event in events {
+                insert.execute(params![
+                    WORLD_ID,
+                    tick as i64,
+                    event.seq as i64,
+                    event.seed as i64,
+                    event.kind.name(),
+                    serde_json::to_string(event)?,
+                    ts_ms
+                ])?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn snapshot(&self, snapshot: &Snapshot) -> Result<(), StoreError> {
         self.conn()?.execute(
             "INSERT OR REPLACE INTO snapshots(world_id, tick, state, ts_ms) \
              VALUES(?1, ?2, ?3, ?4)",
             params![
                 WORLD_ID,
-                world.tick as i64,
-                serde_json::to_string(world)?,
+                snapshot.world.tick as i64,
+                serde_json::to_string(snapshot)?,
                 now_ms() as i64
             ],
         )?;
         Ok(())
     }
 
-    pub fn latest_snapshot(&self) -> Result<Option<(Tick, WorldState)>, StoreError> {
+    /// The latest checkpoint. Older databases stored a bare `WorldState`; they
+    /// are upgraded in place by reading the last seq already committed at that
+    /// tick, so a restart never loses the tick-0 join cursor.
+    pub fn latest_snapshot(&self) -> Result<Option<(Tick, Snapshot)>, StoreError> {
         let row: Option<(i64, String)> = self
             .conn()?
             .query_row(
@@ -301,17 +330,40 @@ impl Store {
             .optional()?;
         match row {
             None => Ok(None),
-            Some((tick, state)) => Ok(Some((tick as Tick, serde_json::from_str(&state)?))),
+            Some((tick, state)) => {
+                let tick = tick as Tick;
+                match serde_json::from_str::<Snapshot>(&state) {
+                    Ok(snapshot) => Ok(Some((tick, snapshot))),
+                    Err(_) => {
+                        let world: WorldState = serde_json::from_str(&state)?;
+                        let last_seq = self.last_seq_at(tick)?;
+                        Ok(Some((tick, Snapshot::at(world, last_seq))))
+                    }
+                }
+            }
         }
     }
 
-    pub fn events_after(&self, tick: Tick) -> Result<Vec<Event>, StoreError> {
+    /// Highest event seq committed at `tick` (0 when none).
+    pub fn last_seq_at(&self, tick: Tick) -> Result<u32, StoreError> {
+        let seq: Option<i64> = self.conn()?.query_row(
+            "SELECT MAX(seq) FROM events WHERE world_id = ?1 AND tick = ?2",
+            params![WORLD_ID, tick as i64],
+            |row| row.get(0),
+        )?;
+        Ok(seq.unwrap_or(0) as u32)
+    }
+
+    /// Events after a cursor: later ticks, plus same-tick events with a higher
+    /// seq (joins appended after a snapshot).
+    pub fn events_after(&self, tick: Tick, last_seq: u32) -> Result<Vec<Event>, StoreError> {
         let conn = self.conn()?;
         let mut stmt = conn.prepare(
-            "SELECT payload FROM events WHERE world_id = ?1 AND tick > ?2 \
+            "SELECT payload FROM events WHERE world_id = ?1 \
+             AND (tick > ?2 OR (tick = ?2 AND seq > ?3)) \
              ORDER BY tick, seq",
         )?;
-        let rows = stmt.query_map(params![WORLD_ID, tick as i64], |row| {
+        let rows = stmt.query_map(params![WORLD_ID, tick as i64, last_seq as i64], |row| {
             row.get::<_, String>(0)
         })?;
         let mut events = Vec::new();
