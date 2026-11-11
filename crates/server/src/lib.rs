@@ -1,8 +1,8 @@
-//! Dev-mode HTTP server for step 0: in-memory world, one tick loop, JSONL logs.
+//! Dev-mode HTTP server: the world lives in memory, every settled tick and every
+//! command is persisted to SQLite, and a restart resumes from that store.
 //!
 //! Design §12: one process, world state in memory, `core` settles each tick.
-//! Step 0 has no accounts, database tables, SSE or web UI; the command and world
-//! event logs are JSONL files on disk.
+//! Step 0 has no accounts, SSE or web UI.
 
 use loo_core::{
     Config, Intent, IntentKind, JoinCommand, JoinOutcome, JoinRejectKind, MapDef, WorldState,
@@ -14,11 +14,10 @@ use loo_proto::{
     WaitRequest, WaitResponse, WaitWake,
 };
 use std::collections::{BTreeMap, HashMap};
-use std::io::Write;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Mutex as StdMutex;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+pub use store::{Store, StoreError, StoredAgent};
 use tokio::sync::{broadcast, Mutex};
 
 /// Outbox cap per session so an agent that stops polling cannot grow memory.
@@ -28,13 +27,14 @@ pub struct Server {
     cfg: Config,
     inner: Mutex<Inner>,
     tick_tx: broadcast::Sender<Tick>,
-    logs: Logs,
+    store: Store,
 }
 
 struct Inner {
     world: WorldState,
-    /// Actions submitted since the last settlement; one per agent, last wins.
-    pending: BTreeMap<AgentId, IntentKind>,
+    /// Actions submitted since the last settlement, in submission order. More
+    /// than one per agent is kept so `core` reports the replacement.
+    pending: BTreeMap<AgentId, Vec<IntentKind>>,
     agents: BTreeMap<AgentId, AgentMeta>,
     tokens: HashMap<String, AgentId>,
     /// Current session per agent (step 0 has no leave/cleanup yet).
@@ -58,24 +58,78 @@ struct AgentMeta {
 }
 
 impl Server {
-    pub fn new(cfg: Config, def: MapDef, logs: Logs, seed_base: u64) -> Self {
+    /// Opens the world stored in `data_dir`: the latest snapshot plus the event
+    /// log after it. A brand-new directory starts at tick 0 from `def` and keeps
+    /// `seed_base`; an existing world keeps its own seed and refuses a different
+    /// map.
+    pub fn open(
+        cfg: Config,
+        def: MapDef,
+        map_name: &str,
+        map_text: &str,
+        data_dir: &Path,
+        seed_base: u64,
+    ) -> Result<Server, StoreError> {
+        let store = Store::open(data_dir, map_name, map_text, seed_base)?;
+        if loo_core::map::parse(&store.map_text()?)? != def {
+            return Err(StoreError::MapMismatch);
+        }
+        let seed_base = store.seed_base()?;
+
+        let base = match store.latest_snapshot()? {
+            Some((_, world)) => world,
+            None => WorldState::new(def),
+        };
+        let events = store.events_after(base.tick)?;
+        let world = loo_core::restore(&base, &events, &cfg)?;
+        if let Some(stored_tick) = store.world_tick()? {
+            if stored_tick != world.tick {
+                return Err(StoreError::Corrupt(format!(
+                    "the world row says tick {stored_tick} but the event log ends at tick {}",
+                    world.tick
+                )));
+            }
+        }
+
+        let stored_agents = store.agents()?;
+        let mut agents = BTreeMap::new();
+        let mut tokens = HashMap::new();
+        for stored in &stored_agents {
+            agents.insert(stored.id, agent_meta(stored)?);
+            tokens.insert(stored.token.clone(), stored.id);
+        }
+        let sessions = world
+            .sessions
+            .values()
+            .map(|session| (session.agent, session.id))
+            .collect();
+        let mut pending: BTreeMap<AgentId, Vec<IntentKind>> = BTreeMap::new();
+        for (agent, kind) in store.pending_intents(world.tick)? {
+            pending.entry(agent).or_default().push(kind);
+        }
+
         let (tick_tx, _) = broadcast::channel(16);
-        Self {
+        Ok(Server {
             cfg,
             inner: Mutex::new(Inner {
-                world: WorldState::new(def),
-                pending: BTreeMap::new(),
-                agents: BTreeMap::new(),
-                tokens: HashMap::new(),
-                sessions: BTreeMap::new(),
+                next_agent_id: stored_agents
+                    .iter()
+                    .map(|agent| agent.id)
+                    .max()
+                    .unwrap_or(0)
+                    + 1,
+                next_session_id: world.sessions.keys().copied().max().unwrap_or(0) + 1,
+                world,
+                pending,
+                agents,
+                tokens,
+                sessions,
                 outbox: BTreeMap::new(),
-                next_agent_id: 1,
-                next_session_id: 1,
                 seed_base,
             }),
             tick_tx,
-            logs,
-        }
+            store,
+        })
     }
 
     pub fn config(&self) -> &Config {
@@ -98,22 +152,32 @@ impl Server {
     }
 
     /// Settles exactly one tick. Public so tests and tooling can drive the world
-    /// without a live timer.
+    /// without a live timer. Nothing is published unless the tick is persisted.
     pub async fn tick_once(&self) -> Tick {
         let mut inner = self.inner.lock().await;
         let intents: Vec<Intent> = inner
             .pending
             .iter()
-            .map(|(agent, kind)| Intent {
-                agent: *agent,
-                kind: kind.clone(),
+            .flat_map(|(agent, kinds)| {
+                kinds.iter().map(move |kind| Intent {
+                    agent: *agent,
+                    kind: kind.clone(),
+                })
             })
             .collect();
-        inner.pending.clear();
 
         let mut rng = loo_core::rng::Rng::new(inner.seed_base ^ (inner.world.tick + 1));
         let seed = rng.next_u64();
         let (world, events) = loo_core::step(&inner.world, &intents, seed, &self.cfg);
+        if let Err(error) = self.store.append_tick(world.tick, &events) {
+            eprintln!(
+                "tick {} was not persisted, keeping tick {}: {error}",
+                world.tick, inner.world.tick
+            );
+            return inner.world.tick;
+        }
+
+        inner.pending.clear();
         inner.world = world;
 
         {
@@ -132,10 +196,43 @@ impl Server {
         }
 
         let tick = inner.world.tick;
+        let interval = self.cfg.persist.snapshot_interval_ticks;
+        if interval > 0 && tick % u64::from(interval) == 0 {
+            if let Err(error) = self.store.snapshot(&inner.world) {
+                eprintln!("snapshot at tick {tick} failed: {error}");
+            }
+        }
         drop(inner);
-        self.logs.events(tick, &events);
         let _ = self.tick_tx.send(tick);
         tick
+    }
+
+    /// The live world, for tests and operators.
+    pub async fn world_state(&self) -> WorldState {
+        self.inner.lock().await.world.clone()
+    }
+
+    /// Every event the store holds after `after_tick`, in settlement order.
+    pub async fn recorded_events(
+        &self,
+        after_tick: Tick,
+    ) -> Result<Vec<loo_core::Event>, StoreError> {
+        self.store.events_after(after_tick)
+    }
+
+    /// Writes a snapshot of the live world now, for a graceful shutdown.
+    pub async fn save_snapshot(&self) -> Result<(), StoreError> {
+        let inner = self.inner.lock().await;
+        self.store.snapshot(&inner.world)
+    }
+
+    /// The configured default `loo wait` timeout in seconds.
+    pub fn default_wait_seconds(&self) -> f64 {
+        self.cfg.wait_default_seconds()
+    }
+
+    pub fn store_path(&self) -> &Path {
+        self.store.path()
     }
 
     /// Dev mode only (design §2.3): hands out a temporary identity, no account.
@@ -151,7 +248,7 @@ impl Server {
                     ApiError::new(ErrorCode::BadRequest, "model must be 1-64 characters"),
                 );
                 drop(inner);
-                return self.finish("register", None, 0, env, started, "bad model");
+                return self.finish("register", None, 0, env, started, "bad model", None);
             }
         }
         if let Some(intro) = &req.intro {
@@ -165,7 +262,7 @@ impl Server {
                     ),
                 );
                 drop(inner);
-                return self.finish("register", None, 0, env, started, "bad intro");
+                return self.finish("register", None, 0, env, started, "bad intro", None);
             }
         }
 
@@ -182,13 +279,15 @@ impl Server {
                         ),
                     );
                     drop(inner);
-                    return self.finish("register", None, 0, env, started, "nickname taken");
+                    return self.finish("register", None, 0, env, started, "nickname taken", None);
                 }
                 name.clone()
             }
             None => loo_proto::Nick::parse(&format!("dev-{agent_id}"))
                 .expect("generated dev nickname is valid"),
         };
+        let model = req.model.unwrap_or_default();
+        let intro = req.intro.unwrap_or_default();
         let token = format!("dev-{agent_id:x}-{:x}", next_nonce());
         inner.next_agent_id += 1;
         inner.tokens.insert(token.clone(), agent_id);
@@ -196,13 +295,19 @@ impl Server {
             agent_id,
             AgentMeta {
                 nick: nick.clone(),
-                model: req.model.unwrap_or_default(),
-                intro: req.intro.unwrap_or_default(),
+                model: model.clone(),
+                intro: intro.clone(),
                 token: token.clone(),
                 sent_by: None,
                 why: String::new(),
             },
         );
+        if let Err(error) = self
+            .store
+            .insert_agent(agent_id, nick.as_str(), &model, &intro, &token)
+        {
+            eprintln!("agent {agent_id} was not persisted: {error}");
+        }
         let tick = inner.world.tick;
         let state = agent_view(&inner, agent_id);
         let env = Envelope::ok(
@@ -217,7 +322,15 @@ impl Server {
         );
         drop(inner);
         let summary = format!("agent {agent_id} as {nick}");
-        self.finish("register", Some(agent_id), tick, env, started, summary)
+        self.finish(
+            "register",
+            Some(agent_id),
+            tick,
+            env,
+            started,
+            summary,
+            None,
+        )
     }
 
     pub async fn join(&self, token: &str, req: JoinRequest) -> Envelope<JoinResponse> {
@@ -226,7 +339,7 @@ impl Server {
         let Some(agent) = inner.tokens.get(token).copied() else {
             let env = failed_env(&mut inner, None, not_authenticated());
             drop(inner);
-            return self.finish("join", None, 0, env, started, "not authenticated");
+            return self.finish("join", None, 0, env, started, "not authenticated", None);
         };
         let tick = inner.world.tick;
 
@@ -241,7 +354,15 @@ impl Server {
                 ),
             );
             drop(inner);
-            return self.finish("join", Some(agent), tick, env, started, "missing --why");
+            return self.finish(
+                "join",
+                Some(agent),
+                tick,
+                env,
+                started,
+                "missing --why",
+                None,
+            );
         }
         if let Some(existing) = inner.sessions.get(&agent).copied() {
             let env = failed_env(
@@ -252,13 +373,21 @@ impl Server {
                 )),
             );
             drop(inner);
-            return self.finish("join", Some(agent), tick, env, started, "already joined");
+            return self.finish(
+                "join",
+                Some(agent),
+                tick,
+                env,
+                started,
+                "already joined",
+                None,
+            );
         }
 
         let Some(meta) = inner.agents.get(&agent) else {
             let env = failed_env(&mut inner, None, not_authenticated());
             drop(inner);
-            return self.finish("join", None, 0, env, started, "no agent");
+            return self.finish("join", None, 0, env, started, "no agent", None);
         };
         let session_id = inner.next_session_id;
         let cmd = JoinCommand {
@@ -274,7 +403,18 @@ impl Server {
                 inner.sessions.insert(agent, session_id);
                 if let Some(meta) = inner.agents.get_mut(&agent) {
                     meta.sent_by = Some(req.sent_by);
-                    meta.why = why;
+                    meta.why = why.clone();
+                }
+                if let Err(error) =
+                    self.store
+                        .update_agent_entry(agent, Some(req.sent_by.as_str()), &why)
+                {
+                    eprintln!("agent {agent} join entry was not persisted: {error}");
+                }
+                // `join` changes the world without emitting an event, so a
+                // snapshot is the only way a restart can recover it.
+                if let Err(error) = self.store.snapshot(&inner.world) {
+                    eprintln!("snapshot after agent {agent} joined failed: {error}");
                 }
                 match outcome {
                     JoinOutcome::Inside { at } => {
@@ -291,7 +431,15 @@ impl Server {
                 };
                 let env = failed_env(&mut inner, Some(agent), ApiError::new(code, reject.message));
                 drop(inner);
-                return self.finish("join", Some(agent), tick, env, started, "join rejected");
+                return self.finish(
+                    "join",
+                    Some(agent),
+                    tick,
+                    env,
+                    started,
+                    "join rejected",
+                    None,
+                );
             }
         };
 
@@ -308,7 +456,7 @@ impl Server {
             },
         );
         drop(inner);
-        self.finish("join", Some(agent), tick, env, started, summary)
+        self.finish("join", Some(agent), tick, env, started, summary, None)
     }
 
     pub async fn look(&self, token: &str) -> Envelope<LookResponse> {
@@ -317,7 +465,7 @@ impl Server {
         let Some(agent) = inner.tokens.get(token).copied() else {
             let env = failed_env(&mut inner, None, not_authenticated());
             drop(inner);
-            return self.finish("look", None, 0, env, started, "not authenticated");
+            return self.finish("look", None, 0, env, started, "not authenticated", None);
         };
         let tick = inner.world.tick;
         let env = match loo_core::look(&inner.world, agent, &self.cfg) {
@@ -329,7 +477,7 @@ impl Server {
         };
         let summary = if env.ok { "view" } else { "rejected" };
         drop(inner);
-        self.finish("look", Some(agent), tick, env, started, summary)
+        self.finish("look", Some(agent), tick, env, started, summary, None)
     }
 
     pub async fn map_view(&self, token: &str) -> Envelope<MapResponse> {
@@ -338,7 +486,7 @@ impl Server {
         let Some(agent) = inner.tokens.get(token).copied() else {
             let env = failed_env(&mut inner, None, not_authenticated());
             drop(inner);
-            return self.finish("map", None, 0, env, started, "not authenticated");
+            return self.finish("map", None, 0, env, started, "not authenticated", None);
         };
         let tick = inner.world.tick;
         let env = match loo_core::map_memory(&inner.world, agent) {
@@ -350,7 +498,7 @@ impl Server {
         };
         let summary = if env.ok { "map memory" } else { "rejected" };
         drop(inner);
-        self.finish("map", Some(agent), tick, env, started, summary)
+        self.finish("map", Some(agent), tick, env, started, summary, None)
     }
 
     pub async fn status(&self, token: &str) -> Envelope<()> {
@@ -359,12 +507,12 @@ impl Server {
         let Some(agent) = inner.tokens.get(token).copied() else {
             let env = failed_env(&mut inner, None, not_authenticated());
             drop(inner);
-            return self.finish("status", None, 0, env, started, "not authenticated");
+            return self.finish("status", None, 0, env, started, "not authenticated", None);
         };
         let tick = inner.world.tick;
         let env = ok_env(&mut inner, agent, ());
         drop(inner);
-        self.finish("status", Some(agent), tick, env, started, "state")
+        self.finish("status", Some(agent), tick, env, started, "state", None)
     }
 
     pub async fn rules(&self) -> Envelope<RulesResponse> {
@@ -380,7 +528,7 @@ impl Server {
         let text = rules_text(&self.cfg, width, height);
         let env = Envelope::ok(RulesResponse { text }, Vec::new(), None);
         // `rules` needs no identity, but design §8 logs every command.
-        self.finish("rules", None, tick, env, started, "rules text")
+        self.finish("rules", None, tick, env, started, "rules text", None)
     }
 
     pub async fn move_cmd(&self, token: &str, req: MoveRequest) -> Envelope<ActionQueued> {
@@ -389,7 +537,7 @@ impl Server {
         let Some(agent) = inner.tokens.get(token).copied() else {
             let env = failed_env(&mut inner, None, not_authenticated());
             drop(inner);
-            return self.finish("move", None, 0, env, started, "not authenticated");
+            return self.finish("move", None, 0, env, started, "not authenticated", None);
         };
         let tick = inner.world.tick;
 
@@ -402,7 +550,7 @@ impl Server {
                     ApiError::new(ErrorCode::BadRequest, message),
                 );
                 drop(inner);
-                return self.finish("move", Some(agent), tick, env, started, "bad move");
+                return self.finish("move", Some(agent), tick, env, started, "bad move", None);
             }
         };
         if dirs.is_empty() {
@@ -412,7 +560,7 @@ impl Server {
                 ApiError::new(ErrorCode::BadRequest, "empty path"),
             );
             drop(inner);
-            return self.finish("move", Some(agent), tick, env, started, "empty path");
+            return self.finish("move", Some(agent), tick, env, started, "empty path", None);
         }
         let max_steps = (inner.world.map.width() + inner.world.map.height()) as usize;
         if dirs.len() > max_steps {
@@ -425,13 +573,21 @@ impl Server {
                 ),
             );
             drop(inner);
-            return self.finish("move", Some(agent), tick, env, started, "path too long");
+            return self.finish(
+                "move",
+                Some(agent),
+                tick,
+                env,
+                started,
+                "path too long",
+                None,
+            );
         }
         if !inner.world.is_inside(agent) {
             let err = session_required(&inner, agent);
             let env = failed_env(&mut inner, Some(agent), err);
             drop(inner);
-            return self.finish("move", Some(agent), tick, env, started, "not inside");
+            return self.finish("move", Some(agent), tick, env, started, "not inside", None);
         }
 
         let label = req.spec.label();
@@ -439,13 +595,12 @@ impl Server {
             description: label.clone(),
             remaining: dirs.len() as u32,
         };
-        inner.pending.insert(
-            agent,
-            IntentKind::Move {
-                dirs,
-                label: label.clone(),
-            },
-        );
+        let kind = IntentKind::Move {
+            dirs,
+            label: label.clone(),
+        };
+        let intent_json = serde_json::to_value(&kind).ok();
+        inner.pending.entry(agent).or_default().push(kind);
         let effective_tick = tick + 1;
         let env = ok_env(
             &mut inner,
@@ -463,6 +618,7 @@ impl Server {
             env,
             started,
             format!("queued {label} for tick {effective_tick}"),
+            intent_json.as_ref(),
         )
     }
 
@@ -470,7 +626,7 @@ impl Server {
         let started = Instant::now();
         let timeout_seconds = req
             .timeout_seconds
-            .unwrap_or(self.cfg.wait.default_seconds)
+            .unwrap_or_else(|| self.cfg.wait_default_seconds())
             .clamp(0.05, self.cfg.wait.max_seconds);
 
         let agent = { self.inner.lock().await.tokens.get(token).copied() };
@@ -478,7 +634,7 @@ impl Server {
             let mut inner = self.inner.lock().await;
             let env = failed_env(&mut inner, None, not_authenticated());
             drop(inner);
-            return self.finish("wait", None, 0, env, started, "not authenticated");
+            return self.finish("wait", None, 0, env, started, "not authenticated", None);
         };
 
         let deadline = Instant::now() + Duration::from_secs_f64(timeout_seconds);
@@ -512,6 +668,7 @@ impl Server {
                         env,
                         started,
                         format!("woke on event after {elapsed_ms}ms"),
+                        None,
                     );
                 }
             }
@@ -547,9 +704,11 @@ impl Server {
             env,
             started,
             format!("timeout after {elapsed_ms}ms"),
+            None,
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn finish<T>(
         &self,
         command: &str,
@@ -558,17 +717,16 @@ impl Server {
         env: Envelope<T>,
         started: Instant,
         summary: impl Into<String>,
+        intent: Option<&serde_json::Value>,
     ) -> Envelope<T> {
-        let line = serde_json::json!({
-            "ts_ms": now_ms(),
-            "tick": tick,
-            "agent": agent,
-            "command": command,
-            "ok": env.ok,
-            "duration_ms": started.elapsed().as_millis() as u64,
-            "summary": summary.into(),
-        });
-        self.logs.command(&line);
+        let summary = summary.into();
+        let duration_ms = started.elapsed().as_millis() as u64;
+        if let Err(error) =
+            self.store
+                .record_command(tick, agent, command, env.ok, &summary, duration_ms, intent)
+        {
+            eprintln!("command {command} was not logged: {error}");
+        }
         env
     }
 }
@@ -640,6 +798,34 @@ fn agent_view(inner: &Inner, agent: AgentId) -> Option<AgentView> {
     })
 }
 
+fn agent_meta(stored: &StoredAgent) -> Result<AgentMeta, StoreError> {
+    let nick = loo_proto::Nick::parse(&stored.nick).map_err(|message| {
+        StoreError::Corrupt(format!(
+            "agent {} has an invalid nick: {message}",
+            stored.id
+        ))
+    })?;
+    let sent_by = match stored.sent_by.as_deref() {
+        None => None,
+        Some("self") => Some(SentBy::Self_),
+        Some("human") => Some(SentBy::Human),
+        Some(other) => {
+            return Err(StoreError::Corrupt(format!(
+                "agent {} has an unknown sent_by {other:?}",
+                stored.id
+            )))
+        }
+    };
+    Ok(AgentMeta {
+        nick,
+        model: stored.model.clone(),
+        intro: stored.intro.clone(),
+        token: stored.token.clone(),
+        sent_by,
+        why: stored.why.clone(),
+    })
+}
+
 fn ok_env<T>(inner: &mut Inner, agent: AgentId, result: T) -> Envelope<T> {
     let state = agent_view(inner, agent);
     let session = state.as_ref().and_then(|s| s.session_id);
@@ -708,7 +894,8 @@ Commands
   loo move <N|E|S|W> [steps]   |   loo move <path, e.g. NNEE>
       Queue a move. One cell per tick. It stops at the first wall, closed door, other agent or map edge, and tells you where and why.
   loo wait [--timeout seconds]
-      Block until something happens that concerns you or is in your view, or until the timeout (default {wait_default}s, max {wait_max}s). A timeout is a normal result, not an error.
+      Block until something happens that concerns you or is in your view, or until the timeout. A timeout is a normal result, not an error.
+      The default timeout is max(wait.default_seconds = {wait_default}s, one tick = {tick}s); no wait exceeds {wait_max}s, and the server always allows at least one tick.
   loo rules
       This text. Step 0 has no building, doors, toilets in use or combat yet.
 
@@ -730,40 +917,4 @@ World facts
 }
 
 pub mod http;
-
-/// Two append-only JSONL logs (design §8): every command, every world event.
-pub struct Logs {
-    commands: StdMutex<std::fs::File>,
-    events: StdMutex<std::fs::File>,
-}
-
-impl Logs {
-    pub fn open(dir: &Path) -> std::io::Result<Logs> {
-        std::fs::create_dir_all(dir)?;
-        Ok(Logs {
-            commands: StdMutex::new(std::fs::File::create(dir.join("commands.jsonl"))?),
-            events: StdMutex::new(std::fs::File::create(dir.join("events.jsonl"))?),
-        })
-    }
-
-    pub fn command(&self, line: &serde_json::Value) {
-        if let Ok(mut file) = self.commands.lock() {
-            let _ = writeln!(file, "{line}");
-            let _ = file.flush();
-        }
-    }
-
-    pub fn events(&self, tick: Tick, events: &[loo_core::Event]) {
-        if let Ok(mut file) = self.events.lock() {
-            for event in events {
-                let mut value = serde_json::to_value(event).unwrap_or(serde_json::Value::Null);
-                if let serde_json::Value::Object(map) = &mut value {
-                    map.insert("ts_ms".to_string(), serde_json::json!(now_ms()));
-                    map.insert("world_tick".to_string(), serde_json::json!(tick));
-                }
-                let _ = writeln!(file, "{value}");
-            }
-            let _ = file.flush();
-        }
-    }
-}
+pub mod store;

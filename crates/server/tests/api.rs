@@ -1,13 +1,14 @@
-//! Server-level acceptance tests: dev identity, join, look, move, wait, and
-//! same-tick contention (design §13 第 0 步).
+//! Server-level acceptance tests: dev identity, join, look, move, wait,
+//! same-tick contention, and SQLite persistence/recovery (design §13 第 0 步).
 
-use loo_core::{map, Config};
+use loo_core::{map, Config, Event, EventKind, Intent, IntentKind, MapDef};
 use loo_proto::{
-    Envelope, ErrorCode, JoinRequest, JoinResponse, LookResponse, MoveRequest, MoveSpec, Nick,
-    Placement, RegisterRequest, RegisterResponse, SentBy, WaitRequest, WaitWake,
+    Dir, Envelope, ErrorCode, JoinRequest, JoinResponse, LookResponse, MoveRequest, MoveSpec, Nick,
+    Placement, Pos, RegisterRequest, RegisterResponse, SentBy, Tick, WaitRequest, WaitWake,
 };
-use loo_server::{Logs, Server};
-use std::path::PathBuf;
+use loo_server::{Server, Store};
+use rusqlite::Connection;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -20,20 +21,39 @@ grid
 #######
 ";
 
+fn test_dir(name: &str) -> PathBuf {
+    PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("api-{name}"))
+}
+
+fn fresh_dir(name: &str) -> PathBuf {
+    let dir = test_dir(name);
+    let _ = std::fs::remove_dir_all(&dir);
+    dir
+}
+
+fn open_with_map(dir: &Path, cfg: Config, map_text: &str) -> Arc<Server> {
+    let def = map::parse(map_text).expect("test map parses");
+    Arc::new(Server::open(cfg, def, "test", map_text, dir, 7).expect("server opens"))
+}
+
+fn open_in(dir: &Path, cfg: Config) -> Arc<Server> {
+    open_with_map(dir, cfg, TEST_MAP)
+}
+
 fn new_server(name: &str) -> Arc<Server> {
     new_server_with(name, Config::default())
 }
 
 fn new_server_with(name: &str, cfg: Config) -> Arc<Server> {
-    let dir: PathBuf = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("api-{name}"));
-    let _ = std::fs::remove_dir_all(&dir);
-    let def = map::parse(TEST_MAP).expect("test map parses");
-    Arc::new(Server::new(
-        cfg,
-        def,
-        Logs::open(&dir).expect("logs open"),
-        7,
-    ))
+    open_in(&fresh_dir(name), cfg)
+}
+
+/// Reopens the world an earlier `new_server_with` left in `api-<name>`.
+fn open_existing(name: &str, cfg: Config, def: MapDef, map_text: &str) -> Arc<Server> {
+    Arc::new(
+        Server::open(cfg, def, "test", map_text, &test_dir(name), 7)
+            .expect("server reopens stored world"),
+    )
 }
 
 fn nick(name: &str) -> Nick {
@@ -70,6 +90,14 @@ async fn move_to(
     spec: MoveSpec,
 ) -> Envelope<loo_proto::ActionQueued> {
     server.move_cmd(token, MoveRequest { spec }).await
+}
+
+fn settled_ticks(events: &[Event]) -> Vec<Tick> {
+    events
+        .iter()
+        .filter(|event| matches!(event.kind, EventKind::TickSettled))
+        .map(|event| event.tick)
+        .collect()
 }
 
 #[tokio::test]
@@ -126,7 +154,7 @@ async fn join_places_the_agent_and_look_is_9x9() {
         }
         other => panic!("expected to be inside, got {other:?}"),
     };
-    assert_eq!(at, loo_proto::Pos::new(3, 2));
+    assert_eq!(at, Pos::new(3, 2));
 
     let looked = server.look(&token).await;
     assert!(looked.ok);
@@ -154,7 +182,7 @@ async fn move_walks_one_cell_per_tick_and_stops_at_walls() {
         &server,
         &token,
         MoveSpec::Steps {
-            dir: loo_proto::Dir::W,
+            dir: Dir::W,
             count: 2,
         },
     )
@@ -167,7 +195,7 @@ async fn move_walks_one_cell_per_tick_and_stops_at_walls() {
         &server,
         &token,
         MoveSpec::Steps {
-            dir: loo_proto::Dir::W,
+            dir: Dir::W,
             count: 2,
         },
     )
@@ -179,7 +207,7 @@ async fn move_walks_one_cell_per_tick_and_stops_at_walls() {
     server.tick_once().await;
     let status = server.status(&token).await;
     let state = status.state.expect("state present");
-    assert_eq!(state.pos, Some(loo_proto::Pos::new(2, 2)));
+    assert_eq!(state.pos, Some(Pos::new(2, 2)));
     assert_eq!(
         status.events.iter().map(|e| e.tick).collect::<Vec<_>>(),
         vec![1],
@@ -189,10 +217,7 @@ async fn move_walks_one_cell_per_tick_and_stops_at_walls() {
 
     server.tick_once().await;
     let status = server.status(&token).await;
-    assert_eq!(
-        status.state.as_ref().unwrap().pos,
-        Some(loo_proto::Pos::new(1, 2))
-    );
+    assert_eq!(status.state.as_ref().unwrap().pos, Some(Pos::new(1, 2)));
     assert!(status.state.unwrap().action.is_none(), "path finished");
     assert!(
         status.events.iter().all(|event| event.tick == 2),
@@ -212,10 +237,7 @@ async fn move_walks_one_cell_per_tick_and_stops_at_walls() {
     server.tick_once().await;
     server.tick_once().await;
     let status = server.status(&token).await;
-    assert_eq!(
-        status.state.as_ref().unwrap().pos,
-        Some(loo_proto::Pos::new(1, 1))
-    );
+    assert_eq!(status.state.as_ref().unwrap().pos, Some(Pos::new(1, 1)));
     assert!(status.state.unwrap().action.is_none());
     let texts: Vec<String> = status.events.iter().map(|e| e.text.clone()).collect();
     assert!(
@@ -307,7 +329,7 @@ async fn wait_wakes_on_a_tick_event() {
 
 #[tokio::test]
 async fn two_agents_contesting_one_cell_settle_identically_on_both_runs() {
-    async fn run(name: &str) -> (u64, Vec<String>) {
+    async fn run(name: &str) -> Vec<String> {
         let server = new_server(name);
         let (token_a, _) = register(&server, "dev-a").await;
         let (token_b, _) = register(&server, "dev-b").await;
@@ -349,7 +371,7 @@ async fn two_agents_contesting_one_cell_settle_identically_on_both_runs() {
         let pos_a = state_a.state.unwrap().pos.expect("dev-a inside");
         let pos_b = state_b.state.unwrap().pos.expect("dev-b inside");
         assert_ne!(pos_a, pos_b, "two agents never share a cell");
-        let contested = loo_proto::Pos::new(2, 2);
+        let contested = Pos::new(2, 2);
         assert_eq!(
             [pos_a, pos_b].iter().filter(|p| **p == contested).count(),
             1,
@@ -362,14 +384,394 @@ async fn two_agents_contesting_one_cell_settle_identically_on_both_runs() {
             .map(|event| event.text.clone())
             .collect();
         texts.sort();
-        (server.config().tick_seconds as u64, texts)
+        texts
     }
 
-    let (_, first) = run("determinism-a").await;
-    let (_, second) = run("determinism-b").await;
+    let first = run("determinism-a").await;
+    let second = run("determinism-b").await;
     assert_eq!(first, second, "same seed, same settlement");
     assert!(
         first.iter().any(|text| text.contains("blocked by agent")),
         "the loser is told which agent blocked it: {first:?}"
     );
+}
+
+#[tokio::test]
+async fn store_uses_wal_and_has_required_tables() {
+    let dir = fresh_dir("store-tables");
+    let server = open_in(&dir, Config::default());
+    let store = Store::open(&dir, "test", TEST_MAP, 7).expect("second handle opens");
+    assert_eq!(store.journal_mode().expect("journal mode"), "wal");
+
+    drop(server);
+    let conn = Connection::open(store.path()).expect("open database file");
+    let mut stmt = conn
+        .prepare("SELECT name FROM sqlite_master WHERE type = 'table'")
+        .expect("read schema");
+    let names: Vec<String> = stmt
+        .query_map([], |row| row.get(0))
+        .expect("query schema")
+        .map(|row| row.expect("table name"))
+        .collect();
+    for table in ["worlds", "events", "snapshots", "commands", "agents"] {
+        assert!(
+            names.iter().any(|name| name == table),
+            "missing table {table}: {names:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn snapshot_plus_events_matches_live_world() {
+    let name = "snapshot-events";
+    let mut cfg = Config::default();
+    cfg.persist.snapshot_interval_ticks = 2;
+    let dir = fresh_dir(name);
+    let server = open_in(&dir, cfg.clone());
+    let (token, _) = register(&server, "dev-a").await;
+    join(&server, &token).await;
+    move_to(
+        &server,
+        &token,
+        MoveSpec::Path {
+            path: "WW".to_string(),
+        },
+    )
+    .await;
+    for _ in 0..5 {
+        server.tick_once().await;
+    }
+
+    let store = Store::open(&dir, "test", TEST_MAP, 7).expect("second handle opens");
+    let (tick, snapshot) = store
+        .latest_snapshot()
+        .expect("snapshot readable")
+        .expect("snapshot written");
+    assert_eq!(tick, 4, "a snapshot lands on every second tick");
+    let events = store.events_after(tick).expect("events readable");
+    let restored =
+        loo_core::restore(&snapshot, &events, &cfg).expect("snapshot plus events restore");
+    let live = server.world_state().await;
+    let diffs = loo_core::diff_worlds(&restored, &live);
+    assert!(diffs.is_empty(), "restored world differs: {diffs:?}");
+}
+
+#[tokio::test]
+async fn restart_resumes_tick_and_log_without_gap() {
+    let name = "restart";
+    // The default snapshot interval is 120 ticks, so nothing is snapshotted.
+    let cfg = Config::default();
+    let dir = fresh_dir(name);
+    let server = open_in(&dir, cfg.clone());
+    let (token, _) = register(&server, "dev-a").await;
+    join(&server, &token).await;
+    for _ in 0..3 {
+        server.tick_once().await;
+    }
+    // Submitted at tick 3 and still unsettled when the process dies.
+    move_to(
+        &server,
+        &token,
+        MoveSpec::Path {
+            path: "W".to_string(),
+        },
+    )
+    .await;
+    drop(server);
+
+    let def = map::parse(TEST_MAP).expect("test map parses");
+    let server = open_existing(name, cfg, def, TEST_MAP);
+    assert_eq!(
+        server.world_state().await.tick,
+        3,
+        "the tick does not go backwards"
+    );
+
+    let looked = server.look(&token).await;
+    assert!(
+        looked.ok,
+        "the stored token still authenticates: {:?}",
+        looked.error
+    );
+    assert_eq!(looked.state.expect("state").pos, Some(Pos::new(3, 2)));
+
+    let before = settled_ticks(&server.recorded_events(0).await.expect("events readable"));
+    assert_eq!(before, vec![1, 2, 3]);
+
+    server.tick_once().await;
+    let after = settled_ticks(&server.recorded_events(0).await.expect("events readable"));
+    assert_eq!(after, vec![1, 2, 3, 4], "the log resumes without a gap");
+    assert!(after.windows(2).all(|pair| pair[1] == pair[0] + 1));
+
+    let status = server.status(&token).await;
+    assert_eq!(
+        status.state.expect("state").pos,
+        Some(Pos::new(2, 2)),
+        "the unsettled move survived the restart"
+    );
+}
+
+#[tokio::test]
+async fn recorded_seed_replays_the_tick_events_exactly() {
+    let name = "replay-seed";
+    let cfg = Config::default();
+    let server = open_in(&fresh_dir(name), cfg.clone());
+    let (token_a, _) = register(&server, "dev-a").await;
+    let (token_b, _) = register(&server, "dev-b").await;
+    join(&server, &token_a).await;
+    move_to(
+        &server,
+        &token_a,
+        MoveSpec::Path {
+            path: "WW".to_string(),
+        },
+    )
+    .await;
+    server.tick_once().await;
+    server.tick_once().await;
+    join(&server, &token_b).await;
+
+    // Both agents want the contested cell.
+    move_to(
+        &server,
+        &token_a,
+        MoveSpec::Path {
+            path: "E".to_string(),
+        },
+    )
+    .await;
+    move_to(
+        &server,
+        &token_b,
+        MoveSpec::Path {
+            path: "W".to_string(),
+        },
+    )
+    .await;
+
+    let before = server.world_state().await;
+    let intents = vec![
+        Intent {
+            agent: 1,
+            kind: IntentKind::Move {
+                dirs: vec![Dir::E],
+                label: "move E".to_string(),
+            },
+        },
+        Intent {
+            agent: 2,
+            kind: IntentKind::Move {
+                dirs: vec![Dir::W],
+                label: "move W".to_string(),
+            },
+        },
+    ];
+    server.tick_once().await;
+
+    let recorded = server
+        .recorded_events(before.tick)
+        .await
+        .expect("events readable");
+    let seed = recorded
+        .iter()
+        .find(|event| matches!(event.kind, EventKind::TickSettled))
+        .map(|event| event.seed)
+        .expect("the tick's seed is recorded");
+    let (world, events) = loo_core::step(&before, &intents, seed, &cfg);
+    assert_eq!(
+        events, recorded,
+        "the recorded seed reproduces the tick's events exactly"
+    );
+    assert!(
+        loo_core::diff_worlds(&world, &server.world_state().await).is_empty(),
+        "the recorded events reproduce the live world"
+    );
+}
+
+/// 31 wide, 3 tall, no walls: enough room to walk out of another agent's view.
+fn open_map(width: usize) -> String {
+    let mut text = String::from("grid\n");
+    text.push('E');
+    text.push_str(&".".repeat(width - 1));
+    text.push('\n');
+    for _ in 0..2 {
+        text.push_str(&".".repeat(width));
+        text.push('\n');
+    }
+    text
+}
+
+#[tokio::test]
+async fn agents_never_see_outside_their_view() {
+    let name = "visibility";
+    let text = open_map(31);
+    let dir = fresh_dir(name);
+    let server = open_with_map(&dir, Config::default(), &text);
+
+    let (token_a, _) = register(&server, "dev-a").await;
+    join(&server, &token_a).await;
+    move_to(
+        &server,
+        &token_a,
+        MoveSpec::Steps {
+            dir: Dir::E,
+            count: 20,
+        },
+    )
+    .await;
+    for _ in 0..20 {
+        server.tick_once().await;
+        // Drain dev-a's own events so only another agent's events can show up.
+        server.status(&token_a).await;
+    }
+
+    let (token_b, _) = register(&server, "dev-b").await;
+    join(&server, &token_b).await;
+    move_to(
+        &server,
+        &token_b,
+        MoveSpec::Steps {
+            dir: Dir::E,
+            count: 1,
+        },
+    )
+    .await;
+    server.tick_once().await;
+
+    let state_a = server.status(&token_a).await;
+    assert_eq!(state_a.state.expect("state").pos, Some(Pos::new(20, 0)));
+    assert!(
+        state_a.events.is_empty(),
+        "dev-b is 19 cells away: {:?}",
+        state_a.events
+    );
+    let looked = server.look(&token_a).await;
+    let view = looked.result.expect("look result");
+    assert_eq!((view.grid.width, view.grid.height), (9, 9));
+    assert_eq!(view.grid.rows.len(), 9);
+    assert!(view.grid.rows.iter().all(|row| row.chars().count() == 9));
+    assert!(
+        !view.grid.rows.iter().any(|row| row.contains('a')),
+        "dev-b is outside the view: {:?}",
+        view.grid.rows
+    );
+    let remembered = server.map_view(&token_a).await;
+    let remembered = remembered.result.expect("map result");
+    assert!(!remembered.grid.rows.iter().any(|row| row.contains('a')));
+
+    // dev-b walks into the view window.
+    move_to(
+        &server,
+        &token_b,
+        MoveSpec::Steps {
+            dir: Dir::E,
+            count: 15,
+        },
+    )
+    .await;
+    for _ in 0..15 {
+        server.tick_once().await;
+    }
+    let state_b = server.status(&token_b).await;
+    assert_eq!(state_b.state.expect("state").pos, Some(Pos::new(16, 0)));
+
+    let state_a = server.status(&token_a).await;
+    let texts: Vec<String> = state_a
+        .events
+        .iter()
+        .map(|event| event.text.clone())
+        .collect();
+    assert!(
+        texts
+            .iter()
+            .any(|text| text.contains("dev-b") && text.contains("moved")),
+        "a visible move is delivered: {texts:?}"
+    );
+    let looked = server.look(&token_a).await;
+    let view = looked.result.expect("look result");
+    assert_eq!((view.grid.width, view.grid.height), (9, 9));
+    assert!(
+        view.grid.rows.iter().any(|row| row.contains('a')),
+        "dev-b is now inside the view: {:?}",
+        view.grid.rows
+    );
+}
+
+#[tokio::test]
+async fn wait_default_comes_from_config() {
+    let cfg = Config {
+        tick_seconds: 0.2,
+        wait: loo_core::config::WaitConfig {
+            default_seconds: 0.05,
+            max_seconds: 2.0,
+        },
+        ..Config::default()
+    };
+    let server = new_server_with("wait-default", cfg);
+    let (token, _) = register(&server, "dev-a").await;
+    join(&server, &token).await;
+
+    assert_eq!(
+        server.default_wait_seconds(),
+        0.2,
+        "the default covers one tick"
+    );
+    let waited = server
+        .wait(
+            &token,
+            WaitRequest {
+                timeout_seconds: None,
+            },
+        )
+        .await;
+    let response = waited.result.expect("wait result");
+    assert_eq!(response.timeout_seconds, 0.2);
+    assert_eq!(response.woke, WaitWake::Timeout);
+}
+
+#[tokio::test]
+async fn every_command_is_logged_including_rejections() {
+    let name = "command-log";
+    let dir = fresh_dir(name);
+    let server = open_in(&dir, Config::default());
+    let (token, _) = register(&server, "dev-a").await;
+
+    let rejected = move_to(
+        &server,
+        &token,
+        MoveSpec::Path {
+            path: "W".to_string(),
+        },
+    )
+    .await;
+    assert!(!rejected.ok, "a move before joining is rejected");
+
+    let conn = Connection::open(server.store_path()).expect("open command log");
+    let rejected_moves: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM commands WHERE command = 'move' AND ok = 0",
+            [],
+            |row| row.get(0),
+        )
+        .expect("count rejected moves");
+    assert!(rejected_moves >= 1, "the rejected move is logged");
+
+    join(&server, &token).await;
+    move_to(
+        &server,
+        &token,
+        MoveSpec::Steps {
+            dir: Dir::W,
+            count: 1,
+        },
+    )
+    .await;
+    let accepted_moves: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM commands WHERE command = 'move' AND ok = 1 AND intent IS NOT NULL",
+            [],
+            |row| row.get(0),
+        )
+        .expect("count accepted moves");
+    assert_eq!(accepted_moves, 1, "the accepted move keeps its intent");
 }

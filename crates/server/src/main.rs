@@ -1,6 +1,6 @@
 use clap::Parser;
 use loo_core::{map, Config};
-use loo_server::{http, Logs, Server};
+use loo_server::{http, Server};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -20,9 +20,10 @@ struct Args {
     /// Overrides `tick_seconds` from the config file.
     #[arg(long)]
     tick_seconds: Option<f64>,
-    /// Directory for commands.jsonl and events.jsonl.
+    /// Directory of `world.db`: the world, its event log and commands.
     #[arg(long, default_value = ".conductor/dev")]
     data_dir: PathBuf,
+    /// Seed for the first world in an empty data directory.
     #[arg(long, default_value_t = 42)]
     seed: u64,
 }
@@ -45,23 +46,49 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let map_text = std::fs::read_to_string(&args.map)?;
     let def = map::parse(&map_text).map_err(|error| format!("{}: {error}", args.map.display()))?;
-    let logs = Logs::open(&args.data_dir)?;
-    let server = Arc::new(Server::new(cfg, def, logs, args.seed));
+    let map_name = args.map.display().to_string();
+    let server = Arc::new(Server::open(
+        cfg,
+        def,
+        &map_name,
+        &map_text,
+        &args.data_dir,
+        args.seed,
+    )?);
+    let tick = server.world_state().await.tick;
     server.spawn_ticker();
 
     let listener = tokio::net::TcpListener::bind(&args.addr).await?;
     println!(
-        "loo dev server on http://{} tick={}s map={} data={} seed={}",
+        "loo dev server on http://{} tick={}s map={} data={} tick={} seed={}",
         args.addr,
         server.config().tick_seconds,
-        args.map.display(),
+        map_name,
         args.data_dir.display(),
+        tick,
         args.seed
     );
     axum::serve(listener, http::router(server.clone()))
-        .with_graceful_shutdown(async {
-            let _ = tokio::signal::ctrl_c().await;
-        })
+        .with_graceful_shutdown(shutdown())
         .await?;
+    server.save_snapshot().await?;
     Ok(())
+}
+
+/// Ctrl-C or SIGTERM: either one flushes a snapshot before the process leaves.
+async fn shutdown() {
+    #[cfg(unix)]
+    {
+        let mut terminate =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                .expect("SIGTERM handler installs");
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {}
+            _ = terminate.recv() => {}
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = tokio::signal::ctrl_c().await;
+    }
 }
