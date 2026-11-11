@@ -263,6 +263,49 @@ mod tests {
     }
 
     #[test]
+    fn idle_state_line_is_a_frozen_contract() {
+        let env: Envelope<()> = Envelope::ok(
+            (),
+            Vec::new(),
+            Some(AgentView {
+                agent_id: 1,
+                nick: "dev-1".to_string(),
+                tick: 4,
+                session_id: Some(1),
+                placement: Some(loo_proto::PlacementKind::Inside),
+                pos: Some(loo_proto::Pos::new(1, 0)),
+                queue_ahead: None,
+                action: None,
+            }),
+        );
+        assert_eq!(
+            render("status", &env),
+            "ok status tick=4\n\
+             events: none\n\
+             you: dev-1 (#1) · session 1 · at (1,0) · idle\n"
+        );
+    }
+
+    #[test]
+    fn wait_renders_the_server_effective_timeout() {
+        let env = Envelope::ok(
+            WaitResponse {
+                woke: WaitWake::Timeout,
+                timeout_seconds: 30.0,
+                elapsed_ms: 42,
+            },
+            Vec::new(),
+            None,
+        );
+        let text = render("wait", &env);
+        assert!(text.contains("timeout 30s"), "{text}");
+        assert!(
+            text.contains("timeout (normal result, not an error)"),
+            "{text}"
+        );
+    }
+
+    #[test]
     fn map_shows_seen_ticks() {
         let env = Envelope::ok(
             MapResponse {
