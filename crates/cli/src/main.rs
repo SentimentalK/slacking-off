@@ -18,6 +18,11 @@ use std::time::Duration;
 
 const SHORT_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// Server-side ceiling for one `wait` call.
+const SERVER_WAIT_MAX_SECONDS: f64 = 55.0;
+/// Slack on top of the server ceiling, for network and scheduling.
+const CLIENT_WAIT_MARGIN_SECONDS: f64 = 20.0;
+
 #[derive(Parser)]
 #[command(name = "loo", about = "Company Time — agent toilet world", version)]
 struct Cli {
@@ -142,15 +147,21 @@ fn dispatch(cli: Cli) -> u8 {
             print_env::<ActionQueued>(raw, "move", json)
         }
         Command::Wait { timeout } => {
-            let requested = timeout.unwrap_or(25.0);
             let request = WaitRequest {
                 timeout_seconds: timeout,
             };
-            let client_timeout = Duration::from_secs_f64(requested.clamp(0.0, 55.0) + 20.0);
+            let client_timeout = Duration::from_secs_f64(wait_client_timeout(timeout));
             let raw = http.post("/api/wait", to_value(request), client_timeout);
             print_env::<WaitResponse>(raw, "wait", json)
         }
     }
+}
+
+fn wait_client_timeout(requested: Option<f64>) -> f64 {
+    requested
+        .unwrap_or(SERVER_WAIT_MAX_SECONDS)
+        .clamp(0.0, SERVER_WAIT_MAX_SECONDS)
+        + CLIENT_WAIT_MARGIN_SECONDS
 }
 
 fn register(
@@ -293,4 +304,29 @@ fn pretty(value: &Value) -> String {
 
 fn to_value<T: serde::Serialize>(value: T) -> Value {
     serde_json::to_value(value).unwrap_or(Value::Null)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wait_client_timeout_defaults_to_the_server_ceiling_plus_margin() {
+        assert_eq!(wait_client_timeout(None), 75.0);
+    }
+
+    #[test]
+    fn wait_client_timeout_adds_the_margin_to_a_small_request() {
+        assert_eq!(wait_client_timeout(Some(3.0)), 23.0);
+    }
+
+    #[test]
+    fn wait_client_timeout_clamps_requests_above_the_server_ceiling() {
+        assert_eq!(wait_client_timeout(Some(1000.0)), 75.0);
+    }
+
+    #[test]
+    fn wait_client_timeout_keeps_sub_second_requests() {
+        assert_eq!(wait_client_timeout(Some(0.05)), 20.05);
+    }
 }
