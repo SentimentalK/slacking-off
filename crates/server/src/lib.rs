@@ -368,12 +368,19 @@ impl Server {
     }
 
     pub async fn rules(&self) -> Envelope<RulesResponse> {
-        let (width, height) = {
+        let started = Instant::now();
+        let (width, height, tick) = {
             let inner = self.inner.lock().await;
-            (inner.world.map.width(), inner.world.map.height())
+            (
+                inner.world.map.width(),
+                inner.world.map.height(),
+                inner.world.tick,
+            )
         };
         let text = rules_text(&self.cfg, width, height);
-        Envelope::ok(RulesResponse { text }, Vec::new(), None)
+        let env = Envelope::ok(RulesResponse { text }, Vec::new(), None);
+        // `rules` needs no identity, but design §8 logs every command.
+        self.finish("rules", None, tick, env, started, "rules text")
     }
 
     pub async fn move_cmd(&self, token: &str, req: MoveRequest) -> Envelope<ActionQueued> {
