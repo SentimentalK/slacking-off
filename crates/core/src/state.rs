@@ -2,14 +2,31 @@
 
 use crate::map::{Map, MapDef};
 use loo_proto::{AgentId, Dir, Nick, Pos, SessionId, Tick};
+use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, VecDeque};
 
+/// What an unfinished build site will become once the work is done.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SiteKind {
+    Wall,
+    Door,
+    Toilet,
+}
+
 /// A world object. At most one per cell (design §4.2).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Object {
     Wall,
-    Door { open: bool },
-    Toilet { level: u8 },
+    Door {
+        open: bool,
+    },
+    Toilet {
+        level: u8,
+    },
+    /// An unfinished build site. Only a toilet site lets agents walk through.
+    Site {
+        kind: SiteKind,
+    },
 }
 
 impl Object {
@@ -18,6 +35,7 @@ impl Object {
             Object::Wall => true,
             Object::Door { open } => !open,
             Object::Toilet { .. } => false,
+            Object::Site { kind } => kind != SiteKind::Toilet,
         }
     }
 
@@ -28,12 +46,13 @@ impl Object {
             Object::Door { open: true } => '\'',
             Object::Door { open: false } => '+',
             Object::Toilet { level } => char::from(b'0' + level.clamp(1, 9)),
+            Object::Site { .. } => 'x',
         }
     }
 }
 
 /// The single action an agent is currently running (design §3).
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Action {
     pub dirs: VecDeque<Dir>,
     pub total: u32,
@@ -46,32 +65,36 @@ impl Action {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Agent {
     pub id: AgentId,
     pub nick: Nick,
     pub pos: Option<Pos>,
     pub action: Option<Action>,
+    /// Tick until which the agent is stunned; `0` means not stunned. A stunned
+    /// agent can be shoved out of its cell by a mover.
+    pub stun_until: Tick,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SessionStatus {
     /// Joined, waiting outside the entrance for a free entrance cell.
     Waiting,
     Inside,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Session {
     pub id: SessionId,
     pub agent: AgentId,
     pub status: SessionStatus,
     /// Cells this session has seen, with the tick they were first seen
     /// (design §4.10 `loo map`).
+    #[serde(with = "seen_serde")]
     pub seen: BTreeMap<Pos, Tick>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorldState {
     pub tick: Tick,
     pub map: Map,
@@ -154,5 +177,32 @@ impl WorldState {
                 }
             }
         }
+    }
+}
+
+/// `Session::seen` keys are coordinates, which JSON cannot use as object keys.
+/// Store it as a list of `(pos, tick)` pairs instead; the map round-trips
+/// exactly because it is a `BTreeMap`.
+mod seen_serde {
+    use loo_proto::{Pos, Tick};
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+    use std::collections::BTreeMap;
+
+    pub fn serialize<S: Serializer>(
+        seen: &BTreeMap<Pos, Tick>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        seen.iter()
+            .map(|(pos, tick)| (*pos, *tick))
+            .collect::<Vec<(Pos, Tick)>>()
+            .serialize(serializer)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<BTreeMap<Pos, Tick>, D::Error> {
+        Ok(Vec::<(Pos, Tick)>::deserialize(deserializer)?
+            .into_iter()
+            .collect())
     }
 }

@@ -5,7 +5,7 @@
 //! seed is an argument. That is what makes replays exact.
 //!
 //! ```
-//! use loo_core::{map, Config, Intent, WorldState, join, step, JoinCommand, JoinOutcome};
+//! use loo_core::{map, Config, EventKind, Intent, WorldState, join, step, JoinCommand, JoinOutcome};
 //! use loo_proto::Nick;
 //!
 //! let def = map::parse("grid\n.1.\n..E\n").unwrap();
@@ -19,12 +19,14 @@
 //! .unwrap();
 //! assert_eq!(outcome, JoinOutcome::Inside { at: world.entrance });
 //! let (_next, events) = step(&world, &[] as &[Intent], 42, &cfg);
-//! assert!(events.is_empty());
+//! assert_eq!(events.len(), 1, "every tick settles");
+//! assert!(matches!(events[0].kind, EventKind::TickSettled));
 //! ```
 
 pub mod config;
 pub mod event;
 pub mod map;
+pub mod replay;
 pub mod rng;
 pub mod state;
 pub mod step;
@@ -33,7 +35,8 @@ pub mod view;
 pub use config::Config;
 pub use event::{ActionOutcome, Blocker, Event, EventKind};
 pub use map::{Map, MapDef, MapError, Terrain};
-pub use state::{Action, Agent, Object, Session, SessionStatus, WorldState};
+pub use replay::{diff_worlds, replay, restore, ReplayError, WorldDiff};
+pub use state::{Action, Agent, Object, Session, SessionStatus, SiteKind, WorldState};
 pub use step::{
     join, step, Intent, IntentKind, JoinCommand, JoinOutcome, JoinReject, JoinRejectKind,
 };

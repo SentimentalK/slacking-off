@@ -48,6 +48,15 @@ impl Config {
     pub fn from_json(text: &str) -> Result<Config, serde_json::Error> {
         serde_json::from_str(text)
     }
+
+    /// How long `loo wait` should block by default: the configured wait, but
+    /// never shorter than one tick and never longer than the maximum wait.
+    pub fn wait_default_seconds(&self) -> f64 {
+        self.wait
+            .default_seconds
+            .max(self.tick_seconds)
+            .min(self.wait.max_seconds)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -283,5 +292,23 @@ mod tests {
         assert_eq!(cfg.view.width, 5);
         assert_eq!(cfg.view.height, 9, "untouched fields keep design defaults");
         assert_eq!(cfg.build.wall_work, 2);
+    }
+
+    #[test]
+    fn wait_default_is_clamped_to_tick_and_max() {
+        let mut cfg = Config::default();
+        assert_eq!(cfg.wait_default_seconds(), 25.0, "design default");
+        cfg.tick_seconds = 30.0;
+        assert_eq!(
+            cfg.wait_default_seconds(),
+            30.0,
+            "a long tick widens the wait"
+        );
+        cfg.tick_seconds = 60.0;
+        assert_eq!(
+            cfg.wait_default_seconds(),
+            55.0,
+            "the maximum wait still caps it"
+        );
     }
 }

@@ -4,6 +4,7 @@
 //! the tick's shuffle seed, so a replay can be verified.
 
 use crate::config::Config;
+use crate::state::Action;
 use loo_proto::{AgentId, Dir, Pos, SessionId, Tick};
 use serde::{Deserialize, Serialize};
 
@@ -32,6 +33,34 @@ pub enum EventKind {
         from: Pos,
         to: Pos,
     },
+    /// A mover walked into a stunned agent and swapped cells with it.
+    AgentSwapped {
+        session: SessionId,
+        agent: AgentId,
+        nick: String,
+        other_session: SessionId,
+        other_agent: AgentId,
+        other_nick: String,
+        from: Pos,
+        to: Pos,
+        other_from: Pos,
+        other_to: Pos,
+    },
+    /// A submitted action started, replacing nothing.
+    ActionStarted {
+        session: SessionId,
+        agent: AgentId,
+        nick: String,
+        action: Action,
+    },
+    /// A submitted action replaced one that had not finished yet.
+    ActionReplaced {
+        session: SessionId,
+        agent: AgentId,
+        nick: String,
+        from: Action,
+        to: Action,
+    },
     /// The running action ended, either by finishing its path or by being
     /// blocked.
     ActionFinished {
@@ -42,6 +71,24 @@ pub enum EventKind {
         dir: Option<Dir>,
         outcome: ActionOutcome,
     },
+    /// Marks the settlement of one tick. Always the first event of its tick and
+    /// never delivered to an agent; `Event::seed` is the tick's shuffle seed.
+    TickSettled,
+}
+
+impl EventKind {
+    /// Variant name, used as the SQLite event-type column.
+    pub fn name(&self) -> &'static str {
+        match self {
+            EventKind::EnteredWorld { .. } => "EnteredWorld",
+            EventKind::AgentMoved { .. } => "AgentMoved",
+            EventKind::AgentSwapped { .. } => "AgentSwapped",
+            EventKind::ActionStarted { .. } => "ActionStarted",
+            EventKind::ActionReplaced { .. } => "ActionReplaced",
+            EventKind::ActionFinished { .. } => "ActionFinished",
+            EventKind::TickSettled => "TickSettled",
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -56,6 +103,7 @@ pub enum Blocker {
     Wall,
     ClosedDoor,
     Agent { nick: String },
+    Site,
 }
 
 impl Blocker {
@@ -65,23 +113,31 @@ impl Blocker {
             Blocker::Wall => "a wall".to_string(),
             Blocker::ClosedDoor => "a closed door".to_string(),
             Blocker::Agent { nick } => format!("agent {nick}"),
+            Blocker::Site => "an unfinished build site".to_string(),
         }
     }
 }
 
 impl Event {
-    pub fn subject(&self) -> AgentId {
+    pub fn subject(&self) -> Option<AgentId> {
         match &self.kind {
             EventKind::EnteredWorld { agent, .. }
             | EventKind::AgentMoved { agent, .. }
-            | EventKind::ActionFinished { agent, .. } => *agent,
+            | EventKind::AgentSwapped { agent, .. }
+            | EventKind::ActionStarted { agent, .. }
+            | EventKind::ActionReplaced { agent, .. }
+            | EventKind::ActionFinished { agent, .. } => Some(*agent),
+            EventKind::TickSettled => None,
         }
     }
 
-    pub fn at(&self) -> Pos {
+    pub fn at(&self) -> Option<Pos> {
         match &self.kind {
-            EventKind::EnteredWorld { at, .. } | EventKind::ActionFinished { at, .. } => *at,
-            EventKind::AgentMoved { to, .. } => *to,
+            EventKind::EnteredWorld { at, .. } | EventKind::ActionFinished { at, .. } => Some(*at),
+            EventKind::AgentMoved { to, .. } | EventKind::AgentSwapped { to, .. } => Some(*to),
+            EventKind::ActionStarted { .. }
+            | EventKind::ActionReplaced { .. }
+            | EventKind::TickSettled => None,
         }
     }
 
@@ -95,6 +151,24 @@ impl Event {
             EventKind::AgentMoved { nick, from, to, .. } => {
                 format!("{nick} moved {from} -> {to}")
             }
+            EventKind::AgentSwapped {
+                nick,
+                from,
+                to,
+                other_nick,
+                other_from,
+                other_to,
+                ..
+            } => format!(
+                "{nick} moved {from} -> {to}; {other_nick} was pushed {other_from} -> {other_to}"
+            ),
+            EventKind::ActionStarted { nick, action, .. } => {
+                format!("{nick} started {}", action.label)
+            }
+            EventKind::ActionReplaced { nick, from, to, .. } => format!(
+                "{nick}'s action {} was replaced by {}",
+                from.label, to.label
+            ),
             EventKind::ActionFinished {
                 nick,
                 at,
@@ -113,19 +187,23 @@ impl Event {
                     )
                 }
             },
+            EventKind::TickSettled => format!("tick {} settled", self.tick),
         }
     }
 
     /// Whether `viewer` may see this event: events about yourself always, other
-    /// events only inside your view window (design §4.10).
+    /// events only inside your view window (design §4.10). Events without a
+    /// subject or a location are never visible to anyone else.
     pub fn visible_to(&self, viewer: AgentId, viewer_pos: Option<Pos>, cfg: &Config) -> bool {
-        if self.subject() == viewer {
+        if self.subject() == Some(viewer) {
             return true;
         }
         let Some(pos) = viewer_pos else {
             return false;
         };
-        let at = self.at();
+        let Some(at) = self.at() else {
+            return false;
+        };
         (at.x - pos.x).abs() <= cfg.view.width / 2 && (at.y - pos.y).abs() <= cfg.view.height / 2
     }
 }

@@ -9,20 +9,22 @@
 //! ```
 //!
 //! Characters: `#` wall, `+` closed door, `'` open door, `1`..`5` toilet of
-//! that level, `.` buildable floor, `:` no-build floor, `E` entrance (no-build
-//! floor). Exactly one `E` is required.
+//! that level, `x` unfinished build site (blocks movement), `.` buildable
+//! floor, `:` no-build floor, `E` entrance (no-build floor). Exactly one `E` is
+//! required.
 
-use crate::state::Object;
+use crate::state::{Object, SiteKind};
 use loo_proto::{Dir, Pos};
+use serde::{Deserialize, Serialize};
 use std::fmt;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Terrain {
     Buildable,
     NoBuild,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Map {
     width: i32,
     height: i32,
@@ -185,6 +187,12 @@ pub fn parse(text: &str) -> Result<MapDef, MapError> {
                     Terrain::Buildable,
                     Some(Object::Toilet {
                         level: ch.to_digit(10).unwrap_or(1) as u8,
+                    }),
+                ),
+                'x' => (
+                    Terrain::Buildable,
+                    Some(Object::Site {
+                        kind: SiteKind::Wall,
                     }),
                 ),
                 other => {
