@@ -35,10 +35,19 @@ fn kind_name(kind: SiteKind) -> &'static str {
 
 fn object_kind_name(object: Object) -> &'static str {
     match object {
-        Object::Wall => "wall",
+        Object::Wall { .. } => "wall",
         Object::Door { .. } => "door",
         Object::Toilet { .. } => "toilet",
         Object::Site { kind, .. } => kind_name(kind),
+    }
+}
+
+/// Damage is server-generated state; the event has no config handle, so the text
+/// reports the accumulated damage and leaves the total to the object's config.
+fn damage_suffix(object: Object) -> String {
+    match object {
+        Object::Wall { damage } | Object::Door { damage, .. } => format!(" (damage {damage})"),
+        _ => String::new(),
     }
 }
 
@@ -403,9 +412,10 @@ impl Event {
                 },
                 ObjectCause::Demolish => match object {
                     Some(object) => format!(
-                        "{} damaged a {} at {pos}",
+                        "{} damaged a {} at {pos}{}",
                         nick.as_deref().unwrap_or("someone"),
-                        object_kind_name(*object)
+                        object_kind_name(*object),
+                        damage_suffix(*object)
                     ),
                     None => format!(
                         "{} demolished the object at {pos}",

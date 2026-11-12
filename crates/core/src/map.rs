@@ -180,9 +180,21 @@ pub fn parse(text: &str) -> Result<MapDef, MapError> {
                     }
                     (Terrain::NoBuild, None)
                 }
-                '#' => (Terrain::Buildable, Some(Object::Wall)),
-                '+' => (Terrain::Buildable, Some(Object::Door { open: false })),
-                '\'' => (Terrain::Buildable, Some(Object::Door { open: true })),
+                '#' => (Terrain::Buildable, Some(Object::Wall { damage: 0 })),
+                '+' => (
+                    Terrain::Buildable,
+                    Some(Object::Door {
+                        open: false,
+                        damage: 0,
+                    }),
+                ),
+                '\'' => (
+                    Terrain::Buildable,
+                    Some(Object::Door {
+                        open: true,
+                        damage: 0,
+                    }),
+                ),
                 '1'..='5' => (
                     Terrain::Buildable,
                     Some(Object::Toilet {
@@ -243,7 +255,7 @@ grid
         let def = parse(TINY).expect("tiny map parses");
         assert_eq!((def.map.width(), def.map.height()), (5, 4));
         assert_eq!(def.entrance, Pos::new(3, 2));
-        assert_eq!(def.objects[0], Some(Object::Wall));
+        assert_eq!(def.objects[0], Some(Object::Wall { damage: 0 }));
         assert_eq!(
             def.objects[def.map.index(Pos::new(2, 1)).unwrap()],
             Some(Object::Toilet {
@@ -253,7 +265,10 @@ grid
         );
         assert_eq!(
             def.objects[def.map.index(Pos::new(1, 2)).unwrap()],
-            Some(Object::Door { open: false })
+            Some(Object::Door {
+                open: false,
+                damage: 0
+            })
         );
         assert_eq!(def.map.terrain_at(Pos::new(3, 2)), Some(Terrain::NoBuild));
     }

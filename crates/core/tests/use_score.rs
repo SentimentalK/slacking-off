@@ -3,7 +3,7 @@
 use loo_core::{
     diff_worlds, is_usable, join, leave, map, restore, session_score, step, validate_use,
     weighted_score, Action, ActionOutcome, Config, Event, EventKind, Intent, IntentKind,
-    JoinCommand, Object, SessionStatus, Snapshot, WorldState,
+    JoinCommand, Object, ObjectCause, SessionStatus, Snapshot, WorldState,
 };
 use loo_proto::{Dir, Need, Nick, Pos, SessionOutcome, Tick};
 
@@ -179,7 +179,13 @@ fn validate_use_requires_a_finished_enclosed_toilet() {
     assert!(!is_usable(&missing, FIVE));
 
     let mut ajar = world.clone();
-    ajar.set_object(Pos::new(2, 1), Some(Object::Door { open: true }));
+    ajar.set_object(
+        Pos::new(2, 1),
+        Some(Object::Door {
+            open: true,
+            damage: 0,
+        }),
+    );
     let error = validate_use(&ajar, 1, &cfg).expect_err("an open east door");
     assert!(error.contains("east door is open"), "{error}");
     assert!(!is_usable(&ajar, FIVE));
@@ -197,7 +203,7 @@ fn validate_use_requires_a_finished_enclosed_toilet() {
     assert!(!is_usable(&building, FIVE));
 
     let mut wall = world.clone();
-    wall.set_object(FIVE, Some(Object::Wall));
+    wall.set_object(FIVE, Some(Object::Wall { damage: 0 }));
     let error = validate_use(&wall, 1, &cfg).expect_err("a wall is not a toilet");
     assert!(error.contains("stand on a toilet"), "{error}");
 }
@@ -340,7 +346,13 @@ fn a_toilet_that_stops_being_usable_interrupts_the_use() {
     assert!(after.agents[&1].action.is_none(), "no use action is left");
 
     let mut ajar = world.clone();
-    ajar.set_object(Pos::new(2, 1), Some(Object::Door { open: true }));
+    ajar.set_object(
+        Pos::new(2, 1),
+        Some(Object::Door {
+            open: true,
+            damage: 0,
+        }),
+    );
     let (_, events) = run(&ajar, &[], 1, &cfg);
     let reason = match &find(&events, |kind| {
         matches!(kind, EventKind::UseInterrupted { .. })
@@ -693,6 +705,72 @@ fn a_successful_session_lingers_then_leaves_with_its_score() {
             ..
         } if leaked == score
     ));
+}
+
+#[test]
+fn a_lingering_session_leaves_before_the_stall_door_auto_opens() {
+    let cfg = Config::default();
+    let map_text = "\
+grid
+#####
+#1+.#
+###E#
+#####
+";
+    let (world, _) = claim(&build(map_text), &cfg, 1);
+    let mut world = put(&world, 1, Pos::new(1, 1));
+    let session = world.session_of(1).expect("session").id;
+    let entry = world.sessions.get_mut(&session).expect("session");
+    entry.outcome = Some(SessionOutcome::Success);
+    entry.score = 7;
+    entry.linger_until = Some(1);
+    let door = Pos::new(2, 1);
+    assert_eq!(
+        world.object_at(door),
+        Some(Object::Door {
+            open: false,
+            damage: 0
+        })
+    );
+
+    let (end, events) = run(&world, &[], 1, &cfg);
+    assert!(
+        end.sessions.is_empty(),
+        "the successful session leaves on its linger tick"
+    );
+    assert!(end.agents.is_empty());
+    assert_eq!(
+        end.object_at(door),
+        Some(Object::Door {
+            open: true,
+            damage: 0
+        }),
+        "the same tick already shows the door open"
+    );
+    let ended = find(&events, |kind| {
+        matches!(
+            kind,
+            EventKind::SessionEnded {
+                outcome: SessionOutcome::Success,
+                ..
+            }
+        )
+    });
+    let auto_opened = find(&events, |kind| {
+        matches!(
+            kind,
+            EventKind::ObjectChanged {
+                cause: ObjectCause::AutoOpened,
+                ..
+            }
+        )
+    });
+    assert_eq!(ended.tick, 1);
+    assert_eq!(auto_opened.tick, 1);
+    assert!(
+        ended.seq < auto_opened.seq,
+        "the leave is recorded before the door opens"
+    );
 }
 
 #[test]

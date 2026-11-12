@@ -198,8 +198,8 @@ pub fn step(
     progress_uses(&mut next, &mut log, &order, cfg);
     expire_sessions(&mut next, &mut log);
     warn_deadlines(&mut next, &mut log, cfg);
-    auto_open_doors(&mut next, &mut log);
     finish_lingering(&mut next, &mut log);
+    auto_open_doors(&mut next, &mut log);
 
     mark_all_seen(&mut next, cfg);
 
@@ -668,8 +668,11 @@ fn build_tick(
 
 fn completed_object(kind: SiteKind) -> Object {
     match kind {
-        SiteKind::Wall => Object::Wall,
-        SiteKind::Door => Object::Door { open: false },
+        SiteKind::Wall => Object::Wall { damage: 0 },
+        SiteKind::Door => Object::Door {
+            open: false,
+            damage: 0,
+        },
         SiteKind::Toilet => Object::Toilet {
             level: 1,
             progress: 0,
@@ -710,19 +713,21 @@ fn demolish_tick(
     };
     let (object, finished) = match existing {
         Object::Site { .. } => (None, true),
-        Object::Wall => {
-            let work = cfg
-                .build
-                .wall_work
-                .saturating_sub(cfg.build.wall_door_demolish_per_tick);
-            site_after_demolish(SiteKind::Wall, work)
+        Object::Wall { damage } => {
+            let damage = damage.saturating_add(cfg.build.wall_door_demolish_per_tick);
+            if damage >= cfg.build.wall_work {
+                (None, true)
+            } else {
+                (Some(Object::Wall { damage }), false)
+            }
         }
-        Object::Door { .. } => {
-            let work = cfg
-                .build
-                .door_work
-                .saturating_sub(cfg.build.wall_door_demolish_per_tick);
-            site_after_demolish(SiteKind::Door, work)
+        Object::Door { open, damage } => {
+            let damage = damage.saturating_add(cfg.build.wall_door_demolish_per_tick);
+            if damage >= cfg.build.door_work {
+                (None, true)
+            } else {
+                (Some(Object::Door { open, damage }), false)
+            }
         }
         Object::Toilet { level, progress } => toilet_after_demolish(level, progress, cfg),
     };
@@ -747,14 +752,6 @@ fn demolish_tick(
             ActionOutcome::Completed,
             action,
         );
-    }
-}
-
-fn site_after_demolish(kind: SiteKind, work: u32) -> (Option<Object>, bool) {
-    if work == 0 {
-        (None, true)
-    } else {
-        (Some(Object::Site { kind, work }), false)
     }
 }
 
@@ -804,13 +801,21 @@ fn door_tick(
         );
         return;
     }
-    world.set_object(*target, Some(Object::Door { open: *open }));
+    let damage = match world.object_at(*target) {
+        Some(Object::Door { damage, .. }) => damage,
+        _ => 0,
+    };
+    let object = Object::Door {
+        open: *open,
+        damage,
+    };
+    world.set_object(*target, Some(object));
     log.push(EventKind::ObjectChanged {
         session: Some(session),
         agent: Some(agent_id),
         nick: Some(nick.clone()),
         pos: *target,
-        object: Some(Object::Door { open: *open }),
+        object: Some(object),
         cause: if *open {
             ObjectCause::DoorOpened
         } else {
@@ -833,16 +838,20 @@ fn door_tick(
 /// A closed door with nobody on an adjacent toilet cell opens by itself at the
 /// end of the tick. Standing in the doorway does not keep it closed.
 fn auto_open_doors(world: &mut WorldState, log: &mut EventLog) {
-    let mut closed: Vec<Pos> = Vec::new();
+    let mut closed: Vec<(Pos, u32)> = Vec::new();
     for y in 0..world.map.height() {
         for x in 0..world.map.width() {
             let pos = Pos::new(x, y);
-            if world.object_at(pos).is_some_and(Object::is_closed_door) {
-                closed.push(pos);
+            if let Some(Object::Door {
+                open: false,
+                damage,
+            }) = world.object_at(pos)
+            {
+                closed.push((pos, damage));
             }
         }
     }
-    for pos in closed {
+    for (pos, damage) in closed {
         let attended = Dir::ALL.iter().any(|dir| {
             let cell = pos.step(*dir);
             matches!(world.object_at(cell), Some(Object::Toilet { .. }))
@@ -851,13 +860,14 @@ fn auto_open_doors(world: &mut WorldState, log: &mut EventLog) {
         if attended {
             continue;
         }
-        world.set_object(pos, Some(Object::Door { open: true }));
+        let object = Object::Door { open: true, damage };
+        world.set_object(pos, Some(object));
         log.push(EventKind::ObjectChanged {
             session: None,
             agent: None,
             nick: None,
             pos,
-            object: Some(Object::Door { open: true }),
+            object: Some(object),
             cause: ObjectCause::AutoOpened,
         });
     }

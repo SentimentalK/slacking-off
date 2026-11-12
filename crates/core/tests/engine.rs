@@ -229,7 +229,13 @@ fn closed_door_blocks_open_door_passes() {
     ));
 
     let mut open = world.clone();
-    open.set_object(Pos::new(2, 0), Some(Object::Door { open: true }));
+    open.set_object(
+        Pos::new(2, 0),
+        Some(Object::Door {
+            open: true,
+            damage: 0,
+        }),
+    );
     let (next, _) = step(&open, &[move_intent(1, &[Dir::E])], 1, &cfg);
     assert_eq!(pos_of(&next, 1), Pos::new(2, 0), "open door is walkable");
 }

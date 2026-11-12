@@ -5,7 +5,7 @@ use loo_core::{
     validate_door, Action, ActionOutcome, Config, Event, EventKind, Intent, IntentKind,
     JoinCommand, Object, ObjectCause, SessionStatus, SiteKind, Snapshot, WorldState,
 };
-use loo_proto::{Nick, Pos};
+use loo_proto::{Need, Nick, Pos};
 
 const FLOOR: &str = "\
 grid
@@ -72,6 +72,23 @@ fn door_intent(agent: u64, target: Pos, open: bool) -> Intent {
     }
 }
 
+fn use_intent(agent: u64, target: Pos) -> Intent {
+    Intent {
+        agent,
+        kind: IntentKind::Use { target },
+    }
+}
+
+/// One enclosed toilet: walls north/west/south and a closed door east.
+const STALL: &str = "\
+grid
+########
+#.#....#
+##1+...#
+###..E.#
+########
+";
+
 fn site_of(events: &[Event]) -> Vec<(Option<Object>, ObjectCause)> {
     events
         .iter()
@@ -80,6 +97,24 @@ fn site_of(events: &[Event]) -> Vec<(Option<Object>, ObjectCause)> {
             _ => None,
         })
         .collect()
+}
+
+const STALL_TOILET: Pos = Pos::new(2, 2);
+const STALL_DOOR: Pos = Pos::new(3, 2);
+const STALL_NORTH_WALL: Pos = Pos::new(2, 1);
+
+/// A user on the enclosed toilet and a demolisher at `demolisher_at`.
+fn stalled_user(cfg: &Config, demolisher_at: Pos) -> WorldState {
+    let mut world = build(STALL);
+    world = claim(&world, cfg, 1, "dev-1");
+    place(&mut world, 1, STALL_TOILET);
+    world = claim(&world, cfg, 2, "dev-2");
+    place(&mut world, 2, demolisher_at);
+    let session = world.session_of(1).expect("session").id;
+    let entry = world.sessions.get_mut(&session).expect("session");
+    entry.need = Some(Need::Feces);
+    entry.deadline = 1000;
+    world
 }
 
 fn claim(world: &WorldState, cfg: &Config, agent: u64, name: &str) -> WorldState {
@@ -120,10 +155,10 @@ fn wall_takes_two_ticks_and_blocks_as_a_site() {
     let (second, events) = step(&first, &[], 2, &cfg);
     assert_eq!(
         second.object_at(Pos::new(2, 1)),
-        Some(Object::Wall),
+        Some(Object::Wall { damage: 0 }),
         "the second tick finishes the wall"
     );
-    assert_eq!(Object::Wall.glyph(), '#');
+    assert_eq!(Object::Wall { damage: 0 }.glyph(), '#');
     assert!(second.agents[&1].action.is_none(), "the build finished");
     assert!(events.iter().any(|event| matches!(
         event.kind,
@@ -167,7 +202,10 @@ fn door_build_finishes_closed_and_look_shows_plus() {
     let (second, _) = step(&first, &[], 2, &cfg);
     assert_eq!(
         second.object_at(Pos::new(2, 1)),
-        Some(Object::Door { open: false }),
+        Some(Object::Door {
+            open: false,
+            damage: 0,
+        }),
         "a new door starts closed"
     );
     let view = look(&second, 1, &cfg).expect("agent 1 is inside");
@@ -231,9 +269,20 @@ fn build_validation_rejects_occupied_targets_and_distances() {
         .expect_err("a different site is in the way");
     assert!(error.contains("demolish"), "{error}");
 
-    world.set_object(Pos::new(2, 1), Some(Object::Wall));
+    world.set_object(Pos::new(2, 1), Some(Object::Wall { damage: 1 }));
     let error = validate_build(&world, 1, SiteKind::Wall, Pos::new(2, 1), &cfg)
-        .expect_err("a finished object is in the way");
+        .expect_err("a damaged wall is still in the way");
+    assert!(error.contains("demolish"), "{error}");
+
+    world.set_object(
+        Pos::new(2, 1),
+        Some(Object::Door {
+            open: false,
+            damage: 1,
+        }),
+    );
+    let error = validate_build(&world, 1, SiteKind::Door, Pos::new(2, 1), &cfg)
+        .expect_err("a damaged door is still in the way");
     assert!(error.contains("demolish"), "{error}");
 
     assert!(
@@ -267,36 +316,150 @@ fn build_rejects_no_build_terrain_agent_cells_and_distance() {
 }
 
 #[test]
-fn demolishing_wall_and_door_shows_a_site_then_nothing() {
+fn demolishing_damages_wall_and_door_then_removes_them() {
     let cfg = Config::default();
 
     let mut world = build("grid\nE........\n..#......\n.........\n");
     world = claim(&world, &cfg, 1, "dev-1");
     place(&mut world, 1, Pos::new(1, 1));
     let (first, events) = step(&world, &[demolish_intent(1, Pos::new(2, 1))], 1, &cfg);
-    let site = Object::Site {
-        kind: SiteKind::Wall,
-        work: 1,
-    };
-    assert_eq!(first.object_at(Pos::new(2, 1)), Some(site));
-    assert_eq!(site_of(&events), vec![(Some(site), ObjectCause::Demolish)]);
+    let damaged = Object::Wall { damage: 1 };
+    assert_eq!(first.object_at(Pos::new(2, 1)), Some(damaged));
+    assert_eq!(damaged.glyph(), '#');
+    assert!(damaged.blocks_movement(), "a damaged wall still blocks");
+    assert_eq!(
+        site_of(&events),
+        vec![(Some(damaged), ObjectCause::Demolish)]
+    );
+    let text = events
+        .iter()
+        .find(|event| matches!(event.kind, EventKind::ObjectChanged { .. }))
+        .expect("damage is announced")
+        .text();
+    assert!(text.contains("damage 1"), "{text}");
     let (second, _) = step(&first, &[], 2, &cfg);
     assert_eq!(second.object_at(Pos::new(2, 1)), None);
     assert!(second.agents[&1].action.is_none(), "the wall is gone");
 
-    let mut world = build("grid\nE........\n..+......\n.........\n");
+    let mut world = build("grid\nE........\n.+1......\n.........\n");
     world = claim(&world, &cfg, 1, "dev-1");
-    place(&mut world, 1, Pos::new(1, 1));
-    let (first, _) = step(&world, &[demolish_intent(1, Pos::new(2, 1))], 1, &cfg);
+    place(&mut world, 1, Pos::new(0, 1));
+    world = claim(&world, &cfg, 2, "dev-2");
+    place(&mut world, 2, Pos::new(2, 1));
+    let (first, _) = step(&world, &[demolish_intent(1, Pos::new(1, 1))], 1, &cfg);
+    let damaged = Object::Door {
+        open: false,
+        damage: 1,
+    };
+    assert_eq!(first.object_at(Pos::new(1, 1)), Some(damaged));
+    assert_eq!(damaged.glyph(), '+');
+    let (second, _) = step(&first, &[], 2, &cfg);
+    assert_eq!(second.object_at(Pos::new(1, 1)), None);
+}
+
+#[test]
+fn damaged_wall_keeps_enclosing_until_it_disappears() {
+    let cfg = Config::default();
+    let world = stalled_user(&cfg, Pos::new(3, 1));
+    let (first, events) = step(
+        &world,
+        &[
+            use_intent(1, STALL_TOILET),
+            demolish_intent(2, STALL_NORTH_WALL),
+        ],
+        1,
+        &cfg,
+    );
     assert_eq!(
-        first.object_at(Pos::new(2, 1)),
-        Some(Object::Site {
-            kind: SiteKind::Door,
-            work: 1
+        first.object_at(STALL_NORTH_WALL),
+        Some(Object::Wall { damage: 1 }),
+        "the first hit leaves a damaged wall"
+    );
+    assert_eq!(
+        first.object_at(STALL_NORTH_WALL).map(Object::glyph),
+        Some('#')
+    );
+    assert!(
+        is_usable(&first, STALL_TOILET),
+        "damage does not break the enclosure"
+    );
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event.kind, EventKind::UseProgressed { .. })),
+        "the use still progresses on the first hit"
+    );
+
+    let (second, events) = step(&first, &[], 2, &cfg);
+    assert_eq!(second.object_at(STALL_NORTH_WALL), None);
+    assert!(!is_usable(&second, STALL_TOILET), "the cell is open now");
+    let session = second.session_of(1).expect("session survives");
+    assert_eq!(
+        session.use_ticks_done, 1,
+        "the interrupted tick adds no progress"
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(event.kind, EventKind::UseProgressed { .. }))
+            .count(),
+        0
+    );
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event.kind, EventKind::UseInterrupted { .. })),
+        "losing the wall interrupts on the removal tick"
+    );
+    assert!(second.agents[&1].action.is_none());
+}
+
+#[test]
+fn damaged_door_keeps_enclosing_and_can_still_be_worked() {
+    let cfg = Config::default();
+    let world = stalled_user(&cfg, Pos::new(4, 2));
+    let (first, events) = step(
+        &world,
+        &[use_intent(1, STALL_TOILET), demolish_intent(2, STALL_DOOR)],
+        1,
+        &cfg,
+    );
+    assert_eq!(
+        first.object_at(STALL_DOOR),
+        Some(Object::Door {
+            open: false,
+            damage: 1
         })
     );
-    let (second, _) = step(&first, &[], 2, &cfg);
-    assert_eq!(second.object_at(Pos::new(2, 1)), None);
+    assert!(
+        is_usable(&first, STALL_TOILET),
+        "a damaged closed door still encloses"
+    );
+    assert!(
+        validate_door(&first, 1, STALL_DOOR, true).is_ok(),
+        "damage does not remove the door's permissions"
+    );
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event.kind, EventKind::UseProgressed { .. })),
+        "the first door hit does not interrupt"
+    );
+
+    let (second, events) = step(&first, &[], 2, &cfg);
+    assert_eq!(second.object_at(STALL_DOOR), None);
+    assert!(!is_usable(&second, STALL_TOILET));
+    assert_eq!(
+        second.session_of(1).expect("session").use_ticks_done,
+        1,
+        "the removal tick adds no progress"
+    );
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event.kind, EventKind::UseInterrupted { .. })),
+        "the door disappearing interrupts the use"
+    );
 }
 
 #[test]
@@ -388,11 +551,18 @@ fn only_an_agent_on_an_adjacent_toilet_cell_may_work_the_door() {
     let (closed, events) = step(&world, &[door_intent(1, Pos::new(2, 1), false)], 1, &cfg);
     assert_eq!(
         closed.object_at(Pos::new(2, 1)),
-        Some(Object::Door { open: false })
+        Some(Object::Door {
+            open: false,
+            damage: 0,
+        })
     );
-    assert!(
-        site_of(&events).contains(&(Some(Object::Door { open: false }), ObjectCause::DoorClosed))
-    );
+    assert!(site_of(&events).contains(&(
+        Some(Object::Door {
+            open: false,
+            damage: 0,
+        }),
+        ObjectCause::DoorClosed
+    )));
     assert!(closed.agents[&1].action.is_none());
 
     world = claim(&world, &cfg, 2, "dev-2");
@@ -404,7 +574,10 @@ fn only_an_agent_on_an_adjacent_toilet_cell_may_work_the_door() {
     let (after, events) = step(&world, &[door_intent(2, Pos::new(2, 1), true)], 2, &cfg);
     assert_eq!(
         after.object_at(Pos::new(2, 1)),
-        Some(Object::Door { open: true }),
+        Some(Object::Door {
+            open: true,
+            damage: 0,
+        }),
         "the rejected attempt changes nothing"
     );
     let finished = events
@@ -429,7 +602,10 @@ fn doors_auto_open_unless_an_agent_sits_on_an_adjacent_toilet() {
     let (opened, events) = step(&world, &[], 1, &cfg);
     assert_eq!(
         opened.object_at(Pos::new(2, 1)),
-        Some(Object::Door { open: true }),
+        Some(Object::Door {
+            open: true,
+            damage: 0,
+        }),
         "a door with no toilet visitor opens at the end of the tick"
     );
     let auto = events
@@ -448,11 +624,20 @@ fn doors_auto_open_unless_an_agent_sits_on_an_adjacent_toilet() {
 
     let mut attended = world.clone();
     place(&mut attended, 1, Pos::new(1, 1));
-    attended.set_object(Pos::new(2, 1), Some(Object::Door { open: false }));
+    attended.set_object(
+        Pos::new(2, 1),
+        Some(Object::Door {
+            open: false,
+            damage: 0,
+        }),
+    );
     let (still_closed, _) = step(&attended, &[], 2, &cfg);
     assert_eq!(
         still_closed.object_at(Pos::new(2, 1)),
-        Some(Object::Door { open: false }),
+        Some(Object::Door {
+            open: false,
+            damage: 0,
+        }),
         "an agent on the toilet cell holds the door closed"
     );
 
@@ -461,7 +646,10 @@ fn doors_auto_open_unless_an_agent_sits_on_an_adjacent_toilet() {
     let (opened_late, events) = step(&left, &[], 3, &cfg);
     assert_eq!(
         opened_late.object_at(Pos::new(2, 1)),
-        Some(Object::Door { open: true })
+        Some(Object::Door {
+            open: true,
+            damage: 0,
+        })
     );
     assert!(events.iter().any(|event| matches!(
         event.kind,
@@ -484,7 +672,10 @@ fn closing_a_door_with_someone_in_the_doorway_is_rejected() {
     let (after, events) = step(&world, &[door_intent(1, Pos::new(2, 1), false)], 1, &cfg);
     assert_eq!(
         after.object_at(Pos::new(2, 1)),
-        Some(Object::Door { open: true }),
+        Some(Object::Door {
+            open: true,
+            damage: 0,
+        }),
         "the door stays open"
     );
     let reason = events
@@ -586,6 +777,28 @@ fn restore_rebuilds_objects_and_first_seen_glyphs() {
 }
 
 #[test]
+fn restore_keeps_partial_wall_damage() {
+    let cfg = Config::default();
+    let initial_world = build("grid\nE#\n");
+    let world = claim(&initial_world, &cfg, 1, "dev-1");
+    let start = world.clone();
+    let (current, events) = step(&world, &[demolish_intent(1, Pos::new(1, 0))], 1, &cfg);
+    assert_eq!(
+        current.object_at(Pos::new(1, 0)),
+        Some(Object::Wall { damage: 1 })
+    );
+
+    let restored = restore(&Snapshot::new(start), &events, &cfg).expect("damage restores");
+    assert_eq!(
+        restored.object_at(Pos::new(1, 0)),
+        Some(Object::Wall { damage: 1 }),
+        "the restored cell keeps its damage"
+    );
+    let diffs = diff_worlds(&current, &restored);
+    assert!(diffs.is_empty(), "restored world differs: {diffs:?}");
+}
+
+#[test]
 fn usable_toilets_reject_missing_walls_open_doors_and_unfinished_work() {
     let world = build("grid\n#####\n#1+.#\n###E#\n#####\n");
     let toilet = Pos::new(1, 1);
@@ -599,7 +812,13 @@ fn usable_toilets_reject_missing_walls_open_doors_and_unfinished_work() {
     assert!(!is_usable(&missing_wall, toilet), "a missing wall");
 
     let mut open_door = world.clone();
-    open_door.set_object(Pos::new(2, 1), Some(Object::Door { open: true }));
+    open_door.set_object(
+        Pos::new(2, 1),
+        Some(Object::Door {
+            open: true,
+            damage: 0,
+        }),
+    );
     assert!(!is_usable(&open_door, toilet), "an open door");
 
     let mut under_construction = world.clone();

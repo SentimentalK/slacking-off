@@ -16,18 +16,21 @@ pub enum SiteKind {
 /// A world object. At most one per cell (design §4.2).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Object {
-    Wall,
+    Wall {
+        damage: u32,
+    },
     Door {
         open: bool,
+        damage: u32,
     },
     Toilet {
         level: u8,
         progress: i32,
     },
-    /// An unfinished or half-demolished wall/door/toilet site. `work` is the
-    /// remaining work: building lowers it by one per tick until it becomes the
-    /// finished object; demolishing lowers it by one per tick until the site is
-    /// removed.
+    /// An unfinished build site for a wall, door or toilet. `work` is the
+    /// remaining construction work; building lowers it by one per tick until it
+    /// becomes the finished object. `Site` never means demolition: damage lives
+    /// on the wall/door itself so it keeps enclosing the toilet while breaking.
     Site {
         kind: SiteKind,
         work: u32,
@@ -37,8 +40,8 @@ pub enum Object {
 impl Object {
     pub fn blocks_movement(self) -> bool {
         match self {
-            Object::Wall => true,
-            Object::Door { open } => !open,
+            Object::Wall { .. } => true,
+            Object::Door { open, .. } => !open,
             Object::Toilet { .. } => false,
             Object::Site { kind, .. } => kind != SiteKind::Toilet,
         }
@@ -47,22 +50,22 @@ impl Object {
     /// Design §10 view symbol.
     pub fn glyph(self) -> char {
         match self {
-            Object::Wall => '#',
-            Object::Door { open: true } => '\'',
-            Object::Door { open: false } => '+',
+            Object::Wall { .. } => '#',
+            Object::Door { open: true, .. } => '\'',
+            Object::Door { open: false, .. } => '+',
             Object::Toilet { level, .. } => char::from(b'0' + level.clamp(1, 9)),
             Object::Site { .. } => 'x',
         }
     }
 
-    /// A finished wall, as opposed to a wall site mid-build or mid-demolish.
+    /// A finished wall, as opposed to a wall site mid-build.
     pub fn is_complete_wall(self) -> bool {
-        matches!(self, Object::Wall)
+        matches!(self, Object::Wall { .. })
     }
 
     /// A closed door, as opposed to an open door or a door site.
     pub fn is_closed_door(self) -> bool {
-        matches!(self, Object::Door { open: false })
+        matches!(self, Object::Door { open: false, .. })
     }
 }
 

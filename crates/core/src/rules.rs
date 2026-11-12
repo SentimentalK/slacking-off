@@ -79,7 +79,7 @@ pub fn validate_door(
     open: bool,
 ) -> Result<(), String> {
     let me = acting_pos(world, agent, target)?;
-    let Some(Object::Door { open: current }) = world.object_at(target) else {
+    let Some(Object::Door { open: current, .. }) = world.object_at(target) else {
         return Err(NO_DOOR.to_string());
     };
     let on_toilet = matches!(world.object_at(me), Some(Object::Toilet { .. }));
@@ -124,8 +124,8 @@ pub(crate) fn toilet_problems(world: &WorldState, pos: Pos) -> Vec<String> {
                 return Some(format!("the {} side is the map edge", dir.word()));
             }
             match world.object_at(cell) {
-                Some(Object::Wall) | Some(Object::Door { open: false }) => None,
-                Some(Object::Door { open: true }) => {
+                Some(Object::Wall { .. }) | Some(Object::Door { open: false, .. }) => None,
+                Some(Object::Door { open: true, .. }) => {
                     Some(format!("the {} door is open", dir.word()))
                 }
                 _ => Some(format!(
