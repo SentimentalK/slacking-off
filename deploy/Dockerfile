@@ -44,7 +44,8 @@ RUN apt-get update \
 COPY --from=build /src/target/aarch64-unknown-linux-gnu/release/loo-server /usr/local/bin/loo-server
 COPY maps/default.txt /app/maps/default.txt
 
-ENV TMPDIR=/tmp
+ENV TMPDIR=/tmp \
+    MALLOC_ARENA_MAX=2
 VOLUME ["/data"]
 EXPOSE 18080
 STOPSIGNAL SIGTERM

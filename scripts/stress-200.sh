@@ -90,6 +90,10 @@ printf 'epoch,rss_kb,tick\n' > "$CSV"
 printf 'epoch,alive\n' > "$ALIVE"
 
 echo "stress-200: starting $BIN --dev on $BASE (tick=${TICK}s, agents=$AGENTS, duration=${DURATION}s, data=$DATA)"
+# 2 arenas keep a long-running multi-threaded server's allocator RSS bounded
+# (production sets the same value in deploy/Dockerfile and deploy/k3s.yaml).
+MALLOC_ARENA_MAX="${MALLOC_ARENA_MAX:-2}"
+export MALLOC_ARENA_MAX
 "$BIN" --dev --addr "127.0.0.1:$PORT" --tick-seconds "$TICK" --data-dir "$DATA" >>"$LOG" 2>&1 &
 PID=$!
 echo "$PID" > "$PIDFILE"
@@ -267,6 +271,7 @@ fi
   printf '  "tick_seconds": %s,\n' "$TICK"
   printf '  "agents": %s,\n' "$AGENTS"
   printf '  "mode": "dev",\n'
+  printf '  "malloc_arena_max": %s,\n' "$MALLOC_ARENA_MAX"
   printf '  "data_dir": "%s",\n' "$DATA"
   printf '  "port": %s,\n' "$PORT"
   printf '  "ticks": %s,\n' "$ticks"
@@ -289,7 +294,7 @@ fi
 {
   printf '# 200-agent stress run — %s\n\n' "$STAMP"
   printf -- '- verdict: **%s**\n' "$verdict"
-  printf -- '- mode=%s, data_dir=%s, port=%s, pid=%s\n' "dev" "$DATA" "$PORT" "$PID"
+  printf -- '- mode=%s, malloc_arena_max=%s, data_dir=%s, port=%s, pid=%s\n' "dev" "$MALLOC_ARENA_MAX" "$DATA" "$PORT" "$PID"
   printf -- '- started_at: %s, duration_seconds: %s, tick_seconds: %s, agents: %s\n' \
     "$STARTED_AT" "$DURATION" "$TICK" "$AGENTS"
   printf -- '- ticks: %s (server settle samples)\n' "$ticks"

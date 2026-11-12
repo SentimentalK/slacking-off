@@ -70,6 +70,7 @@ registry 并替换。`Ingress` 以注释形式附在清单末尾（stock K3s 用
 | 数据 | `--data-dir /data`，SQLite 文件 `/data/world.db` |
 | 种子 | `--seed 42`（空数据目录首次建世界） |
 | 其余 | `Config::default()`：tick 秒数等设计 §9 默认值，可用 `--config` / `--tick-seconds` 覆盖 |
+| 分配器 | `MALLOC_ARENA_MAX=2`：限制 glibc per-thread arena，长跑 RSS 更稳（压测脚本同值） |
 
 ## 卷与停止信号
 

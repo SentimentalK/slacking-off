@@ -59,6 +59,8 @@ spec:
           env:
             - name: TMPDIR
               value: /tmp
+            - name: MALLOC_ARENA_MAX
+              value: "2"
           readinessProbe:
             httpGet:
               path: /healthz
