@@ -988,7 +988,9 @@ impl Server {
             }
         };
         let target = pos.step(req.dir);
-        if let Err(message) = loo_core::validate_attack(&inner.world, agent, target, &self.cfg) {
+        if let Err(message) =
+            loo_core::validate_attack_at(&inner.world, agent, target, &self.cfg, tick + 1)
+        {
             let env = failed_env(&self.cfg, &mut inner, Some(agent), ApiError::rule(message));
             drop(inner);
             return self.finish(
@@ -1056,7 +1058,7 @@ impl Server {
             }
         };
         let target = pos.step(req.dir);
-        if let Err(message) = loo_core::validate_defend(&inner.world, agent, target) {
+        if let Err(message) = loo_core::validate_defend_at(&inner.world, agent, target, tick + 1) {
             let env = failed_env(&self.cfg, &mut inner, Some(agent), ApiError::rule(message));
             drop(inner);
             return self.finish(

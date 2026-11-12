@@ -782,3 +782,154 @@ async fn store_score_is_atomic_with_tick_events() {
     let server = open_map(&dir, cfg, ROOM_MAP);
     assert_eq!(state(&server, &token).await.score_total, view.score_total);
 }
+
+#[tokio::test]
+async fn defending_is_visible_in_status_between_ticks() {
+    let server = open_map(&fresh_dir("defend-visible"), Config::default(), ATTACK_MAP);
+    let ((token_a, _), (_, _)) = adjacent_pair(&server).await;
+
+    let queued = server
+        .defend_cmd(&token_a, DefendRequest { dir: Dir::W })
+        .await;
+    assert!(queued.ok, "defend rejected: {:?}", queued.error);
+    server.tick_once().await;
+
+    // The defence covers the tick it settled in and stays readable between
+    // ticks.
+    let view = state(&server, &token_a).await;
+    assert_eq!(view.defending, Some(loo_proto::Pos::new(2, 3)));
+
+    // The next tick clears it, and that tick's events say so.
+    server.tick_once().await;
+    let view = state(&server, &token_a).await;
+    assert_eq!(view.defending, None);
+    let events = all_events(&server).await;
+    assert!(
+        events
+            .iter()
+            .any(|event| { event.tick == view.tick && event.text().contains("stopped defending") }),
+        "a DefendEnded event at tick {}: {:?}",
+        view.tick,
+        event_texts(&events)
+    );
+}
+
+#[tokio::test]
+async fn cooldown_precheck_uses_the_settlement_tick() {
+    let server = open_map(
+        &fresh_dir("settlement-precheck"),
+        Config::default(),
+        ATTACK_MAP,
+    );
+    let ((token_a, _), (_, _)) = adjacent_pair(&server).await;
+    // A third agent east of A stays idle and unstunned while B is hit.
+    let (token_c, id_c) = register(&server, "dev-c").await;
+    join(&server, &token_c).await;
+    move_path(&server, &token_c, "NEEES").await;
+    assert_eq!(
+        state(&server, &token_c).await.pos,
+        Some(loo_proto::Pos::new(4, 3))
+    );
+
+    // Defend: the cooldown it sets ends exactly at T+3 where T is the tick the
+    // defence settled in.
+    let queued = server
+        .defend_cmd(&token_a, DefendRequest { dir: Dir::W })
+        .await;
+    assert!(queued.ok, "defend rejected: {:?}", queued.error);
+    server.tick_once().await;
+    let t = server.world_state().await.tick;
+    let view = state(&server, &token_a).await;
+    assert_eq!(view.defend_cooldown_until, t + 3);
+
+    // Precheck T+1: still on cooldown.
+    let blocked = server
+        .defend_cmd(&token_a, DefendRequest { dir: Dir::W })
+        .await;
+    assert!(!blocked.ok);
+    let error = blocked.error.expect("error");
+    assert_eq!(error.code, ErrorCode::RuleRejected);
+    assert!(
+        error.message.contains("cooldown"),
+        "cooldown message at T+1: {}",
+        error.message
+    );
+
+    // Precheck T+2: still on cooldown.
+    server.tick_once().await;
+    assert_eq!(server.world_state().await.tick, t + 1);
+    let blocked = server
+        .defend_cmd(&token_a, DefendRequest { dir: Dir::W })
+        .await;
+    assert!(!blocked.ok);
+    assert!(
+        blocked.error.expect("error").message.contains("cooldown"),
+        "cooldown message at T+2"
+    );
+
+    // Precheck T+3 == cooldown_until: allowed.
+    server.tick_once().await;
+    assert_eq!(server.world_state().await.tick, t + 2);
+    let allowed = server
+        .defend_cmd(&token_a, DefendRequest { dir: Dir::W })
+        .await;
+    assert!(
+        allowed.ok,
+        "defend at the cooldown boundary: {:?}",
+        allowed.error
+    );
+    server.tick_once().await;
+    let events = all_events(&server).await;
+    assert!(
+        events
+            .iter()
+            .any(|event| event.tick == t + 3
+                && matches!(event.kind, EventKind::DefendStarted { .. })),
+        "DefendStarted at tick {}",
+        t + 3
+    );
+
+    // Attack: cooldown_until = start + 6 where start is the settlement tick.
+    let queued = server
+        .attack_cmd(&token_a, AttackRequest { dir: Dir::W })
+        .await;
+    assert!(queued.ok, "attack rejected: {:?}", queued.error);
+    server.tick_once().await;
+    let start = server.world_state().await.tick;
+    let events = all_events(&server).await;
+    let cooldown_until = events
+        .iter()
+        .find_map(|event| match &event.kind {
+            EventKind::AttackStarted { cooldown_until, .. } => Some(*cooldown_until),
+            _ => None,
+        })
+        .expect("AttackStarted");
+    assert_eq!(cooldown_until, start + 6);
+
+    // Reach world tick start+5; the precheck runs at start+6. B is stunned
+    // until start+7 by the hit landing at start+3, so C is the target.
+    tick_n(&server, 5).await;
+    assert_eq!(server.world_state().await.tick, start + 5);
+    let queued = server
+        .attack_cmd(&token_a, AttackRequest { dir: Dir::E })
+        .await;
+    assert!(
+        queued.ok,
+        "attack at the cooldown boundary: {:?}",
+        queued.error
+    );
+    server.tick_once().await;
+    let events = all_events(&server).await;
+    assert!(
+        events.iter().any(|event| event.tick == start + 6
+            && matches!(
+                event.kind,
+                EventKind::AttackStarted {
+                    target_agent,
+                    ..
+                } if target_agent == id_c
+            )),
+        "a new AttackStarted on dev-c at tick {}",
+        start + 6
+    );
+}
