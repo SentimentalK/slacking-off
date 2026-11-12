@@ -32,7 +32,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 ```
 
-产物：`target/release/loo`、`target/release/loo-server`。当前 workspace 共 144 个测试（含 doctest），
+产物：`target/release/loo`、`target/release/loo-server`。当前 workspace 共 151 个测试（含 doctest），
 `cargo test --workspace` 全部通过。
 
 ## 跑起来
