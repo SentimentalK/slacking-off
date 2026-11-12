@@ -214,6 +214,106 @@ pub enum EventKind {
         nick: String,
         remaining: u32,
     },
+    /// An attack was committed; the hit resolves at `land_tick`.
+    AttackStarted {
+        session: SessionId,
+        agent: AgentId,
+        nick: String,
+        target_session: SessionId,
+        target_agent: AgentId,
+        target_nick: String,
+        at: Pos,
+        land_tick: Tick,
+        cooldown_until: Tick,
+    },
+    /// An attack landed: the target lost deadline and is stunned, then immune.
+    AttackLanded {
+        session: SessionId,
+        agent: AgentId,
+        nick: String,
+        target_session: SessionId,
+        target_agent: AgentId,
+        target_nick: String,
+        at: Pos,
+        penalty: u32,
+        deadline: Tick,
+        stun_until: Tick,
+        immunity_until: Tick,
+    },
+    /// An attack resolved without hitting: the target left, moved out of reach
+    /// or was still immune.
+    AttackMissed {
+        session: SessionId,
+        agent: AgentId,
+        nick: String,
+        target_agent: AgentId,
+        target_nick: String,
+        at: Pos,
+        reason: String,
+    },
+    /// A defender shielded the target's cell; the attacker is stunned instead.
+    AttackBlocked {
+        session: SessionId,
+        agent: AgentId,
+        nick: String,
+        target_session: SessionId,
+        target_agent: AgentId,
+        target_nick: String,
+        at: Pos,
+        defender_session: SessionId,
+        defender_agent: AgentId,
+        defender_nick: String,
+        stun_until: Tick,
+    },
+    /// A committed attack ended before it resolved.
+    AttackCancelled {
+        session: SessionId,
+        agent: AgentId,
+        nick: String,
+        target_agent: AgentId,
+        target_nick: String,
+        at: Pos,
+        reason: String,
+    },
+    /// The agent shields one adjacent cell for this tick.
+    DefendStarted {
+        session: SessionId,
+        agent: AgentId,
+        nick: String,
+        target: Pos,
+        until: Tick,
+        cooldown_until: Tick,
+    },
+    /// The tick's defence lapsed; every tick ends with this for each defender.
+    DefendEnded { agent: AgentId, nick: String },
+    /// A defender shielded the demolition target; nothing was changed.
+    DemolishBlocked {
+        session: SessionId,
+        agent: AgentId,
+        nick: String,
+        target: Pos,
+        defender_session: SessionId,
+        defender_agent: AgentId,
+        defender_nick: String,
+        stun_until: Tick,
+    },
+    /// The agent cannot act until `until`.
+    Stunned {
+        session: SessionId,
+        agent: AgentId,
+        nick: String,
+        until: Tick,
+        reason: String,
+    },
+    /// A submitted command was refused before it became an action.
+    ActionRejected {
+        session: SessionId,
+        agent: AgentId,
+        nick: String,
+        at: Pos,
+        action: String,
+        reason: String,
+    },
     /// Marks the settlement of one tick. Always the first event of its tick and
     /// never delivered to an agent; `Event::seed` is the tick's shuffle seed.
     TickSettled,
@@ -252,6 +352,16 @@ impl EventKind {
             EventKind::UseFailed { .. } => "UseFailed",
             EventKind::SessionEnded { .. } => "SessionEnded",
             EventKind::DeadlineWarning { .. } => "DeadlineWarning",
+            EventKind::AttackStarted { .. } => "AttackStarted",
+            EventKind::AttackLanded { .. } => "AttackLanded",
+            EventKind::AttackMissed { .. } => "AttackMissed",
+            EventKind::AttackBlocked { .. } => "AttackBlocked",
+            EventKind::AttackCancelled { .. } => "AttackCancelled",
+            EventKind::DefendStarted { .. } => "DefendStarted",
+            EventKind::DefendEnded { .. } => "DefendEnded",
+            EventKind::DemolishBlocked { .. } => "DemolishBlocked",
+            EventKind::Stunned { .. } => "Stunned",
+            EventKind::ActionRejected { .. } => "ActionRejected",
             EventKind::TickSettled => "TickSettled",
         }
     }
@@ -304,7 +414,17 @@ impl Event {
             | EventKind::UseSucceeded { agent, .. }
             | EventKind::UseFailed { agent, .. }
             | EventKind::SessionEnded { agent, .. }
-            | EventKind::DeadlineWarning { agent, .. } => Some(*agent),
+            | EventKind::DeadlineWarning { agent, .. }
+            | EventKind::AttackStarted { agent, .. }
+            | EventKind::AttackLanded { agent, .. }
+            | EventKind::AttackMissed { agent, .. }
+            | EventKind::AttackBlocked { agent, .. }
+            | EventKind::AttackCancelled { agent, .. }
+            | EventKind::DefendStarted { agent, .. }
+            | EventKind::DemolishBlocked { agent, .. }
+            | EventKind::Stunned { agent, .. }
+            | EventKind::ActionRejected { agent, .. } => Some(*agent),
+            EventKind::DefendEnded { agent, .. } => Some(*agent),
             EventKind::ObjectChanged { agent, .. } => *agent,
             EventKind::TickSettled => None,
         }
@@ -323,10 +443,21 @@ impl Event {
             EventKind::UseInterrupted { pos, .. }
             | EventKind::UseFailed { pos, .. }
             | EventKind::SessionEnded { pos, .. } => *pos,
+            EventKind::AttackStarted { at, .. }
+            | EventKind::AttackLanded { at, .. }
+            | EventKind::AttackMissed { at, .. }
+            | EventKind::AttackBlocked { at, .. }
+            | EventKind::AttackCancelled { at, .. }
+            | EventKind::ActionRejected { at, .. } => Some(*at),
+            EventKind::DefendStarted { target, .. } | EventKind::DemolishBlocked { target, .. } => {
+                Some(*target)
+            }
             EventKind::ActionStarted { .. }
             | EventKind::ActionReplaced { .. }
             | EventKind::NeedAssigned { .. }
             | EventKind::DeadlineWarning { .. }
+            | EventKind::DefendEnded { .. }
+            | EventKind::Stunned { .. }
             | EventKind::TickSettled => None,
         }
     }
@@ -523,6 +654,80 @@ impl Event {
             EventKind::DeadlineWarning {
                 nick, remaining, ..
             } => format!("{nick} has {remaining} ticks left before the deadline"),
+            EventKind::AttackStarted {
+                nick,
+                target_nick,
+                at,
+                land_tick,
+                ..
+            } => format!("{nick} attacks {target_nick} at {at}; the hit lands at tick {land_tick}"),
+            EventKind::AttackLanded {
+                nick,
+                target_nick,
+                at,
+                penalty,
+                deadline,
+                stun_until,
+                immunity_until,
+                ..
+            } => format!(
+                "{nick} hit {target_nick} at {at}: deadline -{penalty} to {deadline}, stunned until {stun_until}, immune until {immunity_until}"
+            ),
+            EventKind::AttackMissed {
+                nick,
+                target_nick,
+                at,
+                reason,
+                ..
+            } => format!("{nick}'s attack on {target_nick} at {at} missed: {reason}"),
+            EventKind::AttackBlocked {
+                nick,
+                target_nick,
+                at,
+                defender_nick,
+                stun_until,
+                ..
+            } => format!(
+                "{defender_nick} blocked {nick}'s attack on {target_nick} at {at}; {nick} is stunned until {stun_until}"
+            ),
+            EventKind::AttackCancelled {
+                nick,
+                target_nick,
+                at,
+                reason,
+                ..
+            } => format!("{nick}'s attack on {target_nick} at {at} was cancelled: {reason}"),
+            EventKind::DefendStarted {
+                nick,
+                target,
+                cooldown_until,
+                ..
+            } => format!(
+                "{nick} defends {target} this tick; defend cooldown until tick {cooldown_until}"
+            ),
+            EventKind::DefendEnded { nick, .. } => format!("{nick} stopped defending"),
+            EventKind::DemolishBlocked {
+                nick,
+                target,
+                defender_nick,
+                stun_until,
+                ..
+            } => format!(
+                "{defender_nick} blocked {nick}'s demolition at {target}; {nick} is stunned until {stun_until}"
+            ),
+            EventKind::Stunned {
+                nick,
+                until,
+                reason,
+                ..
+            } => format!("{nick} is stunned until tick {until}: {reason}"),
+            EventKind::ActionRejected {
+                nick,
+                at,
+                action,
+                reason,
+                ..
+            } => format!("{nick}'s {action} was rejected at {at}: {reason}"),
             EventKind::TickSettled => format!("tick {} settled", self.tick),
         }
     }
@@ -541,6 +746,27 @@ impl Event {
             return false;
         }
         if self.subject() == Some(viewer) {
+            return true;
+        }
+        // The target of an attack or the defender who blocked it must see the
+        // event even after either of them stepped out of the viewer's window.
+        let targeted = match &self.kind {
+            EventKind::AttackStarted { target_agent, .. }
+            | EventKind::AttackLanded { target_agent, .. }
+            | EventKind::AttackMissed { target_agent, .. }
+            | EventKind::AttackCancelled { target_agent, .. }
+            | EventKind::AttackBlocked { target_agent, .. } => Some(*target_agent),
+            _ => None,
+        };
+        if targeted == Some(viewer) {
+            return true;
+        }
+        let shielded = match &self.kind {
+            EventKind::AttackBlocked { defender_agent, .. }
+            | EventKind::DemolishBlocked { defender_agent, .. } => Some(*defender_agent),
+            _ => None,
+        };
+        if shielded == Some(viewer) {
             return true;
         }
         let Some(pos) = viewer_pos else {

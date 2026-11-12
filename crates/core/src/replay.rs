@@ -200,6 +200,10 @@ fn apply_event(world: &mut WorldState, event: &Event, cfg: &Config) -> Result<()
                     pos: *at,
                     action: None,
                     stun_until: 0,
+                    immunity_until: 0,
+                    attack_cooldown_until: 0,
+                    defend_cooldown_until: 0,
+                    defending: None,
                     score_total: *score_total,
                     level: agent_level(*score_total, cfg),
                 },
@@ -423,6 +427,94 @@ fn apply_event(world: &mut WorldState, event: &Event, cfg: &Config) -> Result<()
             };
             entry.warned_deadline = true;
         }
+        EventKind::AttackStarted {
+            agent,
+            cooldown_until,
+            ..
+        } => {
+            // `ActionStarted`/`ActionReplaced` already set the action; this only
+            // restores the cooldown the commit started.
+            let Some(entry) = world.agents.get_mut(agent) else {
+                return Err(fail(event, format!("agent {agent} does not exist")));
+            };
+            entry.attack_cooldown_until = *cooldown_until;
+        }
+        EventKind::AttackLanded {
+            agent,
+            target_session,
+            target_agent,
+            deadline,
+            stun_until,
+            immunity_until,
+            ..
+        } => {
+            let Some(entry) = world.sessions.get_mut(target_session) else {
+                return Err(fail(
+                    event,
+                    format!("session {target_session} does not exist"),
+                ));
+            };
+            entry.deadline = *deadline;
+            let Some(target) = world.agents.get_mut(target_agent) else {
+                return Err(fail(event, format!("agent {target_agent} does not exist")));
+            };
+            target.stun_until = *stun_until;
+            target.immunity_until = *immunity_until;
+            target.action = None;
+            let Some(attacker) = world.agents.get_mut(agent) else {
+                return Err(fail(event, format!("agent {agent} does not exist")));
+            };
+            attacker.action = None;
+        }
+        EventKind::AttackMissed { agent, .. } | EventKind::AttackCancelled { agent, .. } => {
+            let Some(entry) = world.agents.get_mut(agent) else {
+                return Err(fail(event, format!("agent {agent} does not exist")));
+            };
+            entry.action = None;
+        }
+        EventKind::AttackBlocked {
+            agent, stun_until, ..
+        } => {
+            let Some(entry) = world.agents.get_mut(agent) else {
+                return Err(fail(event, format!("agent {agent} does not exist")));
+            };
+            entry.action = None;
+            entry.stun_until = *stun_until;
+        }
+        EventKind::DemolishBlocked {
+            agent, stun_until, ..
+        } => {
+            let Some(entry) = world.agents.get_mut(agent) else {
+                return Err(fail(event, format!("agent {agent} does not exist")));
+            };
+            entry.action = None;
+            entry.stun_until = *stun_until;
+        }
+        EventKind::DefendStarted {
+            agent,
+            target,
+            cooldown_until,
+            ..
+        } => {
+            let Some(entry) = world.agents.get_mut(agent) else {
+                return Err(fail(event, format!("agent {agent} does not exist")));
+            };
+            entry.defending = Some(*target);
+            entry.defend_cooldown_until = *cooldown_until;
+        }
+        EventKind::DefendEnded { agent, .. } => {
+            let Some(entry) = world.agents.get_mut(agent) else {
+                return Err(fail(event, format!("agent {agent} does not exist")));
+            };
+            entry.defending = None;
+        }
+        EventKind::Stunned { agent, until, .. } => {
+            let Some(entry) = world.agents.get_mut(agent) else {
+                return Err(fail(event, format!("agent {agent} does not exist")));
+            };
+            entry.stun_until = *until;
+        }
+        EventKind::ActionRejected { .. } => {}
     }
     Ok(())
 }

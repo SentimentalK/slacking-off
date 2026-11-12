@@ -7,10 +7,12 @@ use crate::config::Config;
 use crate::event::{ActionOutcome, Blocker, Event, EventKind, EventLog, ObjectCause};
 use crate::rng::{shuffle, Rng};
 use crate::rules::{
-    agent_level, session_score, validate_build, validate_demolish, validate_door,
-    validate_downgrade, validate_upgrade, validate_use,
+    agent_level, session_score, validate_attack, validate_build, validate_defend,
+    validate_demolish, validate_door, validate_downgrade, validate_upgrade, validate_use,
 };
-use crate::state::{Action, Agent, Object, Session, SessionStatus, SiteKind, WorldState};
+use crate::state::{
+    is_stunned, Action, Agent, Object, Session, SessionStatus, SiteKind, WorldState,
+};
 use loo_proto::{AgentId, Dir, Need, Nick, Pos, SessionId, SessionOutcome};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -54,6 +56,8 @@ pub struct Intent {
     pub kind: IntentKind,
 }
 
+/// `IntentKind::Defend` shields one adjacent cell for the tick it is settled in;
+/// `IntentKind::Attack` commits a windup against the agent on `target`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum IntentKind {
     Move { dirs: Vec<Dir>, label: String },
@@ -63,6 +67,8 @@ pub enum IntentKind {
     Use { target: Pos },
     Upgrade { target: Pos },
     Downgrade { target: Pos },
+    Defend { target: Pos },
+    Attack { target: Pos },
     Cancel,
 }
 
@@ -108,6 +114,10 @@ pub fn join(
                 pos: Some(next.entrance),
                 action: None,
                 stun_until: 0,
+                immunity_until: 0,
+                attack_cooldown_until: 0,
+                defend_cooldown_until: 0,
+                defending: None,
                 score_total: cmd.score_total,
                 level: agent_level(cmd.score_total, cfg),
             },
@@ -160,6 +170,10 @@ pub fn join(
             pos: None,
             action: None,
             stun_until: 0,
+            immunity_until: 0,
+            attack_cooldown_until: 0,
+            defend_cooldown_until: 0,
+            defending: None,
             score_total: cmd.score_total,
             level: agent_level(cmd.score_total, cfg),
         },
@@ -206,6 +220,10 @@ pub fn step(
         .map(|(id, _)| *id)
         .collect();
     shuffle(&mut order, seed);
+    // Defences are a whole-tick posture: they must be in place before any
+    // agent settles, so an attack or a demolition sees them whatever the
+    // shuffle order.
+    collect_defends(&mut next, &mut log, &order, intents, cfg);
     let mut toilet_work: BTreeMap<Pos, Vec<ToiletWorker>> = BTreeMap::new();
     for agent in &order {
         apply_intents(&mut next, &mut log, *agent, intents, cfg);
@@ -218,10 +236,140 @@ pub fn step(
     warn_deadlines(&mut next, &mut log, cfg);
     finish_lingering(&mut next, &mut log);
     auto_open_doors(&mut next, &mut log);
+    // A defence lasts this tick only: no snapshot ever carries one.
+    finish_defends(&mut next, &mut log);
 
     mark_all_seen(&mut next, cfg);
 
     (next, log.into_vec())
+}
+
+/// Settles every defence intent of this tick before any agent acts, so a
+/// defence is in force for the whole tick whatever the shuffle order.
+///
+/// A defence is a posture, not an action: it cancels whatever the agent was
+/// doing (except a `use`, which is only paused) and stores itself on the agent.
+fn collect_defends(
+    world: &mut WorldState,
+    log: &mut EventLog,
+    order: &[AgentId],
+    intents: &[Intent],
+    cfg: &Config,
+) {
+    for agent_id in order {
+        let Some(target) = intents
+            .iter()
+            .filter(|intent| intent.agent == *agent_id)
+            .filter_map(|intent| match &intent.kind {
+                IntentKind::Defend { target } => Some(*target),
+                _ => None,
+            })
+            .next_back()
+        else {
+            continue;
+        };
+        let Some(session) = world.session_of(*agent_id).map(|entry| entry.id) else {
+            continue;
+        };
+        let Some(pos) = world.agents.get(agent_id).and_then(|agent| agent.pos) else {
+            continue;
+        };
+        let Some(nick) = world.agents.get(agent_id).map(|a| a.nick.to_string()) else {
+            continue;
+        };
+        let stun_until = world
+            .agents
+            .get(agent_id)
+            .map_or(0, |agent| agent.stun_until);
+        if world
+            .agents
+            .get(agent_id)
+            .is_some_and(|agent| is_stunned(agent, world.tick))
+        {
+            log.push(EventKind::ActionRejected {
+                session,
+                agent: *agent_id,
+                nick,
+                at: target,
+                action: "defend".to_string(),
+                reason: format!("you are stunned until tick {stun_until}; you cannot defend"),
+            });
+            continue;
+        }
+        if let Err(reason) = validate_defend(world, *agent_id, target) {
+            log.push(EventKind::ActionRejected {
+                session,
+                agent: *agent_id,
+                nick,
+                at: target,
+                action: "defend".to_string(),
+                reason,
+            });
+            continue;
+        }
+        let cooldown_until = world.tick + 1 + u64::from(cfg.combat.defend_cooldown_ticks);
+        match world.agents.get(agent_id).and_then(|a| a.action.clone()) {
+            // A use is paused for this tick, never interrupted.
+            Some(Action::Use { .. }) => {}
+            Some(Action::Attack {
+                target_agent: victim,
+                target_pos: victim_pos,
+                ..
+            }) => {
+                log.push(EventKind::AttackCancelled {
+                    session,
+                    agent: *agent_id,
+                    nick: nick.clone(),
+                    target_agent: victim,
+                    target_nick: world
+                        .agents
+                        .get(&victim)
+                        .map(|agent| agent.nick.to_string())
+                        .unwrap_or_default(),
+                    at: victim_pos,
+                    reason: "replaced by defend".to_string(),
+                });
+                end_attack(world, *agent_id);
+            }
+            Some(other) => end_action(
+                world,
+                log,
+                *agent_id,
+                session,
+                nick.clone(),
+                pos,
+                None,
+                ActionOutcome::Cancelled,
+                &other,
+            ),
+            None => {}
+        }
+        if let Some(agent) = world.agents.get_mut(agent_id) {
+            agent.defending = Some(target);
+            agent.defend_cooldown_until = cooldown_until;
+        }
+        log.push(EventKind::DefendStarted {
+            session,
+            agent: *agent_id,
+            nick,
+            target,
+            until: world.tick + 1,
+            cooldown_until,
+        });
+    }
+}
+
+/// A defence never outlives its tick, so a snapshot taken at a tick boundary
+/// never contains one.
+fn finish_defends(world: &mut WorldState, log: &mut EventLog) {
+    for agent in world.agents.values_mut() {
+        if agent.defending.take().is_some() {
+            log.push(EventKind::DefendEnded {
+                agent: agent.id,
+                nick: agent.nick.to_string(),
+            });
+        }
+    }
 }
 
 /// Marks every inside session's view window as seen at `world.tick`. Both
@@ -324,8 +472,13 @@ fn assign_need(
 /// Turns the tick's intents for one agent into its final action. A cancel with
 /// no running action is a no-op; cancel with one ends it as `Cancelled`.
 ///
+/// A stunned agent keeps whatever it already had: every non-cancel intent is
+/// answered with `ActionRejected` and changes nothing.
+///
 /// A `use` that cannot start ends immediately as `ActionFinished { Failed }`
 /// and puts the agent back to no action, so it never enters the use phase.
+///
+/// `Defend` never reaches this function: `collect_defends` already settled it.
 fn apply_intents(
     world: &mut WorldState,
     log: &mut EventLog,
@@ -342,7 +495,23 @@ fn apply_intents(
     let Some(nick) = world.agents.get(&agent_id).map(|a| a.nick.to_string()) else {
         return;
     };
+    let stun_until = world.agents.get(&agent_id).map_or(0, |a| a.stun_until);
+    let stunned = world
+        .agents
+        .get(&agent_id)
+        .is_some_and(|agent| is_stunned(agent, world.tick));
     for intent in intents.iter().filter(|intent| intent.agent == agent_id) {
+        if stunned && !matches!(intent.kind, IntentKind::Cancel) {
+            log.push(EventKind::ActionRejected {
+                session,
+                agent: agent_id,
+                nick: nick.clone(),
+                at: intent_target(&intent.kind).unwrap_or(pos),
+                action: intent_action_name(&intent.kind).to_string(),
+                reason: format!("you are stunned until tick {stun_until}; no action was taken"),
+            });
+            continue;
+        }
         match &intent.kind {
             IntentKind::Cancel => {
                 let Some(action) = world.agents.get(&agent_id).and_then(|a| a.action.clone())
@@ -374,8 +543,21 @@ fn apply_intents(
                     );
                 }
             }
+            IntentKind::Defend { .. } => {}
             IntentKind::Use { .. } => {
                 start_use(world, log, agent_id, session, nick.clone(), pos, cfg);
+            }
+            IntentKind::Attack { target } => {
+                start_attack(
+                    world,
+                    log,
+                    agent_id,
+                    session,
+                    nick.clone(),
+                    pos,
+                    *target,
+                    cfg,
+                );
             }
             _ => {
                 let new_action = action_for(&intent.kind);
@@ -413,6 +595,138 @@ fn apply_intents(
             }
         }
     }
+}
+
+/// The cell an intent names, if it names one at all.
+fn intent_target(kind: &IntentKind) -> Option<Pos> {
+    match kind {
+        IntentKind::Build { target, .. }
+        | IntentKind::Demolish { target }
+        | IntentKind::Door { target, .. }
+        | IntentKind::Use { target }
+        | IntentKind::Upgrade { target }
+        | IntentKind::Downgrade { target }
+        | IntentKind::Defend { target }
+        | IntentKind::Attack { target } => Some(*target),
+        IntentKind::Move { .. } | IntentKind::Cancel => None,
+    }
+}
+
+/// The verb name used in `ActionRejected`.
+fn intent_action_name(kind: &IntentKind) -> &'static str {
+    match kind {
+        IntentKind::Move { .. } => "move",
+        IntentKind::Build { .. } => "build",
+        IntentKind::Demolish { .. } => "demolish",
+        IntentKind::Door { .. } => "door",
+        IntentKind::Use { .. } => "use",
+        IntentKind::Upgrade { .. } => "upgrade",
+        IntentKind::Downgrade { .. } => "downgrade",
+        IntentKind::Defend { .. } => "defend",
+        IntentKind::Attack { .. } => "attack",
+        IntentKind::Cancel => "cancel",
+    }
+}
+
+/// Commits an attack: an action that does nothing until `land_tick`, plus the
+/// cooldown that starts now and runs past the landing tick.
+#[allow(clippy::too_many_arguments)]
+fn start_attack(
+    world: &mut WorldState,
+    log: &mut EventLog,
+    agent_id: AgentId,
+    session: SessionId,
+    nick: String,
+    pos: Pos,
+    target: Pos,
+    cfg: &Config,
+) {
+    let target_agent = match validate_attack(world, agent_id, target, cfg) {
+        Ok(target_agent) => target_agent,
+        Err(reason) => {
+            log.push(EventKind::ActionRejected {
+                session,
+                agent: agent_id,
+                nick,
+                at: target,
+                action: "attack".to_string(),
+                reason,
+            });
+            return;
+        }
+    };
+    let Some(target_session) = world.session_of(target_agent).map(|entry| entry.id) else {
+        log.push(EventKind::ActionRejected {
+            session,
+            agent: agent_id,
+            nick,
+            at: target,
+            action: "attack".to_string(),
+            reason: "there is no unstunned agent next to you in that direction".to_string(),
+        });
+        return;
+    };
+    let target_nick = world
+        .agents
+        .get(&target_agent)
+        .map(|agent| agent.nick.to_string())
+        .unwrap_or_default();
+    // Design §5: `windup_ticks` delay, then the landing tick, then the rest of
+    // the cooldown; the timer starts when the attack is committed.
+    let cooldown_until = world.tick
+        + 1
+        + u64::from(cfg.combat.windup_ticks)
+        + u64::from(cfg.combat.attack_cooldown_ticks);
+    let land_tick = world.tick + u64::from(cfg.combat.windup_ticks);
+    let action = Action::Attack {
+        target_agent,
+        target_pos: target,
+        land_tick,
+        label: format!("attack the agent at {target}"),
+    };
+    let old = world.agents.get(&agent_id).and_then(|a| a.action.clone());
+    if matches!(old, Some(Action::Use { .. })) {
+        interrupt_use(
+            world,
+            log,
+            agent_id,
+            session,
+            nick.clone(),
+            Some(pos),
+            format!("replaced by {}", action.label()),
+            cfg,
+        );
+    }
+    match old {
+        Some(from) => log.push(EventKind::ActionReplaced {
+            session,
+            agent: agent_id,
+            nick: nick.clone(),
+            from,
+            to: action.clone(),
+        }),
+        None => log.push(EventKind::ActionStarted {
+            session,
+            agent: agent_id,
+            nick: nick.clone(),
+            action: action.clone(),
+        }),
+    }
+    if let Some(agent) = world.agents.get_mut(&agent_id) {
+        agent.action = Some(action);
+        agent.attack_cooldown_until = cooldown_until;
+    }
+    log.push(EventKind::AttackStarted {
+        session,
+        agent: agent_id,
+        nick,
+        target_session,
+        target_agent,
+        target_nick,
+        at: target,
+        land_tick,
+        cooldown_until,
+    });
 }
 
 /// Replaces whatever the agent was doing with a use, or rejects it on the spot.
@@ -576,6 +890,9 @@ fn action_for(kind: &IntentKind) -> Action {
             label: format!("downgrade the toilet at {target}"),
         },
         IntentKind::Cancel => unreachable!("cancel never creates an action"),
+        IntentKind::Attack { .. } | IntentKind::Defend { .. } => {
+            unreachable!("combat intents never go through the generic action builder")
+        }
     }
 }
 
@@ -609,6 +926,11 @@ fn advance_action(
     let Some(agent) = world.agents.get(&agent_id) else {
         return;
     };
+    // A stunned agent does not act at all; the stun itself already cleared or
+    // at least froze whatever it was doing.
+    if is_stunned(agent, world.tick) {
+        return;
+    }
     let Some(pos) = agent.pos else {
         return;
     };
@@ -626,6 +948,9 @@ fn advance_action(
             demolish_tick(world, log, agent_id, session, nick, pos, &action, cfg)
         }
         Action::Door { .. } => door_tick(world, log, agent_id, session, nick, pos, &action),
+        Action::Attack { .. } => {
+            land_attack(world, log, agent_id, session, nick, pos, &action, cfg)
+        }
         // `Upgrade`/`Downgrade` only register work; it settles once for the
         // whole tick in `apply_toilet_work`.
         Action::Upgrade { .. } | Action::Downgrade { .. } => collect_toilet_work(
@@ -642,6 +967,227 @@ fn advance_action(
         // `Use` advances in `progress_uses`, after every action has settled.
         Action::Use { .. } => {}
     }
+}
+
+/// The agent shielding `pos` for this tick. `BTreeMap` order makes the lowest
+/// `AgentId` win when two agents shield the same cell.
+fn defender_at(world: &WorldState, pos: Pos) -> Option<AgentId> {
+    world
+        .agents
+        .values()
+        .find(|agent| agent.defending == Some(pos))
+        .map(|agent| agent.id)
+}
+
+/// Clears the attacker's action without ending it as a finished action; the
+/// attack's own event already says how it ended.
+fn end_attack(world: &mut WorldState, agent_id: AgentId) {
+    if let Some(agent) = world.agents.get_mut(&agent_id) {
+        agent.action = None;
+    }
+}
+
+/// Resolves an attack on its landing tick: a miss when the target left or moved
+/// out of reach, a block when its cell is defended, a miss while it is immune,
+/// and otherwise the hit itself.
+#[allow(clippy::too_many_arguments)]
+fn land_attack(
+    world: &mut WorldState,
+    log: &mut EventLog,
+    agent_id: AgentId,
+    session: SessionId,
+    nick: String,
+    pos: Pos,
+    action: &Action,
+    cfg: &Config,
+) {
+    let Action::Attack {
+        target_agent,
+        target_pos,
+        land_tick,
+        ..
+    } = action
+    else {
+        return;
+    };
+    let target_agent = *target_agent;
+    let target_pos = *target_pos;
+    let target_now = world.agents.get(&target_agent);
+    let target_label = target_now
+        .map(|agent| agent.nick.to_string())
+        .unwrap_or_else(|| format!("agent {target_agent}"));
+    if world.tick < *land_tick {
+        return;
+    }
+    if world.tick > *land_tick {
+        // The windup was frozen by a stun that ended late; a hit must not fire
+        // after its landing tick.
+        log.push(EventKind::AttackCancelled {
+            session,
+            agent: agent_id,
+            nick,
+            target_agent,
+            target_nick: target_label,
+            at: target_pos,
+            reason: "the windup was lost while you were stunned".to_string(),
+        });
+        end_attack(world, agent_id);
+        return;
+    }
+    let miss = |log: &mut EventLog, reason: &str, target_nick: &str| {
+        log.push(EventKind::AttackMissed {
+            session,
+            agent: agent_id,
+            nick: nick.clone(),
+            target_agent,
+            target_nick: target_nick.to_string(),
+            at: target_pos,
+            reason: reason.to_string(),
+        });
+    };
+    let Some(now) = target_now.and_then(|agent| agent.pos) else {
+        miss(log, "target left the world", &target_label);
+        end_attack(world, agent_id);
+        return;
+    };
+    if pos.manhattan(now) != 1 {
+        miss(log, "target moved out of reach", &target_label);
+        end_attack(world, agent_id);
+        return;
+    }
+    let Some(target_session) = world.session_of(target_agent).map(|entry| entry.id) else {
+        miss(log, "target left the world", &target_label);
+        end_attack(world, agent_id);
+        return;
+    };
+    if let Some(defender) = defender_at(world, now) {
+        let stun_until = world.tick + 1 + u64::from(cfg.combat.stun_ticks);
+        log.push(EventKind::AttackBlocked {
+            session,
+            agent: agent_id,
+            nick: nick.clone(),
+            target_session,
+            target_agent,
+            target_nick: target_label.clone(),
+            at: now,
+            defender_session: world.session_of(defender).map_or(0, |entry| entry.id),
+            defender_agent: defender,
+            defender_nick: world
+                .agents
+                .get(&defender)
+                .map(|agent| agent.nick.to_string())
+                .unwrap_or_default(),
+            stun_until,
+        });
+        if let Some(me) = world.agents.get_mut(&agent_id) {
+            me.stun_until = stun_until;
+        }
+        log.push(EventKind::Stunned {
+            session,
+            agent: agent_id,
+            nick: nick.clone(),
+            until: stun_until,
+            reason: "attack was blocked by a defender".to_string(),
+        });
+        end_attack(world, agent_id);
+        return;
+    }
+    let immune_until = world
+        .agents
+        .get(&target_agent)
+        .map_or(0, |agent| agent.immunity_until);
+    if world.tick < immune_until {
+        miss(log, "target is immune", &target_label);
+        end_attack(world, agent_id);
+        return;
+    }
+
+    let penalty = cfg.combat.penalty_ticks;
+    let stun_until = world.tick + 1 + u64::from(cfg.combat.stun_ticks);
+    let immunity_until = world.tick + 1 + u64::from(cfg.combat.immunity_ticks);
+    // Being hit ends whatever the target was doing; a use keeps its progress
+    // and gets the usual recovery window.
+    match world
+        .agents
+        .get(&target_agent)
+        .and_then(|a| a.action.clone())
+    {
+        Some(Action::Use { .. }) => interrupt_use(
+            world,
+            log,
+            target_agent,
+            target_session,
+            target_label.clone(),
+            Some(now),
+            "hit by an attack".to_string(),
+            cfg,
+        ),
+        Some(Action::Attack {
+            target_agent: victim,
+            target_pos: victim_pos,
+            ..
+        }) => {
+            log.push(EventKind::AttackCancelled {
+                session: target_session,
+                agent: target_agent,
+                nick: target_label.clone(),
+                target_agent: victim,
+                target_nick: world
+                    .agents
+                    .get(&victim)
+                    .map(|agent| agent.nick.to_string())
+                    .unwrap_or_default(),
+                at: victim_pos,
+                reason: "stunned by an attack".to_string(),
+            });
+            end_attack(world, target_agent);
+        }
+        Some(other) => end_action(
+            world,
+            log,
+            target_agent,
+            target_session,
+            target_label.clone(),
+            now,
+            None,
+            ActionOutcome::Cancelled,
+            &other,
+        ),
+        None => {}
+    }
+    let deadline = world
+        .sessions
+        .get(&target_session)
+        .map_or(0, |entry| entry.deadline)
+        .saturating_sub(u64::from(penalty));
+    if let Some(entry) = world.sessions.get_mut(&target_session) {
+        entry.deadline = deadline;
+    }
+    if let Some(target) = world.agents.get_mut(&target_agent) {
+        target.stun_until = stun_until;
+        target.immunity_until = immunity_until;
+    }
+    log.push(EventKind::AttackLanded {
+        session,
+        agent: agent_id,
+        nick,
+        target_session,
+        target_agent,
+        target_nick: target_label.clone(),
+        at: now,
+        penalty,
+        deadline,
+        stun_until,
+        immunity_until,
+    });
+    log.push(EventKind::Stunned {
+        session: target_session,
+        agent: target_agent,
+        nick: target_label,
+        until: stun_until,
+        reason: "hit by an attack".to_string(),
+    });
+    end_attack(world, agent_id);
 }
 
 /// Re-checks a toilet action against the live world and queues its contribution.
@@ -918,6 +1464,37 @@ fn demolish_tick(
         );
         return;
     }
+    // A defender makes the demolition fail before anything is touched: no
+    // damage, no progress, no `ObjectChanged`.
+    if let Some(defender) = defender_at(world, *target) {
+        let stun_until = world.tick + 1 + u64::from(cfg.combat.stun_ticks);
+        log.push(EventKind::DemolishBlocked {
+            session,
+            agent: agent_id,
+            nick: nick.clone(),
+            target: *target,
+            defender_session: world.session_of(defender).map_or(0, |entry| entry.id),
+            defender_agent: defender,
+            defender_nick: world
+                .agents
+                .get(&defender)
+                .map(|agent| agent.nick.to_string())
+                .unwrap_or_default(),
+            stun_until,
+        });
+        if let Some(me) = world.agents.get_mut(&agent_id) {
+            me.stun_until = stun_until;
+            me.action = None;
+        }
+        log.push(EventKind::Stunned {
+            session,
+            agent: agent_id,
+            nick,
+            until: stun_until,
+            reason: "demolition was blocked by a defender".to_string(),
+        });
+        return;
+    }
     let Some(existing) = world.object_at(*target) else {
         return;
     };
@@ -1156,7 +1733,7 @@ fn advance_move(world: &mut WorldState, agent_id: AgentId, log: &mut EventLog) {
         let other_id = other.id;
         let other_nick = other.nick.to_string();
         let other_session = world.session_of(other_id).map(|s| s.id);
-        let stunned = other.stun_until > world.tick;
+        let stunned = is_stunned(other, world.tick);
         if let (true, Some(other_session)) = (stunned, other_session) {
             // A stunned agent is shoved backwards into the mover's cell; the
             // mover still spends the step it just used.
@@ -1277,6 +1854,11 @@ fn progress_uses(world: &mut WorldState, log: &mut EventLog, order: &[AgentId], 
             continue;
         };
         if !matches!(agent.action, Some(Action::Use { .. })) {
+            continue;
+        }
+        // A defending agent is busy this tick: the use neither progresses nor
+        // breaks, it simply waits.
+        if agent.defending.is_some() {
             continue;
         }
         let Some(pos) = agent.pos else {

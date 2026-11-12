@@ -85,6 +85,75 @@ pub fn validate_demolish(world: &WorldState, agent: AgentId, target: Pos) -> Res
     Ok(())
 }
 
+const NO_TARGET: &str = "there is no unstunned agent next to you in that direction";
+
+/// Design §5: an attack needs an unstunned agent in one of the four adjacent
+/// cells, no stun on the attacker and no cooldown. Returns the target's id.
+pub fn validate_attack(
+    world: &WorldState,
+    agent: AgentId,
+    target: Pos,
+    _cfg: &Config,
+) -> Result<AgentId, String> {
+    let Some(me) = world.agents.get(&agent) else {
+        return Err("you are not in the world".to_string());
+    };
+    let Some(pos) = me.pos else {
+        return Err("you are not in the world".to_string());
+    };
+    let adjacent = pos.manhattan(target) == 1;
+    let target_agent = match world.agent_at(target) {
+        Some(other) if adjacent && !crate::state::is_stunned(other, world.tick) => Some(other.id),
+        _ => None,
+    };
+    if crate::state::is_stunned(me, world.tick) {
+        return Err(format!(
+            "you are stunned until tick {}; you cannot attack",
+            me.stun_until
+        ));
+    }
+    if world.tick < me.attack_cooldown_until {
+        return Err(format!(
+            "your attack is on cooldown until tick {}",
+            me.attack_cooldown_until
+        ));
+    }
+    target_agent.ok_or_else(|| NO_TARGET.to_string())
+}
+
+/// Design §5: a defence covers one adjacent cell for the current tick. It needs
+/// no cooldown check for the *target* cell, only the agent's own cooldown.
+pub fn validate_defend(world: &WorldState, agent: AgentId, target: Pos) -> Result<(), String> {
+    let Some(me) = world.agents.get(&agent) else {
+        return Err("you are not in the world".to_string());
+    };
+    let Some(pos) = me.pos else {
+        return Err("you are not in the world".to_string());
+    };
+    if crate::state::is_stunned(me, world.tick) {
+        return Err(format!(
+            "you are stunned until tick {}; you cannot defend",
+            me.stun_until
+        ));
+    }
+    if !world.map.in_bounds(target) {
+        return Err("that cell is outside the map".to_string());
+    }
+    if target == pos {
+        return Err("you cannot defend your own cell; defend an adjacent cell".to_string());
+    }
+    if pos.manhattan(target) != 1 {
+        return Err(OUT_OF_REACH.to_string());
+    }
+    if world.tick < me.defend_cooldown_until {
+        return Err(format!(
+            "your defend is on cooldown until tick {}",
+            me.defend_cooldown_until
+        ));
+    }
+    Ok(())
+}
+
 /// Agents other than `agent` already working `target`, whatever the verb. The
 /// agent issuing the command counts towards the same cap, so five others are
 /// already the maximum.

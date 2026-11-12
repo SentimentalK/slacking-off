@@ -40,10 +40,11 @@ pub use event::{ActionOutcome, Blocker, Event, EventKind, ObjectCause};
 pub use map::{Map, MapDef, MapError, Terrain};
 pub use replay::{diff_worlds, replay, restore, ReplayError, Snapshot, WorldDiff};
 pub use rules::{
-    agent_level, session_score, validate_build, validate_demolish, validate_door,
-    validate_downgrade, validate_upgrade, validate_use, weighted_score,
+    agent_level, session_score, validate_attack, validate_build, validate_defend,
+    validate_demolish, validate_door, validate_downgrade, validate_upgrade, validate_use,
+    weighted_score,
 };
-pub use state::{Action, Agent, Object, Session, SessionStatus, SiteKind, WorldState};
+pub use state::{is_stunned, Action, Agent, Object, Session, SessionStatus, SiteKind, WorldState};
 pub use step::{
     join, leave, step, Intent, IntentKind, JoinCommand, JoinOutcome, JoinReject, JoinRejectKind,
 };

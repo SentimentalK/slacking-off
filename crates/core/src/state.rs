@@ -103,6 +103,14 @@ pub enum Action {
         target: Pos,
         label: String,
     },
+    /// A committed attack. It does nothing until `land_tick`, then resolves
+    /// against wherever the target actually stands (design §5).
+    Attack {
+        target_agent: AgentId,
+        target_pos: Pos,
+        land_tick: Tick,
+        label: String,
+    },
 }
 
 impl Action {
@@ -114,7 +122,8 @@ impl Action {
             | Action::Door { label, .. }
             | Action::Use { label, .. }
             | Action::Upgrade { label, .. }
-            | Action::Downgrade { label, .. } => label,
+            | Action::Downgrade { label, .. }
+            | Action::Attack { label, .. } => label,
         }
     }
 
@@ -127,7 +136,8 @@ impl Action {
             | Action::Door { .. }
             | Action::Use { .. }
             | Action::Upgrade { .. }
-            | Action::Downgrade { .. } => 0,
+            | Action::Downgrade { .. }
+            | Action::Attack { .. } => 0,
         }
     }
 }
@@ -138,15 +148,35 @@ pub struct Agent {
     pub nick: Nick,
     pub pos: Option<Pos>,
     pub action: Option<Action>,
-    /// Tick until which the agent is stunned; `0` means not stunned. A stunned
-    /// agent can be shoved out of its cell by a mover.
+    /// Tick until which the agent is stunned; it is stunned while
+    /// `tick < stun_until`. A stunned agent can be shoved out of its cell by a
+    /// mover and cannot start or advance an action.
     pub stun_until: Tick,
+    /// Tick until which an attack would miss (`tick < immunity_until`).
+    #[serde(default)]
+    pub immunity_until: Tick,
+    /// Tick from which the next attack may start (`tick >= ...`).
+    #[serde(default)]
+    pub attack_cooldown_until: Tick,
+    /// Tick from which the next defence may start.
+    #[serde(default)]
+    pub defend_cooldown_until: Tick,
+    /// The adjacent cell this agent shields for the current tick only. Cleared
+    /// before the tick boundary, so a snapshot never carries it.
+    #[serde(default)]
+    pub defending: Option<Pos>,
     /// Cumulative score over every session of this agent (design §4.8).
     #[serde(default)]
     pub score_total: u32,
     /// Level derived from `score_total` (design §4.8).
     #[serde(default = "default_level")]
     pub level: u8,
+}
+
+/// One definition of "still stunned": every rule compares the tick to the
+/// agent's `stun_until` the same way.
+pub fn is_stunned(agent: &Agent, tick: Tick) -> bool {
+    tick < agent.stun_until
 }
 
 /// Serde default for `Agent::level`; old snapshots predate levels.
