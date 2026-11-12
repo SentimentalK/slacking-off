@@ -300,3 +300,42 @@ async fn rapid_commands_from_one_agent_are_rate_limited() {
         error.message
     );
 }
+
+#[tokio::test]
+async fn a_queue_touch_replays_after_reopen() {
+    let dir = fresh_dir("touch-reopen");
+    let cfg = lane_config();
+    let def = map::parse(LANE_MAP).expect("queue map parses");
+    let before;
+    let touched_through_tick;
+    {
+        let server = Arc::new(
+            Server::open(cfg.clone(), def.clone(), "test", LANE_MAP, &dir, 7).expect("opens"),
+        );
+        let token_a = register(&server, "first-one").await;
+        let token_b = register(&server, "second-one").await;
+        assert!(join(&server, &token_a).await.ok);
+        assert!(is_waiting(&join(&server, &token_b).await));
+
+        // Settle tick 1 so the touch event has a tick seed of its own.
+        server.tick_once().await;
+        let state = server.status(&token_b).await.state.expect("status state");
+        assert_eq!(state.queue_ahead, Some(1));
+        touched_through_tick = server.world_state().await.tick;
+        before = server.current_projection().await.queue;
+    }
+
+    // Same data dir, new process-like open: replay must accept QueueTouched.
+    let reopened = Arc::new(
+        Server::open(cfg, def, "test", LANE_MAP, &dir, 7).expect("the touched log replays"),
+    );
+    let world = reopened.world_state().await;
+    assert_eq!(world.tick, touched_through_tick);
+    let after = reopened.current_projection().await.queue;
+    assert_eq!(after, before, "queue id/pos/index survive the restart");
+    let session = world.session_of(2).expect("second-one session");
+    assert_eq!(
+        world.sessions[&session.id].last_active_tick, touched_through_tick,
+        "the touch tick survives the restart"
+    );
+}

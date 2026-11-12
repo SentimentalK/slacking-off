@@ -359,10 +359,10 @@ fn touch_logs_activity_and_defers_the_idle_cleanup() {
     let session = session_of(&world, 2);
 
     assert!(
-        touch(&world, 2, 0).is_none(),
+        touch(&world, 2, 0, 0).is_none(),
         "the join already counts as activity for tick 0"
     );
-    let event = touch(&world, 2, 1).expect("a new tick is activity");
+    let event = touch(&world, 2, 1, 7).expect("a new tick is activity");
     assert!(matches!(
         event.kind,
         EventKind::QueueTouched {
@@ -467,5 +467,63 @@ fn restore_rebuilds_queue_positions_activity_and_entry_queue() {
     assert_eq!(
         restored.entry_queue.iter().copied().collect::<Vec<_>>(),
         waiting
+    );
+}
+
+#[test]
+fn queue_touch_carries_the_tick_seed_and_replays() {
+    let cfg = Config::default();
+    let mut world = join_agent(&build(&cfg), &cfg, 1, 0).0;
+    world = join_agent(&world, &cfg, 2, 0).0;
+    let session = session_of(&world, 2);
+
+    let tick_seed = 7_654_321_098;
+    let mut touched = touch(&world, 2, 1, tick_seed).expect("a new tick is activity");
+    assert_eq!(
+        touched.seed, tick_seed,
+        "a QueueTouched must carry the tick's seed or restart replay rejects it"
+    );
+    touched.seq = 2;
+
+    let settled = Event {
+        tick: 1,
+        seq: 1,
+        seed: tick_seed,
+        kind: EventKind::TickSettled,
+    };
+    let restored = restore(
+        &Snapshot::at(world.clone(), 0).with_seed(tick_seed),
+        &[settled, touched],
+        &cfg,
+    )
+    .expect("the touch replays when it carries the tick seed");
+    assert_eq!(restored.sessions[&session].last_active_tick, 1);
+
+    let bad = Event {
+        tick: 1,
+        seq: 2,
+        seed: 0,
+        kind: EventKind::QueueTouched {
+            session,
+            agent: 2,
+            nick: "dev-2".to_string(),
+            tick: 1,
+        },
+    };
+    let settled = Event {
+        tick: 1,
+        seq: 1,
+        seed: tick_seed,
+        kind: EventKind::TickSettled,
+    };
+    let error = restore(
+        &Snapshot::at(world.clone(), 0).with_seed(tick_seed),
+        &[settled, bad],
+        &cfg,
+    )
+    .expect_err("a seed 0 touch is a corrupt log");
+    assert!(
+        error.message.contains("seed 0 does not match"),
+        "unexpected error: {error}"
     );
 }

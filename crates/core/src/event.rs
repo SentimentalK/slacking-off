@@ -881,8 +881,9 @@ impl EventLog {
 /// record, and replaying it through `restore` updates `last_active_tick`.
 ///
 /// Returns `None` for a session that is not queued or was already touched this
-/// tick.
-pub fn touch(world: &WorldState, agent: AgentId, tick: Tick) -> Option<Event> {
+/// tick. `seed` is the seed of the tick the event belongs to; the replay
+/// rejects an event whose seed differs from its `TickSettled`.
+pub fn touch(world: &WorldState, agent: AgentId, tick: Tick, seed: u64) -> Option<Event> {
     let session = world.session_of(agent)?;
     if session.status != SessionStatus::Waiting || session.last_active_tick == tick {
         return None;
@@ -891,7 +892,7 @@ pub fn touch(world: &WorldState, agent: AgentId, tick: Tick) -> Option<Event> {
     Some(Event {
         tick,
         seq: 0,
-        seed: 0,
+        seed,
         kind: EventKind::QueueTouched {
             session: session.id,
             agent,

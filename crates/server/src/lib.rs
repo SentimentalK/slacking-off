@@ -748,7 +748,7 @@ impl Server {
     /// `QueueTouched` is filtered out of the projection.
     fn touch_waiting(&self, inner: &mut Inner, agent: AgentId) {
         let tick = inner.world.tick;
-        let Some(mut event) = loo_core::touch(&inner.world, agent, tick) else {
+        let Some(mut event) = loo_core::touch(&inner.world, agent, tick, inner.tick_seed) else {
             return;
         };
         event.seq = inner.last_seq.saturating_add(1);

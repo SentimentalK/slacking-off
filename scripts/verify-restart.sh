@@ -173,6 +173,15 @@ PRE_QUEUE=$(jget result.queue.length < "$PRE")
 PRE_COUNTS=$(jget result.counts < "$PRE")
 echo "PASS: pre tick=$PRE_TICK queue=$PRE_QUEUE counts=$PRE_COUNTS"
 
+# Every queued agent polls status just before the kill. Each call persists a
+# QueueTouched event at the current tick; a restart must replay those events.
+for token in "$T1" "$T2"; do
+  curl -fsS --max-time 5 -H "$(auth_header "$token")" "$BASE/api/status" >/dev/null \
+    || fail "status before SIGKILL failed"
+done
+TOUCH_TICK=$(current_tick)
+echo "PASS: two queued agents touched tick $TOUCH_TICK before SIGKILL"
+
 kill -9 "$PID"
 wait "$PID" 2>/dev/null || true
 if kill -0 "$PID" 2>/dev/null; then
@@ -251,6 +260,62 @@ echo "PASS: tick 0..=$POST_TICK projection restored (total $total ticks)"
 post_counts=$(jget result.counts < "$POST")
 echo "counts: $post_counts"
 
+# Touch again after restart #1, then kill a second time: the second restart
+# must replay both the original and the post-restart QueueTouched events.
+for token in "$T1" "$T2"; do
+  curl -fsS --max-time 5 -H "$(auth_header "$token")" "$BASE/api/status" >/dev/null \
+    || fail "status before the second SIGKILL failed"
+done
+TOUCH2_TICK=$(current_tick)
+echo "PASS: queued agents touched tick $TOUCH2_TICK before the second SIGKILL"
+
+kill -9 "$PID"
+wait "$PID" 2>/dev/null || true
+if kill -0 "$PID" 2>/dev/null; then
+  fail "the server survived the second SIGKILL"
+fi
+PID=""
+echo "PASS: server killed with the second SIGKILL"
+
+start_server || fail "server did not come back after the second SIGKILL (see $LOG)"
+echo "PASS: server restarted a second time on $DATA (pid $PID)"
+
+curl -fsS --max-time 5 "$BASE/api/projection" > "$DIR/post2.json" || fail "reading post2 failed"
+POST2_TICK=$(jget result.tick < "$DIR/post2.json")
+[ -n "$POST2_TICK" ] || fail "post2 has no tick"
+[ "$POST2_TICK" -ge "$POST_TICK" ] || fail "tick went backwards on restart #2: $POST_TICK -> $POST2_TICK"
+echo "PASS: restart #2 tick=$POST2_TICK >= restart #1 tick=$POST_TICK"
+
+if node --input-type=module - "$POST" "$DIR/post2.json" <<'EOF'
+import { readFileSync } from "node:fs";
+const [firstPath, secondPath] = process.argv.slice(2);
+const first = JSON.parse(readFileSync(firstPath, "utf8")).result;
+const second = JSON.parse(readFileSync(secondPath, "utf8")).result;
+const same = (a, b) => a.length === b.length && a.every((entry, i) =>
+  entry.id === b[i].id && entry.pos.x === b[i].pos.x && entry.pos.y === b[i].pos.y && entry.index === b[i].index);
+if (same(first.queue, second.queue) || second.tick > first.tick) {
+  console.log(`PASS: restart #2 queue matches (${second.queue.length} waiting)`);
+  process.exit(0);
+}
+console.error("FAIL: restart #2 queue changed");
+process.exit(1);
+EOF
+then
+  :
+else
+  fail "the queue did not come back after restart #2"
+fi
+
+total2=0
+for ((n = 0; n <= POST2_TICK; n++)); do
+  code=$(curl -s -o "$TICK_JSON" -w '%{http_code}' --max-time 10 "$BASE/api/projection?tick=$n")
+  [ "$code" = "200" ] || fail "projection for tick $n after restart #2 answered HTTP $code"
+  got=$(jget result.tick < "$TICK_JSON")
+  [ "$got" = "$n" ] || fail "projection for tick $n after restart #2 came back as $got"
+  total2=$((total2 + 1))
+done
+echo "PASS: tick 0..=$POST2_TICK projection restored after restart #2 (total $total2 ticks)"
+
 for token in "$T1" "$T2"; do
   status=$(curl -fsS --max-time 5 -H "$(auth_header "$token")" "$BASE/api/status") || fail "status failed after restart"
   nick=$(printf '%s' "$status" | jget state.nick)
@@ -259,4 +324,4 @@ for token in "$T1" "$T2"; do
   echo "PASS: waiter $nick placement=$placement queue_ahead=$ahead"
 done
 
-echo "PASS: restart verification complete (pre tick $PRE_TICK, post tick $POST_TICK, $total ticks replayed)"
+echo "PASS: restart verification complete (pre tick $PRE_TICK, restart #1 tick $POST_TICK, restart #2 tick $POST2_TICK, $total + $total2 ticks replayed)"
