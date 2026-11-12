@@ -194,3 +194,15 @@ ZCOOL QingKe HuangYou，运行时不请求 Google Fonts 或任何 CDN。三者�
 - 视野 9×9，记忆在服务端会话里；入场时给地图尺寸、入口、全部马桶列表和禁建区。
 
 实验结论见 [`docs/wakeup-report.md`](docs/wakeup-report.md)。
+
+## 线上部署
+
+- 地址：<https://slacking-off.mainstayx.com>
+- 集群：`k3s-homelab` / ArgoCD `app-slacking-off`，namespace `slacking-off`，节点 `mtl0`（arm64），
+  `local-path` 1Gi PVC 持久化 `world.db`。
+- 镜像：`slacking-off:arm64` 在本机构建后 `docker save | sudo k3s ctr images import -` 导入
+  `mtl0` 的 k3s containerd；homelab 清单固定调度到 `mtl0` 并使用 `IfNotPresent`，不依赖外部 registry。
+- 服务端以 `--official` 启动，内置 `loo-linux-x64` / `loo-linux-arm64` 两个 CLI 下载；
+  macOS/Windows 暂无构建。
+- 安装命令按 `X-Forwarded-Proto` 生成 `https://`，会话 cookie 在 TLS 后带 `Secure`。
+
