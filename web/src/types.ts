@@ -59,12 +59,16 @@ export type SessionOutcome =
 export interface Terrain {
   width: number;
   height: number;
+  /** Where agents walk in; the spectator camera starts here. */
+  entrance: Pos;
   rows: string[];
 }
 
 export interface ProjectionCounts {
   inside: number;
   queued: number;
+  /** `config.max_on_field`. */
+  capacity: number;
 }
 
 export interface ProjectionAgent {
@@ -125,6 +129,29 @@ export interface Projection {
   objects: ProjectionObject[];
   queue: ProjectionQueueEntry[];
   events: ProjectionEvent[];
+}
+
+/** `GET /api/worlds` — `WorldSummary`. */
+export interface WorldSummary {
+  id: number;
+  name: string;
+  last_tick: Tick;
+  official: boolean;
+}
+
+/** `GET /api/timeline` only carries the four marker-worthy tags. */
+export type MarkerKind = 'success' | 'attack' | 'demolish' | 'defend';
+
+export interface TimelineMarker {
+  tick: Tick;
+  kind: MarkerKind;
+  text: string;
+}
+
+export interface Timeline {
+  from: Tick;
+  to: Tick;
+  markers: TimelineMarker[];
 }
 
 // --- §1 accounts -----------------------------------------------------------

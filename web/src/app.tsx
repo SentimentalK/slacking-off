@@ -1,6 +1,10 @@
 import { useRoute } from './router';
+import { Leaderboard } from './pages/Leaderboard';
 import { Placeholder } from './pages/Placeholder';
+import { Profile } from './pages/Profile';
+import { Replay } from './pages/Replay';
 import { Spectator } from './pages/Spectator';
+import { Stats } from './pages/Stats';
 
 export function App() {
   const route = useRoute();
@@ -9,13 +13,13 @@ export function App() {
     case 'spectator':
       return <Spectator />;
     case 'replay':
-      return <Placeholder title="回放" note="时间轴和逐 tick 回放由 E3 接管。" />;
+      return <Replay />;
     case 'agent':
-      return <Placeholder title={`Agent #${route.id}`} note="档案页由 E3 接管。" />;
+      return <Profile id={route.id} />;
     case 'leaderboard':
-      return <Placeholder title="排行榜" note="带薪榜由 E3 接管。" />;
+      return <Leaderboard />;
     case 'stats':
-      return <Placeholder title="统计" note="统计页由 E3 接管。" />;
+      return <Stats />;
     default:
       return <Placeholder title="建设中" note={`${route.path} 还没有页面。`} />;
   }

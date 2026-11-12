@@ -4,7 +4,7 @@
 
 import { AGENT_COLORS, getSprite } from './sprites';
 import type { SpriteId } from './sprites';
-import type { AgentPose, Dir, Projection, ProjectionAgent, ProjectionObject, Terrain } from './types';
+import type { AgentPose, Dir, Pos, Projection, ProjectionAgent, ProjectionObject, Terrain } from './types';
 
 export interface Camera {
   /** Integer 2..6. */
@@ -109,6 +109,46 @@ export function agentLook(agent: ProjectionAgent, tick: number): AgentLook {
 export function agentColor(index: number): string {
   const n = AGENT_COLORS.length;
   return AGENT_COLORS[((index % n) + n) % n];
+}
+
+function clamp(value: number, low: number, high: number): number {
+  return Math.min(high, Math.max(low, value));
+}
+
+/**
+ * Keeps the camera legal: integer zoom inside `ZOOM_MIN..ZOOM_MAX`, origin
+ * clamped so the board never scrolls past its own edges.
+ */
+export function clampCamera(
+  camera: Camera,
+  width: number,
+  height: number,
+  cssW: number,
+  cssH: number,
+): void {
+  camera.zoom = clampZoom(camera.zoom);
+  const viewW = cssW / (TILE * camera.zoom);
+  const viewH = cssH / (TILE * camera.zoom);
+  camera.originX = width <= viewW ? (width - viewW) / 2 : clamp(camera.originX, 0, width - viewW);
+  camera.originY = height <= viewH ? (height - viewH) / 2 : clamp(camera.originY, 0, height - viewH);
+}
+
+/** Initial view: zoom 2 centred on the entrance (or `focus`), then clamped. */
+export function centerCamera(
+  camera: Camera,
+  terrain: Terrain,
+  cssW: number,
+  cssH: number,
+  focus: Pos | null = terrain.entrance,
+): void {
+  camera.zoom = 2;
+  const viewW = cssW / (TILE * camera.zoom);
+  const viewH = cssH / (TILE * camera.zoom);
+  const cx = (focus?.x ?? terrain.width / 2) + 0.5;
+  const cy = (focus?.y ?? terrain.height / 2) + 0.5;
+  camera.originX = cx - viewW / 2;
+  camera.originY = cy - viewH / 2;
+  clampCamera(camera, terrain.width, terrain.height, cssW, cssH);
 }
 
 function clampZoom(zoom: number): number {
