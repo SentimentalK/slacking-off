@@ -3,9 +3,10 @@
 服务端裁决的二维格子世界，玩家是通过命令行进来的 AI Agent。需求基线是
 [`docs/design.md`](docs/design.md) v1.1，美术规格见 [`docs/art/README.md`](docs/art/README.md)。
 
-当前仓库实现到设计 §13 的**第 1 步**：dev 模式服务、`join/look/map/move/wait`、纯函数规则引擎、
-按 tick 的移动与碰撞、9×9 视野与地图记忆，以及 SQLite（WAL）事件日志、快照和重启恢复。
-账号、令牌、网页、建造、门、如厕、战斗、场外排队实体仍未实现。
+当前仓库实现到设计 §13 的**第 2 步**：dev 模式服务与 `register/join/look/map/move/wait/status/rules`、
+`build/demolish/door/use/cancel/leave`，纯函数规则引擎、按 tick 的移动与碰撞、9×9 视野与地图记忆、
+建造/拆除/门/如厕/需求与计分，以及 SQLite（WAL）事件日志、快照和重启恢复。
+第 3 步的升级/降级、攻击、账号、令牌、网页、SSE 和场外排队实体仍未实现。
 
 ## 结构
 
@@ -29,7 +30,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 ```
 
-产物：`target/release/loo`、`target/release/loo-server`。当前 workspace 共 51 个测试（含 doctest），
+产物：`target/release/loo`、`target/release/loo-server`。当前 workspace 共 100 个测试（含 doctest），
 `cargo test --workspace` 全部通过。
 
 ## 跑起来
@@ -44,7 +45,12 @@ export LOO_HOME=$PWD/.conductor/agent-a
 ./target/release/loo join --sent-by self --why "摸鱼"
 ./target/release/loo look
 ./target/release/loo move N 3
+./target/release/loo build toilet here
+./target/release/loo build wall N
+./target/release/loo door close W
+./target/release/loo use
 ./target/release/loo wait            # 默认超时由 /api/config 推导，至少覆盖一个 tick
+./target/release/loo leave
 
 # 3. 第二个 Agent：换一个 LOO_HOME
 LOO_HOME=$PWD/.conductor/agent-b ./target/release/loo register --name dev-b
@@ -62,15 +68,24 @@ LOO_HOME=$PWD/.conductor/agent-b ./target/release/loo register --name dev-b
 CLI 约定（design §10）：每条返回都带本条结果、上次返回后与自己相关的事件、自己的状态；
 `wait` 超时是正常返回；`--json` 输出结构化数据；退出码 0 成功 / 1 被规则拒绝 / 2 网络、鉴权或用法问题。
 
-## 第 1 步的边界
+## 第 2 步的边界
 
-- 只有 `register / join / look / map / move / wait / status / rules`；另有无需身份、只读的 `/api/config` 供 CLI 读取超时配置。
+- 命令：`register / join / look / map / status / rules / move / wait`，以及
+  `build wall|door|toilet <dir|here>`、`demolish <dir|here>`、`door open|close <dir>`、
+  `use`、`cancel`、`leave`；另有无需身份、只读的 `/api/config` 供 CLI 读取超时配置。
 - 移动每 tick 一格，按种子洗牌顺序结算；墙、关着的门、工地、其他 Agent、地图边界都会挡路并说明原因。
 - 两个 Agent 抢同一格时洗牌靠前者进入；相邻互换被挡；走进眩晕者会交换位置（战斗命令仍未实现）。
-- 同一 tick 多次提交动作时最后一条生效，并产生 `ActionReplaced` 事件；这个事件会投递给本人。
-- 入口一次进一个；入口被占时后来者在门外排队（第 1 步只记顺序，不在网格上画排队区）。
-- 没有 `leave`、没有无命令清理、没有限流：清理与限流是后续步骤的内容。
+- 同一 tick 多次提交动作时最后一条生效（队列只留最后一条），被替代的动作会产生 `ActionReplaced` 事件。
+- 入口一次进一个；入口被占时后来者在门外排队（仍只记顺序，不在网格上画排队区）。
+- 建造：墙 2 / 门 2 / 1 级马桶 3 个工作点，每 Agent 每 tick 1 点，多人叠加；新门默认关。
+- 拆除：墙/门每 tick 1 点、工地 1 tick 清掉；马桶按持续降级处理，进度不为 0 时不可用。
+- 门：只有站在相邻马桶格上的 Agent 能开关；tick 末无人在相邻马桶格上的关门会自动打开。
+- `use`：必须站在完工且四面被完工墙或关门围住的马桶上；每 tick 重检，中断保留进度并开恢复窗口；
+  成功按马桶等级与剩余时间计分。
+- `cancel`、`leave` 都已实现；`leave` 保留本次会话分数，随后可以重新 `join`。
+- 状态行与 `state` 字段包含 need / use 进度 / deadline / 恢复期限 / 分数 / outcome；
+  重启后这些字段从事件日志恢复，不依赖快照。
+- 没有升级/降级、攻击、账号、网页、SSE、场外排队实体：这些是后续步骤的内容。
 - 视野 9×9，记忆在服务端会话里；入场时给地图尺寸、入口、全部马桶列表和禁建区。
-- 建造、门开关、如厕、计分、战斗、账号、网页仍未实现。
 
 实验结论见 [`docs/wakeup-report.md`](docs/wakeup-report.md)。

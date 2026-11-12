@@ -8,8 +8,8 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use loo_proto::{
-    ActionQueued, ApiError, ConfigResponse, Envelope, ErrorCode, JoinRequest, JoinResponse,
-    MoveRequest, RegisterRequest, WaitRequest,
+    ActionQueued, ApiError, BuildRequest, ConfigResponse, DemolishRequest, DoorRequest, Envelope,
+    ErrorCode, JoinRequest, JoinResponse, LeaveResponse, MoveRequest, RegisterRequest, WaitRequest,
 };
 use serde::Serialize;
 use std::sync::Arc;
@@ -25,6 +25,12 @@ pub fn router(server: Arc<Server>) -> Router {
         .route("/api/config", get(config))
         .route("/api/rules", get(rules))
         .route("/api/move", post(move_cmd))
+        .route("/api/build", post(build_cmd))
+        .route("/api/demolish", post(demolish_cmd))
+        .route("/api/door", post(door_cmd))
+        .route("/api/use", post(use_cmd))
+        .route("/api/cancel", post(cancel_cmd))
+        .route("/api/leave", post(leave_cmd))
         .route("/api/wait", post(wait))
         .with_state(server)
 }
@@ -96,6 +102,51 @@ async fn wait(
         timeout_seconds: None,
     });
     respond(server.wait(&token(&headers), req).await)
+}
+
+async fn build_cmd(
+    State(server): State<Arc<Server>>,
+    headers: HeaderMap,
+    body: Option<Json<BuildRequest>>,
+) -> Response {
+    let Some(Json(req)) = body else {
+        return respond::<ActionQueued>(bad_request("body must be {kind, target}"));
+    };
+    respond(server.build_cmd(&token(&headers), req).await)
+}
+
+async fn demolish_cmd(
+    State(server): State<Arc<Server>>,
+    headers: HeaderMap,
+    body: Option<Json<DemolishRequest>>,
+) -> Response {
+    let Some(Json(req)) = body else {
+        return respond::<ActionQueued>(bad_request("body must be {target}"));
+    };
+    respond(server.demolish_cmd(&token(&headers), req).await)
+}
+
+async fn door_cmd(
+    State(server): State<Arc<Server>>,
+    headers: HeaderMap,
+    body: Option<Json<DoorRequest>>,
+) -> Response {
+    let Some(Json(req)) = body else {
+        return respond::<ActionQueued>(bad_request("body must be {target, open}"));
+    };
+    respond(server.door_cmd(&token(&headers), req).await)
+}
+
+async fn use_cmd(State(server): State<Arc<Server>>, headers: HeaderMap) -> Response {
+    respond(server.use_cmd(&token(&headers)).await)
+}
+
+async fn cancel_cmd(State(server): State<Arc<Server>>, headers: HeaderMap) -> Response {
+    respond(server.cancel_cmd(&token(&headers)).await)
+}
+
+async fn leave_cmd(State(server): State<Arc<Server>>, headers: HeaderMap) -> Response {
+    respond::<LeaveResponse>(server.leave_cmd(&token(&headers)).await)
 }
 
 fn token(headers: &HeaderMap) -> String {

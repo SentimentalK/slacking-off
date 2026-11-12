@@ -4,8 +4,9 @@
 //! events since the previous response, and your own state.
 
 use loo_proto::{
-    ActionQueued, AgentView, Envelope, Grid, JoinResponse, LookResponse, MapResponse, Placement,
-    RegisterResponse, RulesResponse, Tick, WaitResponse, WaitWake,
+    ActionQueued, AgentView, Envelope, Grid, JoinResponse, LeaveResponse, LookResponse,
+    MapResponse, Need, Placement, RegisterResponse, RulesResponse, SessionOutcome, Tick,
+    WaitResponse, WaitWake,
 };
 
 pub trait Renderable {
@@ -85,9 +86,24 @@ impl Renderable for MapResponse {
 
 impl Renderable for ActionQueued {
     fn result_lines(&self) -> Vec<String> {
+        let steps = if self.action.remaining > 0 {
+            format!(" · {} step(s)", self.action.remaining)
+        } else {
+            String::new()
+        };
         vec![format!(
-            "queued {} · {} step(s) · takes effect at tick {}",
-            self.action.description, self.action.remaining, self.effective_tick
+            "queued {}{} · takes effect at tick {}",
+            self.action.description, steps, self.effective_tick
+        )]
+    }
+}
+
+impl Renderable for LeaveResponse {
+    fn result_lines(&self) -> Vec<String> {
+        vec![format!(
+            "left the world · outcome {} · score {}",
+            outcome_word(self.outcome),
+            self.score
         )]
     }
 }
@@ -161,14 +177,54 @@ pub fn state_line(state: &AgentView) -> String {
     if let Some(ahead) = state.queue_ahead {
         parts.push(format!("queue position {ahead}"));
     }
+    if let Some(need) = state.need {
+        parts.push(format!(
+            "need: {} · use {}/{} · deadline in {}",
+            need_word(need),
+            state.use_ticks_done,
+            state.use_ticks_total,
+            state.deadline_tick.saturating_sub(state.tick)
+        ));
+    }
+    if let Some(recovery) = state.recovery_deadline {
+        parts.push(format!(
+            "recovery in {}",
+            recovery.saturating_sub(state.tick)
+        ));
+    }
+    if state.score > 0 || state.outcome.is_some() {
+        let outcome = state
+            .outcome
+            .map(|outcome| format!(" · outcome {}", outcome_word(outcome)))
+            .unwrap_or_default();
+        parts.push(format!("score {}{}", state.score, outcome));
+    }
     match &state.action {
-        Some(action) => parts.push(format!(
+        Some(action) if action.remaining > 0 => parts.push(format!(
             "action: {} ({} step(s) left)",
             action.description, action.remaining
         )),
+        Some(action) => parts.push(format!("action: {}", action.description)),
         None => parts.push("idle".to_string()),
     }
     parts.join(" · ")
+}
+
+fn need_word(need: Need) -> &'static str {
+    match need {
+        Need::Urine => "urine",
+        Need::Feces => "feces",
+    }
+}
+
+fn outcome_word(outcome: SessionOutcome) -> &'static str {
+    match outcome {
+        SessionOutcome::Success => "success",
+        SessionOutcome::FailedDeadline => "failed_deadline",
+        SessionOutcome::FailedRecovery => "failed_recovery",
+        SessionOutcome::Left => "left",
+        SessionOutcome::Abandoned => "abandoned",
+    }
 }
 
 fn legend_line(grid: &Grid) -> String {
@@ -191,7 +247,7 @@ fn hex_tick(tick: Tick) -> char {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use loo_proto::{EventView, Legend};
+    use loo_proto::{ActionState, EventView, Legend};
 
     fn grid() -> Grid {
         Grid {
@@ -228,6 +284,13 @@ mod tests {
                 pos: Some(loo_proto::Pos::new(1, 0)),
                 queue_ahead: None,
                 action: None,
+                need: None,
+                use_ticks_done: 0,
+                use_ticks_total: 0,
+                deadline_tick: 0,
+                recovery_deadline: None,
+                score: 0,
+                outcome: None,
             }),
         );
         let text = render("look", &env);
@@ -253,6 +316,13 @@ mod tests {
                 pos: None,
                 queue_ahead: Some(1),
                 action: None,
+                need: None,
+                use_ticks_done: 0,
+                use_ticks_total: 0,
+                deadline_tick: 0,
+                recovery_deadline: None,
+                score: 0,
+                outcome: None,
             }),
         );
         let text = render("move", &env);
@@ -276,6 +346,13 @@ mod tests {
                 pos: Some(loo_proto::Pos::new(1, 0)),
                 queue_ahead: None,
                 action: None,
+                need: None,
+                use_ticks_done: 0,
+                use_ticks_total: 0,
+                deadline_tick: 0,
+                recovery_deadline: None,
+                score: 0,
+                outcome: None,
             }),
         );
         assert_eq!(
@@ -324,5 +401,92 @@ mod tests {
         let text = render("map", &env);
         assert!(text.contains("first seen"), "{text}");
         assert!(text.contains("1-"), "seen tick 1 then never: {text}");
+    }
+
+    fn action_queued(description: &str, remaining: u32) -> Envelope<ActionQueued> {
+        Envelope::ok(
+            ActionQueued {
+                action: ActionState {
+                    description: description.to_string(),
+                    remaining,
+                },
+                effective_tick: 5,
+            },
+            Vec::new(),
+            None,
+        )
+    }
+
+    #[test]
+    fn action_queued_shows_steps_only_when_there_are_some() {
+        let moved = render("move", &action_queued("move N 3", 3));
+        assert!(
+            moved.contains("queued move N 3 · 3 step(s) · takes effect at tick 5"),
+            "{moved}"
+        );
+
+        let built = render("build", &action_queued("build wall (5,4)", 0));
+        assert!(
+            built.contains("queued build wall (5,4) · takes effect at tick 5"),
+            "{built}"
+        );
+        assert!(!built.contains("0 step(s)"), "{built}");
+    }
+
+    fn state_with_fields() -> AgentView {
+        AgentView {
+            agent_id: 1,
+            nick: "dev-1".to_string(),
+            tick: 100,
+            session_id: Some(1),
+            placement: Some(loo_proto::PlacementKind::Inside),
+            pos: Some(loo_proto::Pos::new(1, 0)),
+            queue_ahead: None,
+            action: None,
+            need: Some(loo_proto::Need::Feces),
+            use_ticks_done: 3,
+            use_ticks_total: 8,
+            deadline_tick: 212,
+            recovery_deadline: None,
+            score: 0,
+            outcome: None,
+        }
+    }
+
+    #[test]
+    fn state_line_renders_need_use_and_deadline() {
+        assert_eq!(
+            state_line(&state_with_fields()),
+            "dev-1 (#1) · session 1 · at (1,0) · need: feces · use 3/8 · deadline in 112 · idle"
+        );
+    }
+
+    #[test]
+    fn state_line_renders_recovery_and_score() {
+        let mut state = state_with_fields();
+        state.recovery_deadline = Some(105);
+        state.score = 1550;
+        state.outcome = Some(loo_proto::SessionOutcome::Success);
+        assert_eq!(
+            state_line(&state),
+            "dev-1 (#1) · session 1 · at (1,0) · need: feces · use 3/8 · deadline in 112 · recovery in 5 · score 1550 · outcome success · idle"
+        );
+    }
+
+    #[test]
+    fn leave_renders_outcome_and_score() {
+        let env = Envelope::ok(
+            LeaveResponse {
+                outcome: loo_proto::SessionOutcome::Left,
+                score: 240,
+            },
+            Vec::new(),
+            None,
+        );
+        let text = render("leave", &env);
+        assert!(
+            text.contains("left the world · outcome left · score 240"),
+            "{text}"
+        );
     }
 }

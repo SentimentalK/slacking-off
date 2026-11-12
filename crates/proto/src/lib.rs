@@ -365,6 +365,47 @@ pub struct MoveRequest {
     pub spec: MoveSpec,
 }
 
+/// What a `build` command creates (design §4.6).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BuildKind {
+    Wall,
+    Door,
+    Toilet,
+}
+
+/// Where a `build`/`demolish` command applies: the agent's own cell or one step
+/// in a direction.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TargetSpec {
+    Here,
+    Dir(Dir),
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct BuildRequest {
+    pub kind: BuildKind,
+    pub target: TargetSpec,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct DemolishRequest {
+    pub target: TargetSpec,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct DoorRequest {
+    pub target: Dir,
+    pub open: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct LeaveResponse {
+    pub outcome: SessionOutcome,
+    pub score: u32,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ActionState {
     /// Server-generated, e.g. `move N 3`.
@@ -425,6 +466,17 @@ pub struct AgentView {
     pub pos: Option<Pos>,
     pub queue_ahead: Option<usize>,
     pub action: Option<ActionState>,
+    pub need: Option<Need>,
+    /// Use ticks already spent on this session's toilet.
+    pub use_ticks_done: u32,
+    /// Use ticks the current need takes; `0` without a need.
+    pub use_ticks_total: u32,
+    /// Absolute tick of the session deadline; `0` when none is assigned.
+    pub deadline_tick: Tick,
+    /// Absolute tick by which an interrupted use must resume.
+    pub recovery_deadline: Option<Tick>,
+    pub score: u32,
+    pub outcome: Option<SessionOutcome>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

@@ -6,14 +6,15 @@
 //! toilets in use, combat, accounts, SSE and the web UI are later steps.
 
 use loo_core::{
-    Config, Intent, IntentKind, JoinCommand, JoinOutcome, JoinRejectKind, MapDef, Snapshot,
-    WorldState,
+    Config, Intent, IntentKind, JoinCommand, JoinOutcome, JoinRejectKind, MapDef, SiteKind,
+    Snapshot, WorldState,
 };
 use loo_proto::{
-    ActionQueued, ActionState, AgentId, AgentView, ApiError, Briefing, ConfigResponse, Envelope,
-    ErrorCode, EventView, JoinRequest, JoinResponse, LookResponse, MapResponse, MoveRequest,
-    Placement, PlacementKind, RegisterRequest, RegisterResponse, RulesResponse, SentBy, SessionId,
-    Tick, WaitRequest, WaitResponse, WaitWake,
+    ActionQueued, ActionState, AgentId, AgentView, ApiError, Briefing, BuildKind, BuildRequest,
+    ConfigResponse, DemolishRequest, DoorRequest, Envelope, ErrorCode, EventView, JoinRequest,
+    JoinResponse, LeaveResponse, LookResponse, MapResponse, MoveRequest, Need, Placement,
+    PlacementKind, Pos, RegisterRequest, RegisterResponse, RulesResponse, SentBy, SessionId,
+    TargetSpec, Tick, WaitRequest, WaitResponse, WaitWake,
 };
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
@@ -34,14 +35,16 @@ pub struct Server {
 
 struct Inner {
     world: WorldState,
-    /// Actions submitted since the last settlement, in submission order. More
-    /// than one per agent is kept so `core` reports the replacement.
+    /// The action submitted since the last settlement, at most one per agent:
+    /// a later command replaces the earlier one (design §3).
     pending: BTreeMap<AgentId, Vec<IntentKind>>,
     agents: BTreeMap<AgentId, AgentMeta>,
     tokens: HashMap<String, AgentId>,
-    /// Current session per agent (leave and cleanup are not implemented yet).
+    /// Current session per agent; removed when the session leaves.
     sessions: BTreeMap<AgentId, SessionId>,
-    outbox: BTreeMap<SessionId, Vec<loo_core::Event>>,
+    /// Undelivered events per agent. Keyed by agent, not session, so the last
+    /// event of a session (for example `SessionEnded`) still reaches it.
+    outbox: BTreeMap<AgentId, Vec<loo_core::Event>>,
     next_agent_id: AgentId,
     next_session_id: SessionId,
     seed_base: u64,
@@ -49,6 +52,9 @@ struct Inner {
     last_seq: u32,
     /// Shuffle seed of `world.tick` (0 before the first settlement).
     tick_seed: u64,
+    /// Use ticks for urine and feces, copied from the immutable server config so
+    /// `agent_view` can report the total without holding a `Config`.
+    need_use_ticks: [u32; 2],
 }
 
 struct AgentMeta {
@@ -124,6 +130,7 @@ impl Server {
         }
 
         let (tick_tx, _) = broadcast::channel(16);
+        let need_use_ticks = [cfg.need.urine_use_ticks, cfg.need.feces_use_ticks];
         Ok(Server {
             cfg,
             inner: Mutex::new(Inner {
@@ -143,6 +150,7 @@ impl Server {
                 seed_base,
                 last_seq,
                 tick_seed,
+                need_use_ticks,
             }),
             tick_tx,
             store,
@@ -183,6 +191,25 @@ impl Server {
             })
             .collect();
 
+        // Every agent that has a session before the step, with the position it
+        // was seen at. Agents whose session ends during the tick must still get
+        // the events of that tick.
+        let mut recipients: BTreeMap<AgentId, Option<Pos>> = inner
+            .world
+            .sessions
+            .values()
+            .map(|session| {
+                (
+                    session.agent,
+                    inner
+                        .world
+                        .agents
+                        .get(&session.agent)
+                        .and_then(|agent| agent.pos),
+                )
+            })
+            .collect();
+
         let mut rng = loo_core::rng::Rng::new(inner.seed_base ^ (inner.world.tick + 1));
         let seed = rng.next_u64();
         let (world, events) = loo_core::step(&inner.world, &intents, seed, &self.cfg);
@@ -195,17 +222,25 @@ impl Server {
         }
 
         inner.pending.clear();
-        inner.world = world;
-        inner.last_seq = events.len() as u32;
+        inner.last_seq = events
+            .last()
+            .map(|event| event.seq)
+            .unwrap_or(inner.last_seq);
         inner.tick_seed = seed;
 
+        // New positions win over the pre-step ones; agents that left keep their
+        // last position so the closing events still match their view.
+        for session in world.sessions.values() {
+            let pos = world.agents.get(&session.agent).and_then(|agent| agent.pos);
+            recipients.insert(session.agent, pos);
+        }
+
         {
-            let Inner { world, outbox, .. } = &mut *inner;
+            let Inner { outbox, .. } = &mut *inner;
             for event in &events {
-                for session in world.sessions.values() {
-                    let pos = world.agents.get(&session.agent).and_then(|a| a.pos);
-                    if event.visible_to(session.agent, pos, &self.cfg) {
-                        let queue = outbox.entry(session.id).or_default();
+                for (agent, pos) in &recipients {
+                    if event.visible_to(*agent, *pos, &self.cfg) {
+                        let queue = outbox.entry(*agent).or_default();
                         if queue.len() < MAX_OUTBOX {
                             queue.push(event.clone());
                         }
@@ -213,6 +248,14 @@ impl Server {
                 }
             }
         }
+
+        inner.world = world;
+        inner.sessions = inner
+            .world
+            .sessions
+            .values()
+            .map(|session| (session.agent, session.id))
+            .collect();
 
         let tick = inner.world.tick;
         let interval = self.cfg.persist.snapshot_interval_ticks;
@@ -405,7 +448,7 @@ impl Server {
                 &mut inner,
                 Some(agent),
                 ApiError::rule(format!(
-                    "you already have session {existing} in this world; leave is not implemented yet"
+                    "you already have session {existing} in this world; leave it with `loo leave` first"
                 )),
             );
             drop(inner);
@@ -461,6 +504,10 @@ impl Server {
                 inner.last_seq = events.last().map(|event| event.seq).unwrap_or(start_seq);
                 inner.next_session_id += 1;
                 inner.sessions.insert(agent, session_id);
+                // A fresh join starts with a clean slate: no intents or events
+                // from the previous session of this agent.
+                inner.outbox.remove(&agent);
+                inner.pending.remove(&agent);
                 if let Some(meta) = inner.agents.get_mut(&agent) {
                     meta.sent_by = Some(req.sent_by);
                     meta.why = why.clone();
@@ -673,7 +720,7 @@ impl Server {
             label: label.clone(),
         };
         let intent_json = serde_json::to_value(&kind).ok();
-        inner.pending.entry(agent).or_default().push(kind);
+        queue_intent(&mut inner, agent, kind);
         let effective_tick = tick + 1;
         let env = ok_env(
             &mut inner,
@@ -693,6 +740,366 @@ impl Server {
             format!("queued {label} for tick {effective_tick}"),
             intent_json.as_ref(),
         )
+    }
+
+    pub async fn build_cmd(&self, token: &str, req: BuildRequest) -> Envelope<ActionQueued> {
+        let started = Instant::now();
+        let mut inner = self.inner.lock().await;
+        let Some(agent) = inner.tokens.get(token).copied() else {
+            let env = failed_env(&mut inner, None, not_authenticated());
+            drop(inner);
+            return self.finish("build", None, 0, env, started, "not authenticated", None);
+        };
+        let tick = inner.world.tick;
+        let pos = match require_inside(&inner, agent) {
+            Ok(pos) => pos,
+            Err(error) => {
+                let env = failed_env(&mut inner, Some(agent), error);
+                drop(inner);
+                return self.finish("build", Some(agent), tick, env, started, "not inside", None);
+            }
+        };
+        let target = absolute_target(pos, req.target);
+        let kind = site_kind(req.kind);
+        if let Err(message) = loo_core::validate_build(&inner.world, agent, kind, target, &self.cfg)
+        {
+            let env = failed_env(&mut inner, Some(agent), ApiError::rule(message));
+            drop(inner);
+            return self.finish(
+                "build",
+                Some(agent),
+                tick,
+                env,
+                started,
+                format!("rejected build {} at {target}", kind_word(kind)),
+                None,
+            );
+        }
+        let label = format!("build {} {}", kind_word(kind), target);
+        let intent = IntentKind::Build { kind, target };
+        let intent_json = serde_json::to_value(&intent).ok();
+        queue_intent(&mut inner, agent, intent);
+        let effective_tick = tick + 1;
+        let env = ok_env(
+            &mut inner,
+            agent,
+            ActionQueued {
+                action: ActionState {
+                    description: label.clone(),
+                    remaining: 0,
+                },
+                effective_tick,
+            },
+        );
+        drop(inner);
+        self.finish(
+            "build",
+            Some(agent),
+            tick,
+            env,
+            started,
+            format!("queued {label} for tick {effective_tick}"),
+            intent_json.as_ref(),
+        )
+    }
+
+    pub async fn demolish_cmd(&self, token: &str, req: DemolishRequest) -> Envelope<ActionQueued> {
+        let started = Instant::now();
+        let mut inner = self.inner.lock().await;
+        let Some(agent) = inner.tokens.get(token).copied() else {
+            let env = failed_env(&mut inner, None, not_authenticated());
+            drop(inner);
+            return self.finish("demolish", None, 0, env, started, "not authenticated", None);
+        };
+        let tick = inner.world.tick;
+        let pos = match require_inside(&inner, agent) {
+            Ok(pos) => pos,
+            Err(error) => {
+                let env = failed_env(&mut inner, Some(agent), error);
+                drop(inner);
+                return self.finish(
+                    "demolish",
+                    Some(agent),
+                    tick,
+                    env,
+                    started,
+                    "not inside",
+                    None,
+                );
+            }
+        };
+        let target = absolute_target(pos, req.target);
+        if let Err(message) = loo_core::validate_demolish(&inner.world, agent, target) {
+            let env = failed_env(&mut inner, Some(agent), ApiError::rule(message));
+            drop(inner);
+            return self.finish(
+                "demolish",
+                Some(agent),
+                tick,
+                env,
+                started,
+                format!("rejected demolish at {target}"),
+                None,
+            );
+        }
+        let label = format!("demolish {target}");
+        let intent = IntentKind::Demolish { target };
+        let intent_json = serde_json::to_value(&intent).ok();
+        queue_intent(&mut inner, agent, intent);
+        let effective_tick = tick + 1;
+        let env = ok_env(
+            &mut inner,
+            agent,
+            ActionQueued {
+                action: ActionState {
+                    description: label.clone(),
+                    remaining: 0,
+                },
+                effective_tick,
+            },
+        );
+        drop(inner);
+        self.finish(
+            "demolish",
+            Some(agent),
+            tick,
+            env,
+            started,
+            format!("queued {label} for tick {effective_tick}"),
+            intent_json.as_ref(),
+        )
+    }
+
+    pub async fn door_cmd(&self, token: &str, req: DoorRequest) -> Envelope<ActionQueued> {
+        let started = Instant::now();
+        let mut inner = self.inner.lock().await;
+        let Some(agent) = inner.tokens.get(token).copied() else {
+            let env = failed_env(&mut inner, None, not_authenticated());
+            drop(inner);
+            return self.finish("door", None, 0, env, started, "not authenticated", None);
+        };
+        let tick = inner.world.tick;
+        let pos = match require_inside(&inner, agent) {
+            Ok(pos) => pos,
+            Err(error) => {
+                let env = failed_env(&mut inner, Some(agent), error);
+                drop(inner);
+                return self.finish("door", Some(agent), tick, env, started, "not inside", None);
+            }
+        };
+        let target = pos.step(req.target);
+        if let Err(message) = loo_core::validate_door(&inner.world, agent, target, req.open) {
+            let env = failed_env(&mut inner, Some(agent), ApiError::rule(message));
+            drop(inner);
+            return self.finish(
+                "door",
+                Some(agent),
+                tick,
+                env,
+                started,
+                format!("rejected door at {target}"),
+                None,
+            );
+        }
+        let label = format!("{} door {target}", if req.open { "open" } else { "close" });
+        let intent = IntentKind::Door {
+            target,
+            open: req.open,
+        };
+        let intent_json = serde_json::to_value(&intent).ok();
+        queue_intent(&mut inner, agent, intent);
+        let effective_tick = tick + 1;
+        let env = ok_env(
+            &mut inner,
+            agent,
+            ActionQueued {
+                action: ActionState {
+                    description: label.clone(),
+                    remaining: 0,
+                },
+                effective_tick,
+            },
+        );
+        drop(inner);
+        self.finish(
+            "door",
+            Some(agent),
+            tick,
+            env,
+            started,
+            format!("queued {label} for tick {effective_tick}"),
+            intent_json.as_ref(),
+        )
+    }
+
+    pub async fn use_cmd(&self, token: &str) -> Envelope<ActionQueued> {
+        let started = Instant::now();
+        let mut inner = self.inner.lock().await;
+        let Some(agent) = inner.tokens.get(token).copied() else {
+            let env = failed_env(&mut inner, None, not_authenticated());
+            drop(inner);
+            return self.finish("use", None, 0, env, started, "not authenticated", None);
+        };
+        let tick = inner.world.tick;
+        if let Err(error) = require_inside(&inner, agent) {
+            let env = failed_env(&mut inner, Some(agent), error);
+            drop(inner);
+            return self.finish("use", Some(agent), tick, env, started, "not inside", None);
+        }
+        let target = match loo_core::validate_use(&inner.world, agent, &self.cfg) {
+            Ok(target) => target,
+            Err(message) => {
+                let env = failed_env(&mut inner, Some(agent), ApiError::rule(message));
+                drop(inner);
+                return self.finish("use", Some(agent), tick, env, started, "rejected use", None);
+            }
+        };
+        let label = format!("use the toilet at {target}");
+        let intent = IntentKind::Use { target };
+        let intent_json = serde_json::to_value(&intent).ok();
+        queue_intent(&mut inner, agent, intent);
+        let effective_tick = tick + 1;
+        let env = ok_env(
+            &mut inner,
+            agent,
+            ActionQueued {
+                action: ActionState {
+                    description: label.clone(),
+                    remaining: 0,
+                },
+                effective_tick,
+            },
+        );
+        drop(inner);
+        self.finish(
+            "use",
+            Some(agent),
+            tick,
+            env,
+            started,
+            format!("queued {label} for tick {effective_tick}"),
+            intent_json.as_ref(),
+        )
+    }
+
+    pub async fn cancel_cmd(&self, token: &str) -> Envelope<ActionQueued> {
+        let started = Instant::now();
+        let mut inner = self.inner.lock().await;
+        let Some(agent) = inner.tokens.get(token).copied() else {
+            let env = failed_env(&mut inner, None, not_authenticated());
+            drop(inner);
+            return self.finish("cancel", None, 0, env, started, "not authenticated", None);
+        };
+        let tick = inner.world.tick;
+        let intent = IntentKind::Cancel;
+        let intent_json = serde_json::to_value(&intent).ok();
+        queue_intent(&mut inner, agent, intent);
+        let effective_tick = tick + 1;
+        let env = ok_env(
+            &mut inner,
+            agent,
+            ActionQueued {
+                action: ActionState {
+                    description: "cancel".to_string(),
+                    remaining: 0,
+                },
+                effective_tick,
+            },
+        );
+        drop(inner);
+        self.finish(
+            "cancel",
+            Some(agent),
+            tick,
+            env,
+            started,
+            format!("queued cancel for tick {effective_tick}"),
+            intent_json.as_ref(),
+        )
+    }
+
+    pub async fn leave_cmd(&self, token: &str) -> Envelope<LeaveResponse> {
+        let started = Instant::now();
+        let mut inner = self.inner.lock().await;
+        let Some(agent) = inner.tokens.get(token).copied() else {
+            let env = failed_env(&mut inner, None, not_authenticated());
+            drop(inner);
+            return self.finish("leave", None, 0, env, started, "not authenticated", None);
+        };
+        let tick = inner.world.tick;
+        let last_pos = inner.world.agents.get(&agent).and_then(|a| a.pos);
+        match loo_core::leave(
+            &inner.world,
+            agent,
+            inner.last_seq,
+            inner.tick_seed,
+            &self.cfg,
+        ) {
+            Err(message) => {
+                let env = failed_env(&mut inner, Some(agent), ApiError::rule(message));
+                drop(inner);
+                self.finish(
+                    "leave",
+                    Some(agent),
+                    tick,
+                    env,
+                    started,
+                    "rejected leave",
+                    None,
+                )
+            }
+            Ok((world, outcome, score, events)) => {
+                if let Err(error) = self.store.append_join_events(world.tick, &events) {
+                    eprintln!("leave events for agent {agent} were not persisted: {error}");
+                    let env = failed_env::<LeaveResponse>(
+                        &mut inner,
+                        Some(agent),
+                        ApiError::new(
+                            ErrorCode::Internal,
+                            "the leave could not be recorded; try again",
+                        ),
+                    );
+                    drop(inner);
+                    return self.finish(
+                        "leave",
+                        Some(agent),
+                        tick,
+                        env,
+                        started,
+                        "leave not persisted",
+                        None,
+                    );
+                }
+                inner.world = world;
+                inner.last_seq = events
+                    .last()
+                    .map(|event| event.seq)
+                    .unwrap_or(inner.last_seq);
+                inner.sessions.remove(&agent);
+                inner.pending.remove(&agent);
+                // Keep the closing events for the agent to read on its next
+                // command or wait.
+                for event in &events {
+                    if event.visible_to(agent, last_pos, &self.cfg) {
+                        let queue = inner.outbox.entry(agent).or_default();
+                        if queue.len() < MAX_OUTBOX {
+                            queue.push(event.clone());
+                        }
+                    }
+                }
+                let env = ok_env(&mut inner, agent, LeaveResponse { outcome, score });
+                drop(inner);
+                self.finish(
+                    "leave",
+                    Some(agent),
+                    tick,
+                    env,
+                    started,
+                    format!("left the world: outcome {outcome:?}, score {score}"),
+                    None,
+                )
+            }
+        }
     }
 
     pub async fn wait(&self, token: &str, req: WaitRequest) -> Envelope<WaitResponse> {
@@ -716,12 +1123,12 @@ impl Server {
             {
                 let mut inner = self.inner.lock().await;
                 let state = agent_view(&inner, agent);
-                let session = state.as_ref().and_then(|s| s.session_id);
-                let has_events = session
-                    .and_then(|s| inner.outbox.get(&s))
+                let has_events = inner
+                    .outbox
+                    .get(&agent)
                     .is_some_and(|queue| !queue.is_empty());
                 if has_events {
-                    let events = take_events(&mut inner, session);
+                    let events = take_events(&mut inner, agent);
                     let tick = inner.world.tick;
                     let elapsed_ms = started.elapsed().as_millis() as u64;
                     let env = Envelope::ok(
@@ -756,8 +1163,9 @@ impl Server {
 
         let mut inner = self.inner.lock().await;
         let state = agent_view(&inner, agent);
-        let session = state.as_ref().and_then(|s| s.session_id);
-        let events = take_events(&mut inner, session);
+        // A session that already ended has no state session left, but its
+        // closing events must still be delivered.
+        let events = take_events(&mut inner, agent);
         let tick = inner.world.tick;
         let elapsed_ms = started.elapsed().as_millis() as u64;
         let env = Envelope::ok(
@@ -804,6 +1212,50 @@ impl Server {
     }
 }
 
+/// The agent's cell when its session is inside the world, else the rule error
+/// the CLI renders as a rejection.
+fn require_inside(inner: &Inner, agent: AgentId) -> Result<Pos, ApiError> {
+    if !inner.world.is_inside(agent) {
+        return Err(session_required(inner, agent));
+    }
+    inner
+        .world
+        .agents
+        .get(&agent)
+        .and_then(|agent| agent.pos)
+        .ok_or_else(|| ApiError::rule("no position in the world"))
+}
+
+/// Resolves `here` / a direction against the agent's cell. Out-of-map targets
+/// are left for the core validators to reject with their own message.
+fn absolute_target(pos: Pos, target: TargetSpec) -> Pos {
+    match target {
+        TargetSpec::Here => pos,
+        TargetSpec::Dir(dir) => pos.step(dir),
+    }
+}
+
+fn site_kind(kind: BuildKind) -> SiteKind {
+    match kind {
+        BuildKind::Wall => SiteKind::Wall,
+        BuildKind::Door => SiteKind::Door,
+        BuildKind::Toilet => SiteKind::Toilet,
+    }
+}
+
+fn kind_word(kind: SiteKind) -> &'static str {
+    match kind {
+        SiteKind::Wall => "wall",
+        SiteKind::Door => "door",
+        SiteKind::Toilet => "toilet",
+    }
+}
+
+/// At most the last intent submitted by one agent settles in a tick (design §3).
+fn queue_intent(inner: &mut Inner, agent: AgentId, kind: IntentKind) {
+    inner.pending.insert(agent, vec![kind]);
+}
+
 fn not_authenticated() -> ApiError {
     ApiError::new(
         ErrorCode::NotAuthenticated,
@@ -827,7 +1279,7 @@ fn session_required(inner: &Inner, agent: AgentId) -> ApiError {
                 .map(|i| i + 1)
                 .unwrap_or(0);
             ApiError::rule(format!(
-                "you are outside the entrance waiting for the entrance cell ({ahead} in line)"
+                "you are still outside the entrance waiting ({ahead} in line); you are not in the world yet"
             ))
         }
         Some(_) => ApiError::rule("no position in the world"),
@@ -859,6 +1311,12 @@ fn agent_view(inner: &Inner, agent: AgentId) -> Option<AgentView> {
             description: action.label().to_string(),
             remaining: action.remaining(),
         });
+    let need = session.and_then(|s| s.need);
+    let use_ticks_total = match need {
+        Some(Need::Urine) => inner.need_use_ticks[0],
+        Some(Need::Feces) => inner.need_use_ticks[1],
+        None => 0,
+    };
     Some(AgentView {
         agent_id: agent,
         nick: meta.nick.to_string(),
@@ -868,6 +1326,13 @@ fn agent_view(inner: &Inner, agent: AgentId) -> Option<AgentView> {
         pos: world_agent.and_then(|a| a.pos),
         queue_ahead,
         action,
+        need,
+        use_ticks_done: session.map(|s| s.use_ticks_done).unwrap_or(0),
+        use_ticks_total,
+        deadline_tick: session.map(|s| s.deadline).unwrap_or(0),
+        recovery_deadline: session.and_then(|s| s.recovery_deadline),
+        score: session.map(|s| s.score).unwrap_or(0),
+        outcome: session.and_then(|s| s.outcome),
     })
 }
 
@@ -901,25 +1366,22 @@ fn agent_meta(stored: &StoredAgent) -> Result<AgentMeta, StoreError> {
 
 fn ok_env<T>(inner: &mut Inner, agent: AgentId, result: T) -> Envelope<T> {
     let state = agent_view(inner, agent);
-    let session = state.as_ref().and_then(|s| s.session_id);
-    let events = take_events(inner, session);
+    let events = take_events(inner, agent);
     Envelope::ok(result, events, state)
 }
 
 fn failed_env<T>(inner: &mut Inner, agent: Option<AgentId>, error: ApiError) -> Envelope<T> {
     let state = agent.and_then(|agent| agent_view(inner, agent));
-    let session = state.as_ref().and_then(|s| s.session_id);
-    let events = take_events(inner, session);
+    let events = agent
+        .map(|agent| take_events(inner, agent))
+        .unwrap_or_default();
     Envelope::failed(error, events, state)
 }
 
-fn take_events(inner: &mut Inner, session: Option<SessionId>) -> Vec<EventView> {
-    let Some(session) = session else {
-        return Vec::new();
-    };
+fn take_events(inner: &mut Inner, agent: AgentId) -> Vec<EventView> {
     inner
         .outbox
-        .remove(&session)
+        .remove(&agent)
         .unwrap_or_default()
         .into_iter()
         .map(|event| EventView {
@@ -947,7 +1409,7 @@ fn next_nonce() -> u64 {
 fn rules_text(cfg: &Config, map_width: i32, map_height: i32) -> String {
     format!(
         "\
-Company Time — AI toilet world (step 1 dev server)
+Company Time — AI toilet world (step 2 dev server)
 
 You are an AI agent in a {w}x{h} grid world. Time runs in ticks; one tick is {tick} seconds on this server.
 Every command prints: this command's result, the events since your previous command that concern you or happened in your view, and your own state.
@@ -963,27 +1425,48 @@ Commands
   loo map
       The map of everything you have seen so far, like a remembered map, plus when each cell was first seen.
   loo status
-      Your position, session, queue position and running action.
+      Your position, session, queue position, running action, need, use progress and score.
   loo move <N|E|S|W> [steps]   |   loo move <path, e.g. NNEE>
       Queue a move. One cell per tick. It stops at the first wall, closed door, other agent or map edge, and tells you where and why.
+  loo build wall|door|toilet <dir|here>
+      Queue work on a cell: your own cell (here) or one step away. A wall needs {wall_work} work points, a door {door_work}, a level 1 toilet {toilet_work}; each work tick adds 1 point, so several agents build faster. A new door starts closed.
+  loo demolish <dir|here>
+      Queue demolition of the object on a cell. A wall or door loses {wall_door_demolish} work per tick until it is gone (a wall has {wall_work} work, a door {door_work}); an unfinished site goes in {site_demolish} tick. A toilet is downgraded continuously at {toilet_demolish} per tick; while its progress is not 0 it cannot be used.
+  loo door open|close <N|E|S|W>
+      Queue a door state change. Only an agent standing on a toilet cell next to the door may do it. At the end of a tick a closed door with nobody on an adjacent toilet cell opens by itself.
+  loo use
+      Start using the toilet under your feet. It must be at a complete level and its four sides must be finished walls or closed doors. The rules are re-checked every tick; an interruption keeps the progress but opens a {recovery}s recovery window. A completed use scores.
+  loo cancel
+      Queue a cancel of the running action. The tick settles it; a cancelled use keeps its progress and opens the recovery window.
+  loo leave
+      Leave the world now, keeping whatever score the session has. You can join again afterwards.
   loo wait [--timeout seconds]
       Block until something happens that concerns you or is in your view, or until the timeout. A timeout is a normal result, not an error.
       The default timeout is max(wait.default_seconds = {wait_default}s, one tick = {tick}s); no wait exceeds {wait_max}s, and the server always allows at least one tick.
   loo rules
-      This text. Movement, vision, collisions, SQLite logging and snapshot replay are implemented; building, doors, toilets in use, combat, accounts and the web UI are not.
+      This text.
 
 World facts
 - Every agent occupies one cell; two agents never share a cell.
 - Dirs: N north (y-1), E east (x+1), S south (y+1), W west (x-1).
-- A closed door blocks movement; an open door does not. A toilet never blocks.
+- A closed door blocks movement; an open door does not. A toilet never blocks. A wall or door site blocks; a toilet site does not.
+- Only the last command you submit before a tick settles is used; a new action replaces an unfinished one and says so.
 - The settlement order inside a tick is a seeded shuffle of the agents present; the seed is written to the event log.
 - View symbols: # wall, + closed door, ' open door, 1-5 toilet level, x unfinished site, @ you, a-z other agents, . buildable floor, : no-build floor, ? not seen or outside the map.
-- You cannot see or receive events from outside your view; you get the full map size, the entrance, the toilets and the no-build areas once, when you join.",
+- You cannot see or receive events from outside your view; you get the full map size, the entrance, the toilets and the no-build areas once, when you join.
+- Exit codes: 0 the command succeeded, 1 the rules rejected it, 2 network, authentication or usage problem.",
         w = map_width,
         h = map_height,
         tick = cfg.tick_seconds,
         vw = cfg.view.width,
         vh = cfg.view.height,
+        wall_work = cfg.build.wall_work,
+        door_work = cfg.build.door_work,
+        toilet_work = cfg.build.toilet_work,
+        wall_door_demolish = cfg.build.wall_door_demolish_per_tick,
+        site_demolish = cfg.build.site_demolish_per_tick,
+        toilet_demolish = cfg.build.toilet_demolish_per_tick,
+        recovery = cfg.need.interrupt_recovery_ticks,
         wait_default = cfg.wait.default_seconds,
         wait_max = cfg.wait.max_seconds,
     )

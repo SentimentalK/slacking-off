@@ -9,9 +9,9 @@ mod render;
 
 use clap::{Parser, Subcommand, ValueEnum};
 use loo_proto::{
-    ActionQueued, ConfigResponse, Envelope, JoinRequest, JoinResponse, LookResponse, MapResponse,
-    MoveRequest, MoveSpec, Nick, RegisterResponse, RulesResponse, SentBy, WaitRequest,
-    WaitResponse,
+    ActionQueued, BuildKind, BuildRequest, ConfigResponse, DemolishRequest, Dir, DoorRequest,
+    Envelope, JoinRequest, JoinResponse, LeaveResponse, LookResponse, MapResponse, MoveRequest,
+    MoveSpec, Nick, RegisterResponse, RulesResponse, SentBy, TargetSpec, WaitRequest, WaitResponse,
 };
 use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
@@ -75,7 +75,7 @@ struct Cli {
     command: Command,
 }
 
-#[derive(Subcommand)]
+#[derive(Subcommand, Debug)]
 enum Command {
     /// Dev mode: take a temporary identity (stored in LOO_HOME).
     Register {
@@ -107,11 +107,99 @@ enum Command {
         #[arg(value_name = "DIR|PATH", num_args = 1..=2, required = true)]
         args: Vec<String>,
     },
+    /// Queue building a wall, door or toilet.
+    Build {
+        #[arg(value_enum)]
+        kind: BuildKindArg,
+        #[arg(value_enum, ignore_case = true)]
+        target: TargetArg,
+    },
+    /// Queue demolishing the object on a cell.
+    Demolish {
+        #[arg(value_enum, ignore_case = true)]
+        target: TargetArg,
+    },
+    /// Queue opening or closing an adjacent door.
+    Door {
+        #[arg(value_enum)]
+        action: DoorActionArg,
+        #[arg(value_enum, ignore_case = true)]
+        dir: DirArg,
+    },
+    /// Start using the toilet under your feet.
+    Use,
+    /// Cancel the running action.
+    Cancel,
+    /// Leave the world, keeping the session score.
+    Leave,
     /// Block until something happens, or until the timeout.
     Wait {
         #[arg(long)]
         timeout: Option<f64>,
     },
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]
+enum BuildKindArg {
+    Wall,
+    Door,
+    Toilet,
+}
+
+impl From<BuildKindArg> for BuildKind {
+    fn from(value: BuildKindArg) -> Self {
+        match value {
+            BuildKindArg::Wall => BuildKind::Wall,
+            BuildKindArg::Door => BuildKind::Door,
+            BuildKindArg::Toilet => BuildKind::Toilet,
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]
+enum TargetArg {
+    Here,
+    N,
+    E,
+    S,
+    W,
+}
+
+impl From<TargetArg> for TargetSpec {
+    fn from(value: TargetArg) -> Self {
+        match value {
+            TargetArg::Here => TargetSpec::Here,
+            TargetArg::N => TargetSpec::Dir(Dir::N),
+            TargetArg::E => TargetSpec::Dir(Dir::E),
+            TargetArg::S => TargetSpec::Dir(Dir::S),
+            TargetArg::W => TargetSpec::Dir(Dir::W),
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]
+enum DirArg {
+    N,
+    E,
+    S,
+    W,
+}
+
+impl From<DirArg> for Dir {
+    fn from(value: DirArg) -> Self {
+        match value {
+            DirArg::N => Dir::N,
+            DirArg::E => Dir::E,
+            DirArg::S => Dir::S,
+            DirArg::W => Dir::W,
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]
+enum DoorActionArg {
+    Open,
+    Close,
 }
 
 #[derive(Copy, Clone, Debug, ValueEnum)]
@@ -185,6 +273,44 @@ fn dispatch(cli: Cli) -> u8 {
             let raw = http.post("/api/move", to_value(MoveRequest { spec }), SHORT_TIMEOUT);
             print_env::<ActionQueued>(raw, "move", json)
         }
+        Command::Build { kind, target } => {
+            let request = BuildRequest {
+                kind: kind.into(),
+                target: target.into(),
+            };
+            let raw = http.post("/api/build", to_value(request), SHORT_TIMEOUT);
+            print_env::<ActionQueued>(raw, "build", json)
+        }
+        Command::Demolish { target } => {
+            let request = DemolishRequest {
+                target: target.into(),
+            };
+            let raw = http.post("/api/demolish", to_value(request), SHORT_TIMEOUT);
+            print_env::<ActionQueued>(raw, "demolish", json)
+        }
+        Command::Door { action, dir } => {
+            let request = DoorRequest {
+                target: dir.into(),
+                open: matches!(action, DoorActionArg::Open),
+            };
+            let raw = http.post("/api/door", to_value(request), SHORT_TIMEOUT);
+            print_env::<ActionQueued>(raw, "door", json)
+        }
+        Command::Use => print_env::<ActionQueued>(
+            http.post("/api/use", Value::Null, SHORT_TIMEOUT),
+            "use",
+            json,
+        ),
+        Command::Cancel => print_env::<ActionQueued>(
+            http.post("/api/cancel", Value::Null, SHORT_TIMEOUT),
+            "cancel",
+            json,
+        ),
+        Command::Leave => print_env::<LeaveResponse>(
+            http.post("/api/leave", Value::Null, SHORT_TIMEOUT),
+            "leave",
+            json,
+        ),
         Command::Wait { timeout } => {
             let request = WaitRequest {
                 timeout_seconds: timeout,
@@ -250,10 +376,9 @@ fn register(
         }
     };
     let code = exit_code(&value);
-    if json {
-        println!("{}", pretty(&value));
-        return code;
-    }
+    // The identity must be saved in both output modes; `--json` only changes
+    // what is printed.
+    let pretty_json = json.then(|| pretty(&value));
     let envelope: Envelope<RegisterResponse> = match serde_json::from_value(value) {
         Ok(envelope) => envelope,
         Err(error) => {
@@ -261,7 +386,11 @@ fn register(
             return 2;
         }
     };
-    print!("{}", render::render("register", &envelope));
+    if let Some(text) = pretty_json {
+        println!("{text}");
+    } else {
+        print!("{}", render::render("register", &envelope));
+    }
     if let Some(result) = envelope.result.as_ref().filter(|_| envelope.ok) {
         let nick = match Nick::parse(&result.nick) {
             Ok(nick) => nick,
@@ -277,7 +406,14 @@ fn register(
             token: result.token.clone(),
         };
         match config::save(&local) {
-            Ok(path) => println!("identity saved: {}", path.display()),
+            Ok(path) => {
+                // `--json` stdout must stay a single JSON document.
+                if json {
+                    eprintln!("identity saved: {}", path.display());
+                } else {
+                    println!("identity saved: {}", path.display());
+                }
+            }
             Err(message) => {
                 eprintln!("{message}");
                 return 2;
@@ -391,5 +527,68 @@ mod tests {
     #[test]
     fn wait_client_timeout_keeps_sub_second_requests() {
         assert_eq!(wait_client_timeout(Some(0.05), limits(3.0, 7.0)), 20.05);
+    }
+
+    fn command(args: &[&str]) -> Command {
+        Cli::try_parse_from(args)
+            .unwrap_or_else(|error| panic!("{args:?} should parse: {error}"))
+            .command
+    }
+
+    #[test]
+    fn object_commands_parse_their_arguments() {
+        match command(&["loo", "build", "wall", "here"]) {
+            Command::Build { kind, target } => {
+                assert_eq!(kind, BuildKindArg::Wall);
+                assert_eq!(target, TargetArg::Here);
+            }
+            other => panic!("expected build, got {other:?}"),
+        }
+        match command(&["loo", "build", "toilet", "n"]) {
+            Command::Build { kind, target } => {
+                assert_eq!(kind, BuildKindArg::Toilet);
+                assert_eq!(TargetSpec::from(target), TargetSpec::Dir(Dir::N));
+            }
+            other => panic!("expected build, got {other:?}"),
+        }
+        match command(&["loo", "demolish", "w"]) {
+            Command::Demolish { target } => {
+                assert_eq!(TargetSpec::from(target), TargetSpec::Dir(Dir::W));
+            }
+            other => panic!("expected demolish, got {other:?}"),
+        }
+        match command(&["loo", "door", "close", "e"]) {
+            Command::Door { action, dir } => {
+                assert_eq!(action, DoorActionArg::Close);
+                assert_eq!(Dir::from(dir), Dir::E);
+            }
+            other => panic!("expected door, got {other:?}"),
+        }
+        match command(&["loo", "door", "open", "S"]) {
+            Command::Door { action, dir } => {
+                assert_eq!(action, DoorActionArg::Open);
+                assert_eq!(Dir::from(dir), Dir::S);
+            }
+            other => panic!("expected door, got {other:?}"),
+        }
+        match command(&["loo", "build", "wall", "N"]) {
+            Command::Build { kind, target } => {
+                assert_eq!(kind, BuildKindArg::Wall);
+                assert_eq!(TargetSpec::from(target), TargetSpec::Dir(Dir::N));
+            }
+            other => panic!("expected build, got {other:?}"),
+        }
+        assert!(matches!(command(&["loo", "use"]), Command::Use));
+        assert!(matches!(command(&["loo", "cancel"]), Command::Cancel));
+        assert!(matches!(command(&["loo", "leave"]), Command::Leave));
+    }
+
+    #[test]
+    fn invalid_object_command_arguments_exit_two() {
+        assert!(Cli::try_parse_from(["loo", "build", "ladder", "here"]).is_err());
+        assert!(Cli::try_parse_from(["loo", "build", "wall"]).is_err());
+        assert!(Cli::try_parse_from(["loo", "door", "open"]).is_err());
+        assert!(Cli::try_parse_from(["loo", "door", "slam", "n"]).is_err());
+        assert!(Cli::try_parse_from(["loo", "demolish", "up"]).is_err());
     }
 }

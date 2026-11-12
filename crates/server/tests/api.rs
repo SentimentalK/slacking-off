@@ -3,8 +3,10 @@
 
 use loo_core::{map, Config, Event, EventKind, Intent, IntentKind, MapDef};
 use loo_proto::{
-    Dir, Envelope, ErrorCode, JoinRequest, JoinResponse, LookResponse, MoveRequest, MoveSpec, Nick,
-    Placement, Pos, RegisterRequest, RegisterResponse, SentBy, Tick, WaitRequest, WaitWake,
+    ActionQueued, BuildKind, BuildRequest, DemolishRequest, Dir, DoorRequest, Envelope, ErrorCode,
+    JoinRequest, JoinResponse, LeaveResponse, LookResponse, MoveRequest, MoveSpec, Need, Nick,
+    Placement, Pos, RegisterRequest, RegisterResponse, SentBy, SessionOutcome, TargetSpec, Tick,
+    WaitRequest, WaitWake,
 };
 use loo_server::{Server, Store};
 use rusqlite::Connection;
@@ -19,6 +21,39 @@ grid
 #..E..#
 #..#..#
 #######
+";
+
+/// A wide open floor with a no-build entrance on the west side.
+const BUILD_MAP: &str = "\
+grid
+#########
+#.......#
+#.......#
+#E......#
+#.......#
+#########
+";
+
+/// A pre-built room: a level-1 toilet with walls north, west and south and an
+/// open door east, next to the entrance. Closing the door makes it usable.
+const ROOM_MAP: &str = "\
+grid
+#######
+#.#...#
+##1'..#
+#.#E..#
+#######
+";
+
+/// Wide enough that an agent at the entrance cannot see builds on the east side.
+const WIDE_MAP: &str = "\
+grid
+###############
+#.............#
+#.............#
+#E............#
+#.............#
+###############
 ";
 
 fn test_dir(name: &str) -> PathBuf {
@@ -90,6 +125,87 @@ async fn move_to(
     spec: MoveSpec,
 ) -> Envelope<loo_proto::ActionQueued> {
     server.move_cmd(token, MoveRequest { spec }).await
+}
+
+/// Moves one cell per path character and settles every step.
+async fn move_path(server: &Arc<Server>, token: &str, path: &str) {
+    let queued = move_to(
+        server,
+        token,
+        MoveSpec::Path {
+            path: path.to_string(),
+        },
+    )
+    .await;
+    assert!(queued.ok, "move {path} was rejected: {:?}", queued.error);
+    for _ in 0..path.chars().count() {
+        server.tick_once().await;
+    }
+}
+
+async fn build_at(
+    server: &Arc<Server>,
+    token: &str,
+    kind: BuildKind,
+    target: TargetSpec,
+) -> Envelope<ActionQueued> {
+    server.build_cmd(token, BuildRequest { kind, target }).await
+}
+
+async fn demolish_at(
+    server: &Arc<Server>,
+    token: &str,
+    target: TargetSpec,
+) -> Envelope<ActionQueued> {
+    server.demolish_cmd(token, DemolishRequest { target }).await
+}
+
+async fn door_at(
+    server: &Arc<Server>,
+    token: &str,
+    dir: Dir,
+    open: bool,
+) -> Envelope<ActionQueued> {
+    server
+        .door_cmd(token, DoorRequest { target: dir, open })
+        .await
+}
+
+async fn tick_n(server: &Arc<Server>, ticks: u32) {
+    for _ in 0..ticks {
+        server.tick_once().await;
+    }
+}
+
+fn build_ticks(kind: BuildKind) -> u32 {
+    match kind {
+        BuildKind::Wall | BuildKind::Door => 2,
+        BuildKind::Toilet => 3,
+    }
+}
+
+/// Queues one build and settles exactly the work it needs.
+async fn build_and_settle(
+    server: &Arc<Server>,
+    token: &str,
+    kind: BuildKind,
+    target: TargetSpec,
+    at: Pos,
+    glyph: char,
+) {
+    let queued = build_at(server, token, kind, target).await;
+    assert!(queued.ok, "build {kind:?} at {at}: {:?}", queued.error);
+    tick_n(server, build_ticks(kind)).await;
+    assert_eq!(glyph_at(server, at).await, Some(glyph), "{kind:?} at {at}");
+}
+
+/// Current glyph of a cell, independent of the `Object` variant shape.
+async fn glyph_at(server: &Arc<Server>, pos: Pos) -> Option<char> {
+    server.world_state().await.object_at(pos).map(|o| o.glyph())
+}
+
+fn event_texts(events: &[loo_proto::EventView]) -> Vec<String> {
+    events.iter().map(|event| event.text.clone()).collect()
 }
 
 fn settled_ticks(events: &[Event]) -> Vec<Tick> {
@@ -887,4 +1003,677 @@ async fn config_reports_the_live_wait_settings() {
         "a non-55 max is reported unchanged so the CLI can follow it"
     );
     assert_eq!(config.snapshot_interval_ticks, 120);
+}
+
+#[tokio::test]
+async fn build_a_toilet_room_and_use_it() {
+    let server = open_with_map(&fresh_dir("build-use"), Config::default(), BUILD_MAP);
+    let (token, _) = register(&server, "dev-a").await;
+    join(&server, &token).await;
+    move_path(&server, &token, "EE").await;
+    assert_eq!(
+        server.status(&token).await.state.expect("state").pos,
+        Some(Pos::new(3, 3))
+    );
+
+    build_and_settle(
+        &server,
+        &token,
+        BuildKind::Toilet,
+        TargetSpec::Here,
+        Pos::new(3, 3),
+        '1',
+    )
+    .await;
+    build_and_settle(
+        &server,
+        &token,
+        BuildKind::Wall,
+        TargetSpec::Dir(Dir::N),
+        Pos::new(3, 2),
+        '#',
+    )
+    .await;
+    build_and_settle(
+        &server,
+        &token,
+        BuildKind::Wall,
+        TargetSpec::Dir(Dir::E),
+        Pos::new(4, 3),
+        '#',
+    )
+    .await;
+    build_and_settle(
+        &server,
+        &token,
+        BuildKind::Wall,
+        TargetSpec::Dir(Dir::S),
+        Pos::new(3, 4),
+        '#',
+    )
+    .await;
+    build_and_settle(
+        &server,
+        &token,
+        BuildKind::Door,
+        TargetSpec::Dir(Dir::W),
+        Pos::new(2, 3),
+        '+',
+    )
+    .await;
+
+    let before = server.status(&token).await.state.expect("state");
+    assert!(before.need.is_some(), "join assigns a need");
+    assert!(before.use_ticks_total == 4 || before.use_ticks_total == 8);
+
+    let queued = server.use_cmd(&token).await;
+    assert!(queued.ok, "use was rejected: {:?}", queued.error);
+
+    let mut progressed = 0;
+    let mut succeeded = false;
+    let mut score = 0;
+    let mut state = None;
+    for _ in 0..10 {
+        server.tick_once().await;
+        let status = server.status(&token).await;
+        for event in &status.events {
+            if event.text.contains("is using the level 1 toilet") {
+                progressed += 1;
+            }
+            if event.text.contains("finished at") && event.text.contains("scored") {
+                succeeded = true;
+                score = status.state.as_ref().map(|s| s.score).unwrap_or(0);
+            }
+        }
+        state = status.state;
+        if succeeded {
+            break;
+        }
+    }
+    let state = state.expect("state");
+    assert!(progressed >= 1, "use progress events are delivered");
+    assert!(succeeded, "use succeeds");
+    assert_eq!(state.outcome, Some(SessionOutcome::Success));
+    assert!(score > 0, "success scores: {score}");
+    assert_eq!(state.score, score);
+    assert_eq!(state.use_ticks_done, state.use_ticks_total);
+
+    let left = server.leave_cmd(&token).await;
+    let left = left.result.expect("leave result");
+    assert_eq!(left.outcome, SessionOutcome::Success);
+    assert_eq!(left.score, score);
+}
+
+#[tokio::test]
+async fn use_is_rejected_with_the_missing_part() {
+    let server = open_with_map(&fresh_dir("use-reject"), Config::default(), BUILD_MAP);
+    let (token, _) = register(&server, "dev-a").await;
+    join(&server, &token).await;
+    move_path(&server, &token, "EE").await;
+
+    build_and_settle(
+        &server,
+        &token,
+        BuildKind::Toilet,
+        TargetSpec::Here,
+        Pos::new(3, 3),
+        '1',
+    )
+    .await;
+    build_and_settle(
+        &server,
+        &token,
+        BuildKind::Wall,
+        TargetSpec::Dir(Dir::N),
+        Pos::new(3, 2),
+        '#',
+    )
+    .await;
+    build_and_settle(
+        &server,
+        &token,
+        BuildKind::Wall,
+        TargetSpec::Dir(Dir::E),
+        Pos::new(4, 3),
+        '#',
+    )
+    .await;
+    build_and_settle(
+        &server,
+        &token,
+        BuildKind::Wall,
+        TargetSpec::Dir(Dir::S),
+        Pos::new(3, 4),
+        '#',
+    )
+    .await;
+    build_and_settle(
+        &server,
+        &token,
+        BuildKind::Door,
+        TargetSpec::Dir(Dir::W),
+        Pos::new(2, 3),
+        '+',
+    )
+    .await;
+
+    // Missing wall: the east side is gone.
+    let queued = demolish_at(&server, &token, TargetSpec::Dir(Dir::E)).await;
+    assert!(queued.ok, "{:?}", queued.error);
+    tick_n(&server, 2).await;
+    assert_eq!(glyph_at(&server, Pos::new(4, 3)).await, None);
+    let rejected = server.use_cmd(&token).await;
+    assert!(!rejected.ok);
+    let error = rejected.error.expect("error");
+    assert_eq!(error.code, ErrorCode::RuleRejected);
+    assert!(
+        error.message.contains("east") && error.message.contains("enclosed"),
+        "missing wall is named: {}",
+        error.message
+    );
+
+    // Open door: the west side is open.
+    build_and_settle(
+        &server,
+        &token,
+        BuildKind::Wall,
+        TargetSpec::Dir(Dir::E),
+        Pos::new(4, 3),
+        '#',
+    )
+    .await;
+    let opened = door_at(&server, &token, Dir::W, true).await;
+    assert!(opened.ok, "{:?}", opened.error);
+    tick_n(&server, 1).await;
+    assert_eq!(glyph_at(&server, Pos::new(2, 3)).await, Some('\''));
+    let rejected = server.use_cmd(&token).await;
+    assert!(!rejected.ok);
+    let error = rejected.error.expect("error");
+    assert_eq!(error.code, ErrorCode::RuleRejected);
+    assert!(
+        error.message.contains("west door is open"),
+        "open door is named: {}",
+        error.message
+    );
+
+    // Toilet under construction: demolition progress makes it unusable.
+    let closed = door_at(&server, &token, Dir::W, false).await;
+    assert!(closed.ok, "{:?}", closed.error);
+    tick_n(&server, 1).await;
+    let queued = demolish_at(&server, &token, TargetSpec::Here).await;
+    assert!(queued.ok, "{:?}", queued.error);
+    tick_n(&server, 1).await;
+    let rejected = server.use_cmd(&token).await;
+    assert!(!rejected.ok);
+    let error = rejected.error.expect("error");
+    assert_eq!(error.code, ErrorCode::RuleRejected);
+    assert!(
+        error.message.contains("under construction") && error.message.contains("progress"),
+        "construction progress is named: {}",
+        error.message
+    );
+}
+
+#[tokio::test]
+async fn door_permissions_and_auto_open() {
+    let server = open_with_map(&fresh_dir("door-perm"), Config::default(), ROOM_MAP);
+    let (token_a, _) = register(&server, "dev-a").await;
+    let (token_b, _) = register(&server, "dev-b").await;
+    join(&server, &token_a).await;
+    move_path(&server, &token_a, "NW").await;
+    assert_eq!(
+        server.status(&token_a).await.state.expect("state").pos,
+        Some(Pos::new(2, 2)),
+        "dev-a stands on the toilet"
+    );
+    join(&server, &token_b).await;
+    assert_eq!(
+        server.status(&token_b).await.state.expect("state").pos,
+        Some(Pos::new(3, 3))
+    );
+
+    // dev-b is next to the door but not on a toilet cell.
+    let denied = door_at(&server, &token_b, Dir::N, false).await;
+    assert!(!denied.ok);
+    let error = denied.error.expect("error");
+    assert_eq!(error.code, ErrorCode::RuleRejected);
+    assert!(
+        error.message.contains("adjacent toilet cell"),
+        "permission message: {}",
+        error.message
+    );
+
+    // dev-a is on the toilet cell next to the door and may close it.
+    let closed = door_at(&server, &token_a, Dir::E, false).await;
+    assert!(closed.ok, "{:?}", closed.error);
+    tick_n(&server, 1).await;
+    assert_eq!(glyph_at(&server, Pos::new(3, 2)).await, Some('+'));
+
+    // dev-a leaves: the closed door has nobody on its toilet any more and opens
+    // by itself in the next tick.
+    let left = server.leave_cmd(&token_a).await;
+    assert!(left.ok, "{:?}", left.error);
+    assert_eq!(left.result.expect("leave").outcome, SessionOutcome::Left);
+    server.tick_once().await;
+    assert_eq!(glyph_at(&server, Pos::new(3, 2)).await, Some('\''));
+    let status_b = server.status(&token_b).await;
+    let texts = event_texts(&status_b.events);
+    assert!(
+        texts
+            .iter()
+            .any(|text| text.contains("opened automatically")),
+        "dev-b sees the automatic open: {texts:?}"
+    );
+}
+
+#[tokio::test]
+async fn wait_wakes_on_use_progress_and_door_change() {
+    let server = open_with_map(&fresh_dir("wait-use"), Config::default(), ROOM_MAP);
+    let (token, _) = register(&server, "dev-a").await;
+    join(&server, &token).await;
+    move_path(&server, &token, "NW").await;
+    let closed = door_at(&server, &token, Dir::E, false).await;
+    assert!(closed.ok, "{:?}", closed.error);
+    tick_n(&server, 1).await;
+
+    let queued = server.use_cmd(&token).await;
+    assert!(queued.ok, "{:?}", queued.error);
+    let ticker = {
+        let server = server.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(150)).await;
+            server.tick_once().await;
+        })
+    };
+    let waited = server
+        .wait(
+            &token,
+            WaitRequest {
+                timeout_seconds: Some(3.0),
+            },
+        )
+        .await;
+    ticker.await.expect("ticker task");
+    assert_eq!(waited.result.expect("wait result").woke, WaitWake::Event);
+    let texts = event_texts(&waited.events);
+    assert!(
+        texts
+            .iter()
+            .any(|text| text.contains("is using the level 1 toilet")),
+        "woke on use progress: {texts:?}"
+    );
+
+    let opened = door_at(&server, &token, Dir::E, true).await;
+    assert!(opened.ok, "{:?}", opened.error);
+    let ticker = {
+        let server = server.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(150)).await;
+            server.tick_once().await;
+        })
+    };
+    let waited = server
+        .wait(
+            &token,
+            WaitRequest {
+                timeout_seconds: Some(3.0),
+            },
+        )
+        .await;
+    ticker.await.expect("ticker task");
+    assert_eq!(waited.result.expect("wait result").woke, WaitWake::Event);
+    let texts = event_texts(&waited.events);
+    assert!(
+        texts.iter().any(|text| text.contains("opened the door")),
+        "woke on the door change: {texts:?}"
+    );
+}
+
+#[tokio::test]
+async fn leave_and_cancel_are_ok_for_waiting_and_inside_agents() {
+    let server = open_with_map(&fresh_dir("leave-cancel"), Config::default(), ROOM_MAP);
+    let (token_a, _) = register(&server, "dev-a").await;
+    let (token_b, _) = register(&server, "dev-b").await;
+    let (token_c, _) = register(&server, "dev-c").await;
+
+    join(&server, &token_a).await;
+    let queued_join = join(&server, &token_b).await;
+    assert!(matches!(
+        queued_join.result.expect("join").placement,
+        Placement::Waiting { ahead: 0 }
+    ));
+
+    let waiting_leave: Envelope<LeaveResponse> = server.leave_cmd(&token_b).await;
+    assert!(waiting_leave.ok, "{:?}", waiting_leave.error);
+    let result = waiting_leave.result.expect("leave result");
+    assert_eq!(result.outcome, SessionOutcome::Left);
+    assert_eq!(result.score, 0);
+    assert!(
+        server
+            .status(&token_b)
+            .await
+            .state
+            .expect("state")
+            .session_id
+            .is_none(),
+        "the waiting session is gone"
+    );
+
+    let no_action = server.cancel_cmd(&token_a).await;
+    assert!(no_action.ok, "{:?}", no_action.error);
+    let action = no_action.result.expect("cancel result").action;
+    assert_eq!(action.description, "cancel");
+    assert_eq!(action.remaining, 0);
+
+    let outside: Envelope<ActionQueued> = server.cancel_cmd(&token_c).await;
+    assert!(outside.ok, "cancel needs no session");
+
+    let outside_build = server
+        .build_cmd(
+            &token_c,
+            BuildRequest {
+                kind: BuildKind::Wall,
+                target: TargetSpec::Here,
+            },
+        )
+        .await;
+    assert!(!outside_build.ok, "building requires an inside session");
+    let error = outside_build.error.expect("error");
+    assert_eq!(error.code, ErrorCode::RuleRejected);
+    assert!(
+        error.message.contains("not in the world"),
+        "{}",
+        error.message
+    );
+
+    let rejected: Envelope<LeaveResponse> = server.leave_cmd(&token_c).await;
+    assert!(!rejected.ok);
+    let error = rejected.error.expect("error");
+    assert_eq!(error.code, ErrorCode::RuleRejected);
+    assert!(
+        error.message.contains("not in the world"),
+        "message: {}",
+        error.message
+    );
+}
+
+#[tokio::test]
+async fn restart_restores_need_deadline_use_and_recovery_without_snapshot() {
+    let name = "restart-need";
+    let mut cfg = Config::default();
+    cfg.persist.snapshot_interval_ticks = 1000;
+    let dir = fresh_dir(name);
+    let server = open_with_map(&dir, cfg.clone(), ROOM_MAP);
+    let (token, _) = register(&server, "dev-a").await;
+    join(&server, &token).await;
+    move_path(&server, &token, "NW").await;
+    let closed = door_at(&server, &token, Dir::E, false).await;
+    assert!(closed.ok, "{:?}", closed.error);
+    tick_n(&server, 1).await;
+    let queued = server.use_cmd(&token).await;
+    assert!(queued.ok, "{:?}", queued.error);
+    tick_n(&server, 2).await;
+    let cancelled = server.cancel_cmd(&token).await;
+    assert!(cancelled.ok, "{:?}", cancelled.error);
+    tick_n(&server, 1).await;
+
+    let before = server.status(&token).await.state.expect("state");
+    assert!(before.need.is_some(), "a need was assigned at join");
+    assert_eq!(before.use_ticks_done, 2);
+    assert!(
+        before.recovery_deadline.is_some(),
+        "cancel opens a recovery window"
+    );
+
+    let store = Store::open(&dir, "test", ROOM_MAP, 7).expect("second handle opens");
+    assert!(
+        store
+            .latest_snapshot()
+            .expect("snapshots readable")
+            .is_none(),
+        "the state must come from the event log alone"
+    );
+    drop(store);
+    drop(server);
+
+    let def = map::parse(ROOM_MAP).expect("test map parses");
+    let server = open_existing(name, cfg, def, ROOM_MAP);
+    let after = server.status(&token).await.state.expect("state");
+    assert_eq!(after.need, before.need);
+    assert_eq!(after.deadline_tick, before.deadline_tick);
+    assert_eq!(after.use_ticks_done, before.use_ticks_done);
+    assert_eq!(after.use_ticks_total, before.use_ticks_total);
+    assert_eq!(after.recovery_deadline, before.recovery_deadline);
+    assert_eq!(after.score, before.score);
+    assert_eq!(after.outcome, before.outcome);
+}
+
+#[tokio::test]
+async fn state_exposes_need_deadline_use_and_score() {
+    let server = open_with_map(&fresh_dir("state-fields"), Config::default(), ROOM_MAP);
+    let (token, _) = register(&server, "dev-a").await;
+    join(&server, &token).await;
+    move_path(&server, &token, "NW").await;
+    let closed = door_at(&server, &token, Dir::E, false).await;
+    assert!(closed.ok, "{:?}", closed.error);
+    tick_n(&server, 1).await;
+
+    let before = server.status(&token).await.state.expect("state");
+    let need = before.need.expect("need");
+    let expected_total = match need {
+        Need::Urine => 4,
+        Need::Feces => 8,
+    };
+    assert_eq!(before.use_ticks_total, expected_total);
+    assert_eq!(before.use_ticks_done, 0);
+    assert!(before.deadline_tick > before.tick);
+    assert_eq!(before.score, 0);
+    assert_eq!(before.outcome, None);
+
+    let queued = server.use_cmd(&token).await;
+    assert!(queued.ok, "{:?}", queued.error);
+    tick_n(&server, 2).await;
+    let during = server.status(&token).await.state.expect("state");
+    assert_eq!(during.need, Some(need));
+    assert_eq!(during.use_ticks_done, 2);
+    assert_eq!(during.use_ticks_total, expected_total);
+    assert_eq!(during.recovery_deadline, None);
+
+    let mut state = during;
+    for _ in 0..expected_total {
+        server.tick_once().await;
+        state = server.status(&token).await.state.expect("state");
+        if state.outcome.is_some() {
+            break;
+        }
+    }
+    assert_eq!(state.outcome, Some(SessionOutcome::Success));
+    assert!(state.score > 0, "score after success: {}", state.score);
+    assert_eq!(state.use_ticks_done, expected_total);
+}
+
+#[tokio::test]
+async fn look_and_map_show_built_object_glyphs() {
+    let server = open_with_map(&fresh_dir("glyphs"), Config::default(), WIDE_MAP);
+    let (token_a, _) = register(&server, "dev-a").await;
+    let (token_b, _) = register(&server, "dev-b").await;
+    join(&server, &token_a).await;
+
+    let queued = move_to(
+        &server,
+        &token_a,
+        MoveSpec::Steps {
+            dir: Dir::E,
+            count: 6,
+        },
+    )
+    .await;
+    assert!(queued.ok, "{:?}", queued.error);
+    server.tick_once().await;
+    join(&server, &token_b).await;
+    tick_n(&server, 5).await;
+    assert_eq!(
+        server.status(&token_a).await.state.expect("state").pos,
+        Some(Pos::new(7, 3))
+    );
+    assert_eq!(
+        server.status(&token_b).await.state.expect("state").pos,
+        Some(Pos::new(1, 3))
+    );
+
+    build_and_settle(
+        &server,
+        &token_a,
+        BuildKind::Toilet,
+        TargetSpec::Here,
+        Pos::new(7, 3),
+        '1',
+    )
+    .await;
+    build_and_settle(
+        &server,
+        &token_a,
+        BuildKind::Wall,
+        TargetSpec::Dir(Dir::N),
+        Pos::new(7, 2),
+        '#',
+    )
+    .await;
+    build_and_settle(
+        &server,
+        &token_a,
+        BuildKind::Wall,
+        TargetSpec::Dir(Dir::E),
+        Pos::new(8, 3),
+        '#',
+    )
+    .await;
+    build_and_settle(
+        &server,
+        &token_a,
+        BuildKind::Door,
+        TargetSpec::Dir(Dir::W),
+        Pos::new(6, 3),
+        '+',
+    )
+    .await;
+
+    // dev-b walks east while dev-a starts a second toilet: dev-b first sees that
+    // cell while it is still a site, so its remembered map keeps the `x`.
+    let built = build_at(
+        &server,
+        &token_a,
+        BuildKind::Toilet,
+        TargetSpec::Dir(Dir::S),
+    )
+    .await;
+    assert!(built.ok, "{:?}", built.error);
+    let walked = move_to(
+        &server,
+        &token_b,
+        MoveSpec::Steps {
+            dir: Dir::E,
+            count: 2,
+        },
+    )
+    .await;
+    assert!(walked.ok, "{:?}", walked.error);
+    server.tick_once().await;
+    server.tick_once().await;
+
+    let look = server.look(&token_a).await.result.expect("look result");
+    let rows = look.grid.rows.join("\n");
+    for glyph in ['#', '+', 'x'] {
+        assert!(rows.contains(glyph), "look is missing {glyph:?}: {rows}");
+    }
+
+    let map = server.map_view(&token_b).await.result.expect("map result");
+    let rows = map.grid.rows.join("\n");
+    for glyph in ['#', '+', '1', 'x'] {
+        assert!(rows.contains(glyph), "map is missing {glyph:?}: {rows}");
+    }
+
+    // The second toilet completes on the next tick and shows up in the view.
+    server.tick_once().await;
+    let look = server.look(&token_a).await.result.expect("look result");
+    let rows = look.grid.rows.join("\n");
+    assert!(
+        rows.contains('1'),
+        "look is missing the finished toilet: {rows}"
+    );
+}
+
+#[tokio::test]
+async fn wait_delivers_session_ended_after_failure_and_success() {
+    // Failure: the deadline is two ticks after the join.
+    let mut cfg = Config::default();
+    cfg.need.deadline_ticks_min = 2;
+    cfg.need.deadline_ticks_max = 2;
+    let server = open_with_map(&fresh_dir("end-failed"), cfg, ROOM_MAP);
+    let (token, _) = register(&server, "dev-a").await;
+    join(&server, &token).await;
+    tick_n(&server, 2).await;
+    let waited = server
+        .wait(
+            &token,
+            WaitRequest {
+                timeout_seconds: Some(1.0),
+            },
+        )
+        .await;
+    assert_eq!(waited.result.expect("wait result").woke, WaitWake::Event);
+    let texts = event_texts(&waited.events);
+    assert!(
+        texts
+            .iter()
+            .any(|text| text.contains("failed: failed_deadline")),
+        "the failure is delivered: {texts:?}"
+    );
+    assert!(
+        texts
+            .iter()
+            .any(|text| text.contains("left the world: failed_deadline")),
+        "the session end is delivered: {texts:?}"
+    );
+    assert!(
+        waited.state.expect("state").session_id.is_none(),
+        "the session is gone"
+    );
+
+    // Success: the session lingers, then ends, and wait still reaches the agent.
+    let server = open_with_map(&fresh_dir("end-success"), Config::default(), ROOM_MAP);
+    let (token, _) = register(&server, "dev-a").await;
+    join(&server, &token).await;
+    move_path(&server, &token, "NW").await;
+    let closed = door_at(&server, &token, Dir::E, false).await;
+    assert!(closed.ok, "{:?}", closed.error);
+    tick_n(&server, 1).await;
+    let queued = server.use_cmd(&token).await;
+    assert!(queued.ok, "{:?}", queued.error);
+    for _ in 0..12 {
+        server.tick_once().await;
+        let state = server.status(&token).await.state.expect("state");
+        if state.outcome == Some(SessionOutcome::Success) {
+            break;
+        }
+    }
+    // Let the linger expire without draining the outbox.
+    tick_n(&server, 40).await;
+    let waited = server
+        .wait(
+            &token,
+            WaitRequest {
+                timeout_seconds: Some(1.0),
+            },
+        )
+        .await;
+    assert_eq!(waited.result.expect("wait result").woke, WaitWake::Event);
+    let texts = event_texts(&waited.events);
+    assert!(
+        texts
+            .iter()
+            .any(|text| text.contains("left the world: success")),
+        "the success session end is delivered: {texts:?}"
+    );
+    assert!(waited.state.expect("state").session_id.is_none());
 }
