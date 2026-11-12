@@ -11,8 +11,58 @@ use std::collections::BTreeMap;
 
 const DEFAULT_MAP: &str = include_str!("../../../maps/default.txt");
 
+/// Test maps describe the field only; give their entrance a physical queue so
+/// a join that arrives while it is occupied has somewhere to wait. Two rows are
+/// inserted right below the entrance row: the primary lane running east from
+/// under the entrance, then the overflow lane below it. A map that already
+/// declares queue cells is used verbatim.
+fn with_queue(text: &str) -> String {
+    let mut lines = text.lines();
+    let mut prefix: Vec<&str> = Vec::new();
+    let mut rows: Vec<String> = Vec::new();
+    let mut seen_grid = false;
+    for line in lines.by_ref() {
+        if !seen_grid {
+            if line.trim() == "grid" {
+                seen_grid = true;
+            } else {
+                prefix.push(line);
+            }
+            continue;
+        }
+        if !line.trim().is_empty() {
+            rows.push(line.to_string());
+        }
+    }
+    if rows
+        .iter()
+        .any(|row| row.contains('q') || row.contains('r'))
+    {
+        return text.to_string();
+    }
+    let width = rows.first().map_or(0, |row| row.chars().count());
+    let entrance = rows
+        .iter()
+        .enumerate()
+        .find_map(|(y, row)| row.chars().position(|ch| ch == 'E').map(|x| (x, y)))
+        .expect("test map has an entrance");
+    let (ex, ey) = entrance;
+    let lane = |ch: char| format!("{}{}", "#".repeat(ex), ch.to_string().repeat(width - ex));
+    rows.insert(ey + 1, lane('q'));
+    rows.insert(ey + 2, lane('r'));
+    let mut out = prefix.join("\n");
+    if !out.is_empty() {
+        out.push('\n');
+    }
+    out.push_str("grid\n");
+    out.push_str(&rows.join("\n"));
+    out.push('\n');
+    out
+}
+
 fn build(text: &str) -> WorldState {
-    WorldState::new(map::parse(text).expect("test map parses"))
+    let text = with_queue(text);
+    WorldState::new(map::parse(&text).expect("test map parses"))
 }
 
 fn nick(name: &str) -> Nick {
@@ -248,13 +298,20 @@ fn entrance_takes_one_agent_and_the_queue_moves_up() {
     let world = join_agent(&world, &cfg, 2, "dev-2");
     assert_eq!(world.sessions[&20].status, SessionStatus::Waiting);
     assert_eq!(world.entry_queue.len(), 1);
-    assert!(world.agents[&2].pos.is_none(), "second agent waits outside");
+    let queued = world.agents[&2].pos.expect("the waiter stands on a cell");
+    assert_eq!(
+        world.queue_lane(queued),
+        Some(loo_core::QueueLane::Primary),
+        "second agent waits on the primary lane"
+    );
+    assert_eq!(queued, Pos::new(1, 2), "right below the entrance");
 
     // dev-1 walks one cell east; dev-2 gets the entrance on the next tick,
     // because admission runs before movement within a tick.
     let (next, _) = step(&world, &[move_intent(1, &[Dir::E])], 3, &cfg);
-    assert!(
-        next.agents[&2].pos.is_none(),
+    assert_eq!(
+        next.agents[&2].pos,
+        Some(queued),
         "entrance was still taken at admission time"
     );
     let (next, events) = step(&next, &[], 4, &cfg);
@@ -365,16 +422,23 @@ fn look_is_a_centered_9x9_window() {
     assert_eq!(center_row[4], '@', "you are in the middle of your view");
     assert_eq!(view.pos, world.entrance);
     assert_eq!(view.grid.origin, Pos::new(view.pos.x - 4, view.pos.y - 4));
+    assert_eq!(view.grid.origin, Pos::new(27, 46), "the entrance is 31,50");
     assert!(
-        view.grid.rows.iter().any(|r| r.contains('?')),
-        "cells outside the map are unknown"
+        view.grid.rows.iter().all(|row| !row.contains('?')),
+        "the whole window sits inside the map"
     );
 }
 
 #[test]
 fn default_map_has_the_eight_starting_toilets() {
     let def = map::parse(DEFAULT_MAP).expect("default map parses");
-    assert_eq!((def.map.width(), def.map.height()), (100, 100));
+    assert_eq!((def.map.width(), def.map.height()), (130, 100));
+    assert_eq!(def.entrance, Pos::new(31, 50));
+    assert_eq!(
+        (def.queue_primary.len(), def.queue_overflow.len()),
+        (25, 25),
+        "the default map has 50 queue cells"
+    );
     let cfg = Config::default();
     let world = WorldState::new(def);
     let briefing = loo_core::briefing(&world, &cfg);
@@ -397,8 +461,9 @@ fn map_memory_only_grows_inside_the_view() {
     let cfg = Config::default();
     let world = join_agent(&build(DEFAULT_MAP), &cfg, 1, "dev-1");
     let memory = map_memory(&world, 1).expect("session exists");
-    // The entrance is 1 cell from the west edge, so the 9x9 window is clipped.
-    assert_eq!((memory.grid.width, memory.grid.height), (6, 9));
+    // The entrance at (31,50) is far from every edge, so the first window is
+    // the full 9x9.
+    assert_eq!((memory.grid.width, memory.grid.height), (9, 9));
     assert!(memory.seen_at.iter().flatten().all(|t| *t == 0));
 
     let mut next = world;
@@ -411,7 +476,7 @@ fn map_memory_only_grows_inside_the_view() {
         );
         next = stepped;
     }
-    assert_eq!(pos_of(&next, 1), Pos::new(6, 50));
+    assert_eq!(pos_of(&next, 1), Pos::new(36, 50));
     let memory = map_memory(&next, 1).expect("session exists");
     assert!(memory.grid.width > 9, "walking east widens the memory");
     assert!(memory.seen_at.iter().flatten().any(|t| *t == 1));
@@ -678,7 +743,10 @@ fn vision_never_leaks_outside_the_window() {
         memory.grid.width, 6,
         "the window is clipped at the west edge"
     );
-    assert_eq!(memory.grid.height, 3, "the map is only three rows tall");
+    assert_eq!(
+        memory.grid.height, 5,
+        "the map is five rows tall once its queue rows are counted"
+    );
     assert!(memory
         .seen_at
         .iter()
@@ -898,13 +966,17 @@ grid
     let mut world = join_agent(&build(map_text), &cfg, 1, "dev-1");
     world = join_agent(&world, &cfg, 2, "dev-2");
     world = join_agent(&world, &cfg, 3, "dev-3");
-    world.agents.get_mut(&2).expect("agent 2").stun_until = 10;
     let initial = world.clone();
     assert_eq!(initial.entry_queue.len(), 2, "two agents wait outside");
 
     let mut schedule: Vec<(u64, Vec<Intent>)> = (0..36u64).map(|t| (500 + t, Vec::new())).collect();
     schedule[0].1 = vec![labeled_move(1, &[Dir::W, Dir::W, Dir::W], "west three")];
     schedule[1].1 = vec![labeled_move(1, &[Dir::E, Dir::E], "east two")];
+    schedule[2].1 = vec![labeled_move(
+        1,
+        &[Dir::E],
+        "east into the occupied entrance",
+    )];
     schedule[4].1 = vec![labeled_move(3, &[Dir::S, Dir::S, Dir::S], "south three")];
     schedule[8].1 = vec![labeled_move(1, &[Dir::N, Dir::N, Dir::N], "north three")];
     schedule[12].1 = vec![labeled_move(2, &[Dir::W, Dir::W], "west two")];
@@ -937,13 +1009,6 @@ grid
             "the run must cover {kind}"
         );
     }
-    assert!(
-        events
-            .iter()
-            .any(|e| matches!(e.kind, EventKind::AgentSwapped { .. })),
-        "the run must cover a stun swap"
-    );
-
     // A snapshot taken from the log is grid-identical to the memory world.
     let json = serde_json::to_string(&midpoint).expect("world serialises");
     let snapshot: WorldState = serde_json::from_str(&json).expect("world deserialises");
@@ -1081,12 +1146,17 @@ fn join_events_replay_immediate_and_queued_entries() {
     .expect("second join");
     assert!(matches!(outcome_b, JoinOutcome::Waiting { ahead: 0 }));
     assert_eq!(joined.entry_queue.len(), 1);
-    assert_eq!(joined.agents[&2].pos, None);
+    assert_eq!(joined.agents[&2].pos, Some(Pos::new(1, 2)));
     assert_eq!(b_events.len(), 1, "a queued join has no need yet");
     assert_eq!((b_events[0].tick, b_events[0].seq), (0, 3));
     assert!(matches!(
         b_events[0].kind,
-        EventKind::Joined { at: None, .. }
+        EventKind::Joined {
+            at: Some(Pos { x: 1, y: 2 }),
+            inside: false,
+            ahead: 0,
+            ..
+        }
     ));
 
     let mut all = a_events.clone();

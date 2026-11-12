@@ -305,6 +305,8 @@ pub(crate) fn event_tag(event: &Event) -> EventTag {
         | EventKind::UseResumed { .. } => EventTag::Use,
         EventKind::AgentMoved { .. }
         | EventKind::AgentSwapped { .. }
+        | EventKind::QueueAdvanced { .. }
+        | EventKind::QueueTouched { .. }
         | EventKind::NeedAssigned { .. }
         | EventKind::DeadlineWarning { .. }
         | EventKind::Stunned { .. }

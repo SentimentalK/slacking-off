@@ -4,7 +4,7 @@
 //! the tick's shuffle seed, so a replay can be verified.
 
 use crate::config::Config;
-use crate::state::{Action, Object, SiteKind};
+use crate::state::{Action, Object, SessionStatus, SiteKind, WorldState};
 use loo_proto::{AgentId, Dir, Need, Pos, SessionId, SessionOutcome, Tick};
 use serde::{Deserialize, Serialize};
 
@@ -62,7 +62,7 @@ pub struct Event {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum EventKind {
     /// A session joined between ticks. `at` is the entrance for an immediate
-    /// entry, or `None` when the session queued outside.
+    /// entry, or the queue cell for a queued session.
     Joined {
         session: SessionId,
         agent: AgentId,
@@ -71,13 +71,38 @@ pub enum EventKind {
         /// Cumulative score this agent carries in, which sets its level.
         #[serde(default)]
         score_total: u32,
+        /// Whether the session entered the world at once or queued outside.
+        #[serde(default)]
+        inside: bool,
+        /// How many queued sessions stood between the queue head and this one.
+        #[serde(default)]
+        ahead: usize,
     },
-    /// A queued session got the entrance cell.
+    /// A queued session got the entrance cell. `from` is the queue cell it
+    /// left.
     EnteredWorld {
         session: SessionId,
         agent: AgentId,
         nick: String,
         at: Pos,
+        #[serde(default)]
+        from: Option<Pos>,
+    },
+    /// The primary queue compressed: a waiter moved up one or more cells.
+    QueueAdvanced {
+        session: SessionId,
+        agent: AgentId,
+        nick: String,
+        from: Pos,
+        to: Pos,
+    },
+    /// A queued session sent a command, which keeps it from being cleaned up
+    /// as idle.
+    QueueTouched {
+        session: SessionId,
+        agent: AgentId,
+        nick: String,
+        tick: Tick,
     },
     /// One cell of a move action.
     AgentMoved {
@@ -337,6 +362,8 @@ impl EventKind {
         match self {
             EventKind::Joined { .. } => "Joined",
             EventKind::EnteredWorld { .. } => "EnteredWorld",
+            EventKind::QueueAdvanced { .. } => "QueueAdvanced",
+            EventKind::QueueTouched { .. } => "QueueTouched",
             EventKind::AgentMoved { .. } => "AgentMoved",
             EventKind::AgentSwapped { .. } => "AgentSwapped",
             EventKind::ActionStarted { .. } => "ActionStarted",
@@ -380,8 +407,12 @@ pub enum Blocker {
     MapEdge,
     Wall,
     ClosedDoor,
-    Agent { nick: String },
+    Agent {
+        nick: String,
+    },
     Site,
+    /// A queued agent tried to step off the queue cells.
+    QueueBoundary,
 }
 
 impl Blocker {
@@ -392,6 +423,7 @@ impl Blocker {
             Blocker::ClosedDoor => "a closed door".to_string(),
             Blocker::Agent { nick } => format!("agent {nick}"),
             Blocker::Site => "an unfinished build site".to_string(),
+            Blocker::QueueBoundary => "the queue edge".to_string(),
         }
     }
 }
@@ -401,6 +433,8 @@ impl Event {
         match &self.kind {
             EventKind::Joined { agent, .. }
             | EventKind::EnteredWorld { agent, .. }
+            | EventKind::QueueAdvanced { agent, .. }
+            | EventKind::QueueTouched { agent, .. }
             | EventKind::AgentMoved { agent, .. }
             | EventKind::AgentSwapped { agent, .. }
             | EventKind::ActionStarted { agent, .. }
@@ -434,6 +468,7 @@ impl Event {
         match &self.kind {
             EventKind::Joined { at, .. } => *at,
             EventKind::EnteredWorld { at, .. } | EventKind::ActionFinished { at, .. } => Some(*at),
+            EventKind::QueueAdvanced { to, .. } => Some(*to),
             EventKind::AgentMoved { to, .. } | EventKind::AgentSwapped { to, .. } => Some(*to),
             EventKind::ObjectChanged { pos, .. } => Some(*pos),
             EventKind::UseStarted { pos, .. }
@@ -458,6 +493,7 @@ impl Event {
             | EventKind::DeadlineWarning { .. }
             | EventKind::DefendEnded { .. }
             | EventKind::Stunned { .. }
+            | EventKind::QueueTouched { .. }
             | EventKind::TickSettled => None,
         }
     }
@@ -466,12 +502,35 @@ impl Event {
     /// nicknames only, never another agent's free text (design §6).
     pub fn text(&self) -> String {
         match &self.kind {
-            EventKind::Joined { nick, at, .. } => match at {
-                Some(at) => format!("{nick} entered the world at {at}"),
-                None => format!("{nick} joined and waits outside the entrance"),
-            },
+            EventKind::Joined {
+                nick,
+                at,
+                inside,
+                ahead,
+                ..
+            } => {
+                if *inside {
+                    match at {
+                        Some(at) => format!("{nick} entered the world at {at}"),
+                        None => format!("{nick} entered the world"),
+                    }
+                } else {
+                    match at {
+                        Some(at) => format!(
+                            "{nick} joined the queue at {at} with {ahead} ahead"
+                        ),
+                        None => format!("{nick} joined and waits outside the entrance"),
+                    }
+                }
+            }
             EventKind::EnteredWorld { nick, at, .. } => {
                 format!("{nick} entered the world at {at}")
+            }
+            EventKind::QueueAdvanced {
+                nick, from, to, ..
+            } => format!("{nick} moved up the queue from {from} to {to}"),
+            EventKind::QueueTouched { nick, .. } => {
+                format!("{nick} checked in from the queue")
             }
             EventKind::AgentMoved { nick, from, to, .. } => {
                 format!("{nick} moved {from} -> {to}")
@@ -815,4 +874,29 @@ impl EventLog {
     pub(crate) fn into_vec(self) -> Vec<Event> {
         self.events
     }
+}
+
+/// Records that a queued session sent a command at `tick`, so the idle cleanup
+/// leaves it alone. The world itself does not change: the returned event is the
+/// record, and replaying it through `restore` updates `last_active_tick`.
+///
+/// Returns `None` for a session that is not queued or was already touched this
+/// tick.
+pub fn touch(world: &WorldState, agent: AgentId, tick: Tick) -> Option<Event> {
+    let session = world.session_of(agent)?;
+    if session.status != SessionStatus::Waiting || session.last_active_tick == tick {
+        return None;
+    }
+    let nick = world.agents.get(&agent)?.nick.to_string();
+    Some(Event {
+        tick,
+        seq: 0,
+        seed: 0,
+        kind: EventKind::QueueTouched {
+            session: session.id,
+            agent,
+            nick,
+            tick,
+        },
+    })
 }

@@ -9,14 +9,64 @@ use loo_proto::{Need, Nick, Pos};
 
 const FLOOR: &str = "\
 grid
+..........
+..........
+..........
 E.........
-..........
-..........
-..........
 ";
 
+/// Test maps describe the field only; give their entrance a physical queue so
+/// a join that arrives while it is occupied has somewhere to wait. Two rows are
+/// inserted right below the entrance row: the primary lane running east from
+/// under the entrance, then the overflow lane below it. A map that already
+/// declares queue cells is used verbatim.
+fn with_queue(text: &str) -> String {
+    let mut lines = text.lines();
+    let mut prefix: Vec<&str> = Vec::new();
+    let mut rows: Vec<String> = Vec::new();
+    let mut seen_grid = false;
+    for line in lines.by_ref() {
+        if !seen_grid {
+            if line.trim() == "grid" {
+                seen_grid = true;
+            } else {
+                prefix.push(line);
+            }
+            continue;
+        }
+        if !line.trim().is_empty() {
+            rows.push(line.to_string());
+        }
+    }
+    if rows
+        .iter()
+        .any(|row| row.contains('q') || row.contains('r'))
+    {
+        return text.to_string();
+    }
+    let width = rows.first().map_or(0, |row| row.chars().count());
+    let entrance = rows
+        .iter()
+        .enumerate()
+        .find_map(|(y, row)| row.chars().position(|ch| ch == 'E').map(|x| (x, y)))
+        .expect("test map has an entrance");
+    let (ex, ey) = entrance;
+    let lane = |ch: char| format!("{}{}", "#".repeat(ex), ch.to_string().repeat(width - ex));
+    rows.insert(ey + 1, lane('q'));
+    rows.insert(ey + 2, lane('r'));
+    let mut out = prefix.join("\n");
+    if !out.is_empty() {
+        out.push('\n');
+    }
+    out.push_str("grid\n");
+    out.push_str(&rows.join("\n"));
+    out.push('\n');
+    out
+}
+
 fn build(text: &str) -> WorldState {
-    WorldState::new(map::parse(text).expect("test map parses"))
+    let text = with_queue(text);
+    WorldState::new(map::parse(&text).expect("test map parses"))
 }
 
 fn nick(name: &str) -> Nick {
@@ -295,7 +345,7 @@ fn build_validation_rejects_occupied_targets_and_distances() {
 #[test]
 fn build_rejects_no_build_terrain_agent_cells_and_distance() {
     let cfg = Config::default();
-    let mut world = build("grid\nE:..\n....\n");
+    let mut world = build("grid\n.:..\nE...\n");
     world = claim(&world, &cfg, 1, "dev-1");
     place(&mut world, 1, Pos::new(2, 0));
 
@@ -320,7 +370,7 @@ fn build_rejects_no_build_terrain_agent_cells_and_distance() {
 fn demolishing_damages_wall_and_door_then_removes_them() {
     let cfg = Config::default();
 
-    let mut world = build("grid\nE........\n..#......\n.........\n");
+    let mut world = build("grid\n.........\n..#......\nE........\n");
     world = claim(&world, &cfg, 1, "dev-1");
     place(&mut world, 1, Pos::new(1, 1));
     let (first, events) = step(&world, &[demolish_intent(1, Pos::new(2, 1))], 1, &cfg);
@@ -342,7 +392,7 @@ fn demolishing_damages_wall_and_door_then_removes_them() {
     assert_eq!(second.object_at(Pos::new(2, 1)), None);
     assert!(second.agents[&1].action.is_none(), "the wall is gone");
 
-    let mut world = build("grid\nE........\n.+1......\n.........\n");
+    let mut world = build("grid\n.........\n.+1......\nE........\n");
     world = claim(&world, &cfg, 1, "dev-1");
     place(&mut world, 1, Pos::new(0, 1));
     world = claim(&world, &cfg, 2, "dev-2");
@@ -483,7 +533,7 @@ fn demolishing_a_site_takes_one_tick() {
 
 fn toilet_under_demolition(level: u8, progress: i32) -> (Config, WorldState) {
     let cfg = Config::default();
-    let mut world = build("grid\nE........\n.1.......\n.........\n");
+    let mut world = build("grid\n.........\n.1.......\nE........\n");
     world = claim(&world, &cfg, 1, "dev-1");
     place(&mut world, 1, Pos::new(1, 0));
     world.set_object(Pos::new(1, 1), Some(Object::Toilet { level, progress }));
@@ -544,7 +594,7 @@ fn demoting_a_toilet_walks_every_level_and_is_slower_than_level_one() {
 #[test]
 fn only_an_agent_on_an_adjacent_toilet_cell_may_work_the_door() {
     let cfg = Config::default();
-    let mut world = build("grid\nE........\n.1'......\n.........\n");
+    let mut world = build("grid\n.........\n.1'......\nE........\n");
     world = claim(&world, &cfg, 1, "dev-1");
     place(&mut world, 1, Pos::new(1, 1));
     assert!(validate_door(&world, 1, Pos::new(2, 1), false).is_ok());
@@ -597,7 +647,7 @@ fn only_an_agent_on_an_adjacent_toilet_cell_may_work_the_door() {
 #[test]
 fn doors_auto_open_unless_an_agent_sits_on_an_adjacent_toilet() {
     let cfg = Config::default();
-    let mut world = build("grid\nE........\n.1+......\n.........\n");
+    let mut world = build("grid\n.........\n.1+......\nE........\n");
     world = claim(&world, &cfg, 1, "dev-1");
 
     let (opened, events) = step(&world, &[], 1, &cfg);
@@ -664,7 +714,7 @@ fn doors_auto_open_unless_an_agent_sits_on_an_adjacent_toilet() {
 #[test]
 fn closing_a_door_with_someone_in_the_doorway_is_rejected() {
     let cfg = Config::default();
-    let mut world = build("grid\nE........\n.1'......\n.........\n");
+    let mut world = build("grid\n.........\n.1'......\nE........\n");
     world = claim(&world, &cfg, 1, "dev-1");
     place(&mut world, 1, Pos::new(1, 1));
     world = claim(&world, &cfg, 2, "dev-2");
@@ -695,7 +745,7 @@ fn closing_a_door_with_someone_in_the_doorway_is_rejected() {
 #[test]
 fn restore_rebuilds_objects_and_first_seen_glyphs() {
     let cfg = Config::default();
-    let mut world = build("grid\nE.........\n..........\n.1+.......\n..........\n");
+    let mut world = build("grid\n..........\n..........\n.1+.......\nE.........\n");
     world = claim(&world, &cfg, 1, "dev-1");
     place(&mut world, 1, Pos::new(4, 0));
     world = claim(&world, &cfg, 2, "dev-2");

@@ -11,7 +11,7 @@ use crate::rules::{
     validate_demolish, validate_door, validate_downgrade, validate_upgrade, validate_use,
 };
 use crate::state::{
-    is_stunned, Action, Agent, Object, Session, SessionStatus, SiteKind, WorldState,
+    is_stunned, Action, Agent, Object, QueueLane, Session, SessionStatus, SiteKind, WorldState,
 };
 use loo_proto::{AgentId, Dir, Need, Nick, Pos, SessionId, SessionOutcome};
 use serde::{Deserialize, Serialize};
@@ -72,11 +72,12 @@ pub enum IntentKind {
     Cancel,
 }
 
-/// Places a joining agent at the entrance, or queues it outside.
+/// Places a joining agent at the entrance, or on the last free queue cell.
 ///
-/// This step keeps the queue as an ordered list rather than map cells (the entity
-/// queue of design §4.11 is step 5), but the entrance rule is already the real
-/// one: one agent at a time, no overlap, no shoving.
+/// The entrance takes one agent at a time: when it is occupied (or the world is
+/// full) the session waits on a physical queue cell, primary lane first, then
+/// the overflow lane. A world with no free queue cell (or a capacity of zero)
+/// rejects the join with `QueueFull`.
 pub fn join(
     world: &WorldState,
     cmd: &JoinCommand,
@@ -106,31 +107,16 @@ pub fn join(
     let room = next.inside_count() < cfg.max_on_field;
 
     if room && entrance_free {
-        next.agents.insert(
-            cmd.agent,
-            Agent {
-                id: cmd.agent,
-                nick: cmd.nick.clone(),
-                pos: Some(next.entrance),
-                action: None,
-                stun_until: 0,
-                immunity_until: 0,
-                attack_cooldown_until: 0,
-                defend_cooldown_until: 0,
-                defending: None,
-                score_total: cmd.score_total,
-                level: agent_level(cmd.score_total, cfg),
-            },
-        );
-        next.sessions.insert(
+        next.agents
+            .insert(cmd.agent, new_agent(cmd, cfg, Some(next.entrance)));
+        let mut session = Session::fresh(
             cmd.session,
-            Session::fresh(
-                cmd.session,
-                cmd.agent,
-                SessionStatus::Inside,
-                Default::default(),
-            ),
+            cmd.agent,
+            SessionStatus::Inside,
+            Default::default(),
         );
+        session.last_active_tick = next.tick;
+        next.sessions.insert(cmd.session, session);
         next.mark_seen(
             cmd.session,
             next.entrance,
@@ -145,6 +131,8 @@ pub fn join(
             nick: cmd.nick.to_string(),
             at: Some(at),
             score_total: cmd.score_total,
+            inside: true,
+            ahead: 0,
         });
         if let Some(kind) = assign_need(&mut next, cmd.session, cfg, seed) {
             log.push(kind);
@@ -152,50 +140,80 @@ pub fn join(
         return Ok((next, JoinOutcome::Inside { at }, log.into_vec()));
     }
 
-    if next.entry_queue.len() >= cfg.session.queue_capacity {
-        return Err(JoinReject {
-            kind: JoinRejectKind::QueueFull,
-            message: format!(
-                "queue is full ({} already waiting); try again later",
-                cfg.session.queue_capacity
-            ),
-        });
+    let capacity = cfg.session.queue_capacity;
+    let waiting_count = next
+        .sessions
+        .values()
+        .filter(|session| session.status == SessionStatus::Waiting)
+        .count();
+    if waiting_count >= capacity {
+        return Err(queue_full(capacity));
     }
-    let ahead = next.entry_queue.len();
-    next.agents.insert(
-        cmd.agent,
-        Agent {
-            id: cmd.agent,
-            nick: cmd.nick.clone(),
-            pos: None,
-            action: None,
-            stun_until: 0,
-            immunity_until: 0,
-            attack_cooldown_until: 0,
-            defend_cooldown_until: 0,
-            defending: None,
-            score_total: cmd.score_total,
-            level: agent_level(cmd.score_total, cfg),
-        },
-    );
-    next.sessions.insert(
+    // The first free cell in global queue order; `ahead` counts the waiters
+    // standing between the queue head and that cell.
+    let mut ahead = 0;
+    let mut chosen = None;
+    for cell in next
+        .queue_primary
+        .iter()
+        .chain(next.queue_overflow.iter())
+        .take(capacity)
+    {
+        if next.agent_at(*cell).is_some() {
+            ahead += 1;
+        } else {
+            chosen = Some(*cell);
+            break;
+        }
+    }
+    let Some(cell) = chosen else {
+        return Err(queue_full(capacity));
+    };
+
+    next.agents
+        .insert(cmd.agent, new_agent(cmd, cfg, Some(cell)));
+    let mut session = Session::fresh(
         cmd.session,
-        Session::fresh(
-            cmd.session,
-            cmd.agent,
-            SessionStatus::Waiting,
-            Default::default(),
-        ),
+        cmd.agent,
+        SessionStatus::Waiting,
+        Default::default(),
     );
+    session.last_active_tick = next.tick;
+    next.sessions.insert(cmd.session, session);
     next.entry_queue.push_back(cmd.session);
     log.push(EventKind::Joined {
         session: cmd.session,
         agent: cmd.agent,
         nick: cmd.nick.to_string(),
-        at: None,
+        at: Some(cell),
         score_total: cmd.score_total,
+        inside: false,
+        ahead,
     });
     Ok((next, JoinOutcome::Waiting { ahead }, log.into_vec()))
+}
+
+fn queue_full(capacity: usize) -> JoinReject {
+    JoinReject {
+        kind: JoinRejectKind::QueueFull,
+        message: format!("queue is full ({capacity} waiting); try again later"),
+    }
+}
+
+fn new_agent(cmd: &JoinCommand, cfg: &Config, pos: Option<Pos>) -> Agent {
+    Agent {
+        id: cmd.agent,
+        nick: cmd.nick.clone(),
+        pos,
+        action: None,
+        stun_until: 0,
+        immunity_until: 0,
+        attack_cooldown_until: 0,
+        defend_cooldown_until: 0,
+        defending: None,
+        score_total: cmd.score_total,
+        level: agent_level(cmd.score_total, cfg),
+    }
 }
 
 /// Settles one tick: last tick's defence lapses, the queue moves up, then every
@@ -215,7 +233,12 @@ pub fn step(
     // Last tick's defence lapses before anything else settles.
     expire_defends(&mut next, &mut log);
 
-    admit_from_queue(&mut next, &mut log, cfg, seed);
+    // Queue housekeeping: abandon idle waiters, let at most one in, then close
+    // the gap the admission left behind. All of it happens before anyone acts,
+    // and every position change is an event, so a replay is exact.
+    cleanup_idle_queue(&mut next, &mut log, cfg);
+    admit_one_from_queue(&mut next, &mut log, cfg, seed);
+    compress_primary(&mut next, &mut log);
 
     let mut order: Vec<AgentId> = next
         .agents
@@ -242,6 +265,9 @@ pub fn step(
     auto_open_doors(&mut next, &mut log);
 
     mark_all_seen(&mut next, cfg);
+    // `entry_queue` is only a cache for readers like the projection; the
+    // physical queue cells decide the order.
+    next.rebuild_entry_queue();
 
     (next, log.into_vec())
 }
@@ -400,38 +426,149 @@ pub(crate) fn mark_all_seen(world: &mut WorldState, cfg: &Config) {
     }
 }
 
-fn admit_from_queue(world: &mut WorldState, log: &mut EventLog, cfg: &Config, seed: u64) {
-    loop {
-        if world.inside_count() >= cfg.max_on_field {
-            return;
-        }
-        let Some(&session_id) = world.entry_queue.front() else {
-            return;
-        };
-        let entrance = world.entrance;
-        if world.agent_at(entrance).is_some() {
-            return;
-        }
-        world.entry_queue.pop_front();
-        let Some(session) = world.sessions.get_mut(&session_id) else {
+/// Abandons queued sessions that have not sent a command for the configured
+/// idle time. Several may expire in one tick, in queue order. Each one ends as
+/// `Abandoned` at the cell it occupied, and the primary lane is compressed
+/// afterwards.
+fn cleanup_idle_queue(world: &mut WorldState, log: &mut EventLog, cfg: &Config) {
+    let idle = cfg.queue_idle_ticks();
+    let tick = world.tick;
+    let expired: Vec<SessionId> = world
+        .waiting_sessions()
+        .into_iter()
+        .filter(|session_id| {
+            world
+                .sessions
+                .get(session_id)
+                .is_some_and(|session| tick.saturating_sub(session.last_active_tick) >= idle)
+        })
+        .collect();
+    for session_id in expired {
+        let Some(session) = world.sessions.get(&session_id) else {
             continue;
         };
-        session.status = SessionStatus::Inside;
         let agent_id = session.agent;
-        let Some(agent) = world.agents.get_mut(&agent_id) else {
-            continue;
-        };
-        agent.pos = Some(entrance);
-        let nick = agent.nick.to_string();
-        log.push(EventKind::EnteredWorld {
+        let score = session.score;
+        let pos = world.agents.get(&agent_id).and_then(|agent| agent.pos);
+        let nick = world
+            .agents
+            .get(&agent_id)
+            .map(|agent| agent.nick.to_string())
+            .unwrap_or_default();
+        log.push(EventKind::SessionEnded {
             session: session_id,
             agent: agent_id,
             nick,
-            at: entrance,
+            pos,
+            outcome: SessionOutcome::Abandoned,
+            score,
         });
-        if let Some(kind) = assign_need(world, session_id, cfg, seed) {
-            log.push(kind);
+        remove_session(world, session_id);
+    }
+}
+
+/// Lets at most one queued session in per tick. The candidate is the head of
+/// the global queue: primary lane first, overflow only once the primary lane is
+/// empty. A stunned head keeps the queue still.
+fn admit_one_from_queue(world: &mut WorldState, log: &mut EventLog, cfg: &Config, seed: u64) {
+    if world.inside_count() >= cfg.max_on_field {
+        return;
+    }
+    let entrance = world.entrance;
+    if world.agent_at(entrance).is_some() {
+        return;
+    }
+    let Some(&session_id) = world.waiting_sessions().first() else {
+        return;
+    };
+    let Some(session) = world.sessions.get(&session_id) else {
+        return;
+    };
+    let agent_id = session.agent;
+    let Some(agent) = world.agents.get(&agent_id) else {
+        return;
+    };
+    let Some(from) = agent.pos else {
+        return;
+    };
+    let lane = world.queue_lane(from);
+    let primary_waiters = world.waiting_sessions().iter().any(|queued| {
+        world
+            .sessions
+            .get(queued)
+            .and_then(|session| world.agents.get(&session.agent))
+            .and_then(|agent| agent.pos)
+            .and_then(|pos| world.queue_lane(pos))
+            == Some(QueueLane::Primary)
+    });
+    match lane {
+        Some(QueueLane::Primary) => {}
+        Some(QueueLane::Overflow) => {
+            if primary_waiters {
+                return;
+            }
         }
+        None => return,
+    }
+    if is_stunned(agent, world.tick) {
+        return;
+    }
+    let nick = agent.nick.to_string();
+    if let Some(session) = world.sessions.get_mut(&session_id) {
+        session.status = SessionStatus::Inside;
+    }
+    if let Some(agent) = world.agents.get_mut(&agent_id) {
+        agent.pos = Some(entrance);
+    }
+    log.push(EventKind::EnteredWorld {
+        session: session_id,
+        agent: agent_id,
+        nick,
+        at: entrance,
+        from: Some(from),
+    });
+    if let Some(kind) = assign_need(world, session_id, cfg, seed) {
+        log.push(kind);
+    }
+}
+
+/// Packs the primary lane: every waiter still on it lands on cells
+/// `0..k-1` in its current order, and every move is a `QueueAdvanced` event.
+/// The overflow lane is never compressed.
+fn compress_primary(world: &mut WorldState, log: &mut EventLog) {
+    let mut index = 0;
+    for session_id in world.waiting_sessions() {
+        let Some(session) = world.sessions.get(&session_id) else {
+            continue;
+        };
+        let agent_id = session.agent;
+        let Some(agent) = world.agents.get(&agent_id) else {
+            continue;
+        };
+        let Some(from) = agent.pos else {
+            continue;
+        };
+        if world.queue_lane(from) != Some(QueueLane::Primary) {
+            continue;
+        }
+        let Some(&to) = world.queue_primary.get(index) else {
+            break;
+        };
+        index += 1;
+        if from == to {
+            continue;
+        }
+        let nick = agent.nick.to_string();
+        if let Some(agent) = world.agents.get_mut(&agent_id) {
+            agent.pos = Some(to);
+        }
+        log.push(EventKind::QueueAdvanced {
+            session: session_id,
+            agent: agent_id,
+            nick,
+            from,
+            to,
+        });
     }
 }
 
@@ -528,6 +665,30 @@ fn apply_intents(
             at: intent_target(&intent.kind).unwrap_or(pos),
             action: intent_action_name(&intent.kind).to_string(),
             reason: format!("you are stunned until tick {stun_until}; no action was taken"),
+        });
+        return;
+    }
+    // Outside the entrance only shoving and fighting make sense; everything
+    // else needs the world's walls and objects.
+    let waiting = world
+        .sessions
+        .get(&session)
+        .is_some_and(|entry| entry.status == SessionStatus::Waiting);
+    let allowed_in_queue = matches!(
+        intent.kind,
+        IntentKind::Move { .. }
+            | IntentKind::Attack { .. }
+            | IntentKind::Defend { .. }
+            | IntentKind::Cancel
+    );
+    if waiting && !allowed_in_queue {
+        log.push(EventKind::ActionRejected {
+            session,
+            agent: agent_id,
+            nick,
+            at: intent_target(&intent.kind).unwrap_or(pos),
+            action: intent_action_name(&intent.kind).to_string(),
+            reason: "排队中只能移动、攻击、防御或取消".to_string(),
         });
         return;
     }
@@ -1724,6 +1885,27 @@ fn advance_move(world: &mut WorldState, agent_id: AgentId, log: &mut EventLog) {
     };
 
     let target = pos.step(dir);
+    // A queued agent lives on the queue cells: one step off them is blocked
+    // like a wall, so nobody walks out of the line into the map.
+    let waiting = world
+        .session_of(agent_id)
+        .is_some_and(|session| session.status == SessionStatus::Waiting);
+    if waiting && world.queue_lane(target).is_none() {
+        end_action(
+            world,
+            log,
+            agent_id,
+            session,
+            nick,
+            pos,
+            Some(dir),
+            ActionOutcome::Blocked {
+                by: Blocker::QueueBoundary,
+            },
+            &action,
+        );
+        return;
+    }
     let object_blocker = if !world.map.in_bounds(target) {
         Some(Blocker::MapEdge)
     } else {
@@ -2151,5 +2333,8 @@ pub fn leave(
         score,
     });
     remove_session(&mut next, session_id);
+    // A waiter that leaves closes the gap it left behind.
+    compress_primary(&mut next, &mut log);
+    next.rebuild_entry_queue();
     Ok((next, outcome, score, log.into_vec()))
 }

@@ -223,6 +223,10 @@ pub struct Session {
     /// `seen`. Later object changes never overwrite it.
     #[serde(default, with = "seen_glyph_serde")]
     pub seen_glyph: BTreeMap<Pos, char>,
+    /// Last tick this session sent a command from the queue. A queued session
+    /// is abandoned once it has been idle for the configured queue idle time.
+    #[serde(default)]
+    pub last_active_tick: Tick,
 }
 
 impl Session {
@@ -248,6 +252,7 @@ impl Session {
             linger_until: None,
             warned_deadline: false,
             seen_glyph: BTreeMap::new(),
+            last_active_tick: 0,
         }
     }
 }
@@ -260,9 +265,26 @@ pub struct WorldState {
     pub agents: BTreeMap<AgentId, Agent>,
     pub sessions: BTreeMap<SessionId, Session>,
     pub entrance: Pos,
-    /// FIFO of sessions waiting outside the entrance. Step 5 replaces this with
-    /// queue cells on the map (design §2.1); this step only needs the order.
+    /// Primary queue lane as map cells, head (mouth next to the entrance)
+    /// first. Only an old snapshot can carry an empty lane: `map::parse`
+    /// rejects maps without one.
+    #[serde(default)]
+    pub queue_primary: Vec<Pos>,
+    /// Overflow queue lane, head first. Empty when the map has no overflow.
+    #[serde(default)]
+    pub queue_overflow: Vec<Pos>,
+    /// Derived cache: queued sessions in global queue order (primary lane,
+    /// then overflow lane, then anything outside the lanes by session id).
+    /// `rebuild_entry_queue` recomputes it; never treat it as the source of
+    /// truth for a session's position.
     pub entry_queue: VecDeque<SessionId>,
+}
+
+/// Which lane a queue cell belongs to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum QueueLane {
+    Primary,
+    Overflow,
 }
 
 impl WorldState {
@@ -274,8 +296,68 @@ impl WorldState {
             agents: BTreeMap::new(),
             sessions: BTreeMap::new(),
             entrance: def.entrance,
+            queue_primary: def.queue_primary,
+            queue_overflow: def.queue_overflow,
             entry_queue: VecDeque::new(),
         }
+    }
+
+    /// Which lane `pos` belongs to, if any.
+    pub fn queue_lane(&self, pos: Pos) -> Option<QueueLane> {
+        if self.queue_primary.contains(&pos) {
+            Some(QueueLane::Primary)
+        } else if self.queue_overflow.contains(&pos) {
+            Some(QueueLane::Overflow)
+        } else {
+            None
+        }
+    }
+
+    /// Position in the global queue: `0` is the head of the primary lane.
+    /// Overflow ranks continue after the whole primary lane. `None` when the
+    /// cell is not a queue cell.
+    pub fn queue_rank(&self, pos: Pos) -> Option<usize> {
+        if let Some(index) = self.queue_primary.iter().position(|cell| *cell == pos) {
+            Some(index)
+        } else {
+            self.queue_overflow
+                .iter()
+                .position(|cell| *cell == pos)
+                .map(|index| self.queue_primary.len() + index)
+        }
+    }
+
+    /// Every waiting session in global queue order. Waiters that stand on no
+    /// queue cell come last, ordered by session id so the order is total.
+    pub fn waiting_sessions(&self) -> Vec<SessionId> {
+        let mut waiting: Vec<(Option<usize>, SessionId)> = self
+            .sessions
+            .values()
+            .filter(|session| session.status == SessionStatus::Waiting)
+            .map(|session| {
+                let rank = self
+                    .agents
+                    .get(&session.agent)
+                    .and_then(|agent| agent.pos)
+                    .and_then(|pos| self.queue_rank(pos));
+                (rank, session.id)
+            })
+            .collect();
+        waiting.sort_by_key(|(rank, session)| (rank.is_none(), rank.unwrap_or(0), *session));
+        waiting.into_iter().map(|(_, session)| session).collect()
+    }
+
+    /// 1-based place in the queue, or `None` when the session is not waiting.
+    pub fn queue_position(&self, session: SessionId) -> Option<usize> {
+        self.waiting_sessions()
+            .iter()
+            .position(|queued| *queued == session)
+            .map(|index| index + 1)
+    }
+
+    /// Rebuilds `entry_queue` from the physical queue.
+    pub fn rebuild_entry_queue(&mut self) {
+        self.entry_queue = self.waiting_sessions().into();
     }
 
     pub fn object_at(&self, pos: Pos) -> Option<Object> {

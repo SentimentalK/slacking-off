@@ -143,6 +143,7 @@ pub fn restore(
                     format!("TickSettled has seq {}, expected 1", event.seq),
                 ));
             }
+            world.rebuild_entry_queue();
             current_tick = event.tick;
             world.tick = current_tick;
             tick_seed = event.seed;
@@ -171,6 +172,7 @@ pub fn restore(
     }
 
     mark_all_seen(&mut world, cfg);
+    world.rebuild_entry_queue();
     Ok(world)
 }
 
@@ -183,6 +185,8 @@ fn apply_event(world: &mut WorldState, event: &Event, cfg: &Config) -> Result<()
             nick,
             at,
             score_total,
+            inside,
+            ..
         } => {
             if world.agents.contains_key(agent) {
                 return Err(fail(event, format!("agent {agent} already exists")));
@@ -208,38 +212,28 @@ fn apply_event(world: &mut WorldState, event: &Event, cfg: &Config) -> Result<()
                     level: agent_level(*score_total, cfg),
                 },
             );
-            world.sessions.insert(
+            let mut fresh = Session::fresh(
                 *session,
-                Session::fresh(
-                    *session,
-                    *agent,
-                    if at.is_some() {
-                        SessionStatus::Inside
-                    } else {
-                        SessionStatus::Waiting
-                    },
-                    Default::default(),
-                ),
+                *agent,
+                if *inside {
+                    SessionStatus::Inside
+                } else {
+                    SessionStatus::Waiting
+                },
+                Default::default(),
             );
-            if at.is_none() {
-                world.entry_queue.push_back(*session);
-            }
+            // Joining counts as activity, whether the session entered at once
+            // or queued outside.
+            fresh.last_active_tick = event.tick;
+            world.sessions.insert(*session, fresh);
         }
         EventKind::EnteredWorld {
-            session, agent, at, ..
+            session,
+            agent,
+            at,
+            from,
+            ..
         } => {
-            match world.entry_queue.front() {
-                Some(front) if *front == *session => {}
-                other => {
-                    return Err(fail(
-                        event,
-                        format!(
-                            "session {session} entered the world but the queue front is {other:?}"
-                        ),
-                    ))
-                }
-            }
-            world.entry_queue.pop_front();
             let Some(entry) = world.sessions.get_mut(session) else {
                 return Err(fail(event, format!("session {session} does not exist")));
             };
@@ -247,7 +241,43 @@ fn apply_event(world: &mut WorldState, event: &Event, cfg: &Config) -> Result<()
             let Some(entry) = world.agents.get_mut(agent) else {
                 return Err(fail(event, format!("agent {agent} does not exist")));
             };
+            if let Some(from) = from {
+                if entry.pos != Some(*from) {
+                    return Err(fail(
+                        event,
+                        format!("agent {agent} is at {:?}, not {from}", entry.pos),
+                    ));
+                }
+            }
             entry.pos = Some(*at);
+        }
+        EventKind::QueueAdvanced {
+            agent, from, to, ..
+        } => {
+            let Some(entry) = world.agents.get_mut(agent) else {
+                return Err(fail(event, format!("agent {agent} does not exist")));
+            };
+            if entry.pos != Some(*from) {
+                return Err(fail(
+                    event,
+                    format!("agent {agent} is at {:?}, not {from}", entry.pos),
+                ));
+            }
+            entry.pos = Some(*to);
+        }
+        EventKind::QueueTouched {
+            session,
+            agent,
+            tick,
+            ..
+        } => {
+            let Some(entry) = world.sessions.get_mut(session) else {
+                return Err(fail(event, format!("session {session} does not exist")));
+            };
+            entry.last_active_tick = *tick;
+            if !world.agents.contains_key(agent) {
+                return Err(fail(event, format!("agent {agent} does not exist")));
+            }
         }
         EventKind::AgentMoved {
             session: _,

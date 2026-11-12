@@ -57,6 +57,18 @@ impl Config {
             .max(self.tick_seconds)
             .min(self.wait.max_seconds)
     }
+
+    /// Queue idle time in ticks: `queue_idle_seconds` rounded up to whole
+    /// ticks, never less than one.
+    pub fn queue_idle_ticks(&self) -> u64 {
+        let ticks = f64::from(self.session.queue_idle_seconds) / self.tick_seconds;
+        let ticks = ticks.ceil();
+        if ticks.is_finite() && ticks >= 1.0 {
+            ticks as u64
+        } else {
+            1
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -239,12 +251,18 @@ impl Default for WaitConfig {
 #[serde(default, deny_unknown_fields)]
 pub struct LimitsConfig {
     pub requests_per_second: u32,
+    /// Concurrent blocking `loo wait` connections.
+    pub wait_connections: usize,
+    /// Concurrent watch connections.
+    pub watch_connections: usize,
 }
 
 impl Default for LimitsConfig {
     fn default() -> Self {
         Self {
             requests_per_second: 2,
+            wait_connections: 256,
+            watch_connections: 128,
         }
     }
 }
@@ -293,6 +311,23 @@ mod tests {
             (cfg.wait.default_seconds, cfg.wait.max_seconds),
             (25.0, 55.0)
         );
+        assert_eq!(cfg.limits.requests_per_second, 2);
+        assert_eq!(cfg.limits.wait_connections, 256);
+        assert_eq!(cfg.limits.watch_connections, 128);
+    }
+
+    #[test]
+    fn queue_idle_ticks_round_up_and_never_reach_zero() {
+        let mut cfg = Config::default();
+        assert_eq!(cfg.queue_idle_ticks(), 12, "60 s of 5 s ticks");
+        cfg.tick_seconds = 1.0;
+        cfg.session.queue_idle_seconds = 2;
+        assert_eq!(cfg.queue_idle_ticks(), 2);
+        cfg.session.queue_idle_seconds = 3;
+        cfg.tick_seconds = 2.0;
+        assert_eq!(cfg.queue_idle_ticks(), 2, "1.5 ticks round up");
+        cfg.session.queue_idle_seconds = 0;
+        assert_eq!(cfg.queue_idle_ticks(), 1, "at least one tick");
     }
 
     #[test]
