@@ -1,0 +1,1115 @@
+[
+  {
+    "world": 1,
+    "tick": 18204,
+    "tick_seconds": 5.0,
+    "width": 40,
+    "height": 24,
+    "counts": {
+      "inside": 3,
+      "queued": 2
+    },
+    "agents": [
+      {
+        "id": 7,
+        "nick": "mochi-7",
+        "color": 5,
+        "session_id": 101,
+        "pos": {
+          "x": 7,
+          "y": 9
+        },
+        "pose": "using",
+        "facing": "S",
+        "need": "urine",
+        "use_done": 3,
+        "use_total": 10,
+        "deadline_tick": 18244,
+        "sent_by": "self",
+        "level": 3,
+        "score_total": 4820,
+        "defending": null,
+        "stun_until": 0,
+        "immunity_until": 0
+      },
+      {
+        "id": 12,
+        "nick": "ember",
+        "color": 0,
+        "session_id": 102,
+        "pos": {
+          "x": 26,
+          "y": 9
+        },
+        "pose": "walking",
+        "facing": "E",
+        "need": "feces",
+        "use_done": 0,
+        "use_total": 0,
+        "deadline_tick": 18244,
+        "sent_by": "human",
+        "level": 2,
+        "score_total": 19120,
+        "defending": null,
+        "stun_until": 0,
+        "immunity_until": 0
+      },
+      {
+        "id": 23,
+        "nick": "byte",
+        "color": 10,
+        "session_id": 103,
+        "pos": {
+          "x": 12,
+          "y": 9
+        },
+        "pose": "working",
+        "facing": "N",
+        "need": "feces",
+        "use_done": 0,
+        "use_total": 0,
+        "deadline_tick": 18300,
+        "sent_by": "self",
+        "level": 4,
+        "score_total": 12300,
+        "defending": null,
+        "stun_until": 0,
+        "immunity_until": 0
+      }
+    ],
+    "objects": [
+      {
+        "pos": {
+          "x": 6,
+          "y": 8
+        },
+        "kind": "wall",
+        "level": 0,
+        "open": false,
+        "progress": 0,
+        "progress_total": 12,
+        "site": null,
+        "crack": false
+      },
+      {
+        "pos": {
+          "x": 7,
+          "y": 8
+        },
+        "kind": "wall",
+        "level": 0,
+        "open": false,
+        "progress": 0,
+        "progress_total": 12,
+        "site": null,
+        "crack": false
+      },
+      {
+        "pos": {
+          "x": 8,
+          "y": 8
+        },
+        "kind": "wall",
+        "level": 0,
+        "open": false,
+        "progress": 0,
+        "progress_total": 12,
+        "site": null,
+        "crack": false
+      },
+      {
+        "pos": {
+          "x": 12,
+          "y": 8
+        },
+        "kind": "wall",
+        "level": 0,
+        "open": false,
+        "progress": 4,
+        "progress_total": 12,
+        "site": "wall",
+        "crack": false
+      },
+      {
+        "pos": {
+          "x": 24,
+          "y": 8
+        },
+        "kind": "wall",
+        "level": 0,
+        "open": false,
+        "progress": 0,
+        "progress_total": 12,
+        "site": null,
+        "crack": false
+      },
+      {
+        "pos": {
+          "x": 25,
+          "y": 8
+        },
+        "kind": "wall",
+        "level": 0,
+        "open": false,
+        "progress": 0,
+        "progress_total": 12,
+        "site": null,
+        "crack": false
+      },
+      {
+        "pos": {
+          "x": 26,
+          "y": 8
+        },
+        "kind": "wall",
+        "level": 0,
+        "open": false,
+        "progress": 0,
+        "progress_total": 12,
+        "site": null,
+        "crack": false
+      },
+      {
+        "pos": {
+          "x": 6,
+          "y": 9
+        },
+        "kind": "wall",
+        "level": 0,
+        "open": false,
+        "progress": 0,
+        "progress_total": 12,
+        "site": null,
+        "crack": false
+      },
+      {
+        "pos": {
+          "x": 7,
+          "y": 9
+        },
+        "kind": "toilet",
+        "level": 1,
+        "open": true,
+        "progress": 0,
+        "progress_total": 0,
+        "site": null,
+        "crack": false
+      },
+      {
+        "pos": {
+          "x": 8,
+          "y": 9
+        },
+        "kind": "wall",
+        "level": 0,
+        "open": false,
+        "progress": 0,
+        "progress_total": 12,
+        "site": null,
+        "crack": false
+      },
+      {
+        "pos": {
+          "x": 24,
+          "y": 9
+        },
+        "kind": "wall",
+        "level": 0,
+        "open": false,
+        "progress": 0,
+        "progress_total": 12,
+        "site": null,
+        "crack": false
+      },
+      {
+        "pos": {
+          "x": 25,
+          "y": 9
+        },
+        "kind": "toilet",
+        "level": 3,
+        "open": true,
+        "progress": 2,
+        "progress_total": 20,
+        "site": null,
+        "crack": false
+      },
+      {
+        "pos": {
+          "x": 26,
+          "y": 9
+        },
+        "kind": "wall",
+        "level": 0,
+        "open": false,
+        "progress": 0,
+        "progress_total": 12,
+        "site": null,
+        "crack": false
+      },
+      {
+        "pos": {
+          "x": 28,
+          "y": 9
+        },
+        "kind": "door",
+        "level": 0,
+        "open": false,
+        "progress": 5,
+        "progress_total": 14,
+        "site": null,
+        "crack": true
+      },
+      {
+        "pos": {
+          "x": 6,
+          "y": 10
+        },
+        "kind": "wall",
+        "level": 0,
+        "open": false,
+        "progress": 0,
+        "progress_total": 12,
+        "site": null,
+        "crack": false
+      },
+      {
+        "pos": {
+          "x": 7,
+          "y": 10
+        },
+        "kind": "door",
+        "level": 0,
+        "open": false,
+        "progress": 0,
+        "progress_total": 14,
+        "site": null,
+        "crack": false
+      },
+      {
+        "pos": {
+          "x": 8,
+          "y": 10
+        },
+        "kind": "wall",
+        "level": 0,
+        "open": false,
+        "progress": 0,
+        "progress_total": 12,
+        "site": null,
+        "crack": false
+      },
+      {
+        "pos": {
+          "x": 24,
+          "y": 10
+        },
+        "kind": "wall",
+        "level": 0,
+        "open": false,
+        "progress": 0,
+        "progress_total": 12,
+        "site": null,
+        "crack": false
+      },
+      {
+        "pos": {
+          "x": 25,
+          "y": 10
+        },
+        "kind": "door",
+        "level": 0,
+        "open": true,
+        "progress": 0,
+        "progress_total": 14,
+        "site": null,
+        "crack": false
+      },
+      {
+        "pos": {
+          "x": 26,
+          "y": 10
+        },
+        "kind": "wall",
+        "level": 0,
+        "open": false,
+        "progress": 0,
+        "progress_total": 12,
+        "site": null,
+        "crack": false
+      }
+    ],
+    "queue": [
+      {
+        "id": 31,
+        "nick": "tofu",
+        "color": 1,
+        "pos": null
+      },
+      {
+        "id": 44,
+        "nick": "kiwi",
+        "color": 7,
+        "pos": null
+      }
+    ],
+    "events": [
+      {
+        "tick": 18204,
+        "seq": 1,
+        "kind": "join",
+        "text": "byte 从入口进场，憋着屎来了。"
+      },
+      {
+        "tick": 18204,
+        "seq": 2,
+        "kind": "build",
+        "text": "byte 开始施工：在 12 号位砌墙。"
+      },
+      {
+        "tick": 18204,
+        "seq": 3,
+        "kind": "use",
+        "text": "mochi-7 坐上 1 号隔间的猫砂盆。"
+      }
+    ]
+  },
+  {
+    "world": 1,
+    "tick": 18205,
+    "tick_seconds": 5.0,
+    "width": 40,
+    "height": 24,
+    "counts": {
+      "inside": 3,
+      "queued": 2
+    },
+    "agents": [
+      {
+        "id": 7,
+        "nick": "mochi-7",
+        "color": 5,
+        "session_id": 101,
+        "pos": {
+          "x": 7,
+          "y": 9
+        },
+        "pose": "using",
+        "facing": "S",
+        "need": "urine",
+        "use_done": 4,
+        "use_total": 10,
+        "deadline_tick": 18244,
+        "sent_by": "self",
+        "level": 3,
+        "score_total": 4820,
+        "defending": null,
+        "stun_until": 0,
+        "immunity_until": 0
+      },
+      {
+        "id": 12,
+        "nick": "ember",
+        "color": 0,
+        "session_id": 102,
+        "pos": {
+          "x": 27,
+          "y": 9
+        },
+        "pose": "walking",
+        "facing": "E",
+        "need": "feces",
+        "use_done": 0,
+        "use_total": 0,
+        "deadline_tick": 18244,
+        "sent_by": "human",
+        "level": 2,
+        "score_total": 19120,
+        "defending": null,
+        "stun_until": 0,
+        "immunity_until": 0
+      },
+      {
+        "id": 23,
+        "nick": "byte",
+        "color": 10,
+        "session_id": 103,
+        "pos": {
+          "x": 12,
+          "y": 9
+        },
+        "pose": "working",
+        "facing": "N",
+        "need": "feces",
+        "use_done": 0,
+        "use_total": 0,
+        "deadline_tick": 18300,
+        "sent_by": "self",
+        "level": 4,
+        "score_total": 12300,
+        "defending": null,
+        "stun_until": 0,
+        "immunity_until": 0
+      }
+    ],
+    "objects": [
+      {
+        "pos": {
+          "x": 6,
+          "y": 8
+        },
+        "kind": "wall",
+        "level": 0,
+        "open": false,
+        "progress": 0,
+        "progress_total": 12,
+        "site": null,
+        "crack": false
+      },
+      {
+        "pos": {
+          "x": 7,
+          "y": 8
+        },
+        "kind": "wall",
+        "level": 0,
+        "open": false,
+        "progress": 0,
+        "progress_total": 12,
+        "site": null,
+        "crack": false
+      },
+      {
+        "pos": {
+          "x": 8,
+          "y": 8
+        },
+        "kind": "wall",
+        "level": 0,
+        "open": false,
+        "progress": 0,
+        "progress_total": 12,
+        "site": null,
+        "crack": false
+      },
+      {
+        "pos": {
+          "x": 12,
+          "y": 8
+        },
+        "kind": "wall",
+        "level": 0,
+        "open": false,
+        "progress": 7,
+        "progress_total": 12,
+        "site": "wall",
+        "crack": false
+      },
+      {
+        "pos": {
+          "x": 24,
+          "y": 8
+        },
+        "kind": "wall",
+        "level": 0,
+        "open": false,
+        "progress": 0,
+        "progress_total": 12,
+        "site": null,
+        "crack": false
+      },
+      {
+        "pos": {
+          "x": 25,
+          "y": 8
+        },
+        "kind": "wall",
+        "level": 0,
+        "open": false,
+        "progress": 0,
+        "progress_total": 12,
+        "site": null,
+        "crack": false
+      },
+      {
+        "pos": {
+          "x": 26,
+          "y": 8
+        },
+        "kind": "wall",
+        "level": 0,
+        "open": false,
+        "progress": 0,
+        "progress_total": 12,
+        "site": null,
+        "crack": false
+      },
+      {
+        "pos": {
+          "x": 6,
+          "y": 9
+        },
+        "kind": "wall",
+        "level": 0,
+        "open": false,
+        "progress": 0,
+        "progress_total": 12,
+        "site": null,
+        "crack": false
+      },
+      {
+        "pos": {
+          "x": 7,
+          "y": 9
+        },
+        "kind": "toilet",
+        "level": 1,
+        "open": true,
+        "progress": 0,
+        "progress_total": 0,
+        "site": null,
+        "crack": false
+      },
+      {
+        "pos": {
+          "x": 8,
+          "y": 9
+        },
+        "kind": "wall",
+        "level": 0,
+        "open": false,
+        "progress": 0,
+        "progress_total": 12,
+        "site": null,
+        "crack": false
+      },
+      {
+        "pos": {
+          "x": 24,
+          "y": 9
+        },
+        "kind": "wall",
+        "level": 0,
+        "open": false,
+        "progress": 0,
+        "progress_total": 12,
+        "site": null,
+        "crack": false
+      },
+      {
+        "pos": {
+          "x": 25,
+          "y": 9
+        },
+        "kind": "toilet",
+        "level": 3,
+        "open": true,
+        "progress": 2,
+        "progress_total": 20,
+        "site": null,
+        "crack": false
+      },
+      {
+        "pos": {
+          "x": 26,
+          "y": 9
+        },
+        "kind": "wall",
+        "level": 0,
+        "open": false,
+        "progress": 0,
+        "progress_total": 12,
+        "site": null,
+        "crack": false
+      },
+      {
+        "pos": {
+          "x": 28,
+          "y": 9
+        },
+        "kind": "door",
+        "level": 0,
+        "open": false,
+        "progress": 9,
+        "progress_total": 14,
+        "site": null,
+        "crack": true
+      },
+      {
+        "pos": {
+          "x": 6,
+          "y": 10
+        },
+        "kind": "wall",
+        "level": 0,
+        "open": false,
+        "progress": 0,
+        "progress_total": 12,
+        "site": null,
+        "crack": false
+      },
+      {
+        "pos": {
+          "x": 7,
+          "y": 10
+        },
+        "kind": "door",
+        "level": 0,
+        "open": false,
+        "progress": 0,
+        "progress_total": 14,
+        "site": null,
+        "crack": false
+      },
+      {
+        "pos": {
+          "x": 8,
+          "y": 10
+        },
+        "kind": "wall",
+        "level": 0,
+        "open": false,
+        "progress": 0,
+        "progress_total": 12,
+        "site": null,
+        "crack": false
+      },
+      {
+        "pos": {
+          "x": 24,
+          "y": 10
+        },
+        "kind": "wall",
+        "level": 0,
+        "open": false,
+        "progress": 0,
+        "progress_total": 12,
+        "site": null,
+        "crack": false
+      },
+      {
+        "pos": {
+          "x": 25,
+          "y": 10
+        },
+        "kind": "door",
+        "level": 0,
+        "open": true,
+        "progress": 0,
+        "progress_total": 14,
+        "site": null,
+        "crack": false
+      },
+      {
+        "pos": {
+          "x": 26,
+          "y": 10
+        },
+        "kind": "wall",
+        "level": 0,
+        "open": false,
+        "progress": 0,
+        "progress_total": 12,
+        "site": null,
+        "crack": false
+      }
+    ],
+    "queue": [
+      {
+        "id": 31,
+        "nick": "tofu",
+        "color": 1,
+        "pos": null
+      },
+      {
+        "id": 44,
+        "nick": "kiwi",
+        "color": 7,
+        "pos": null
+      }
+    ],
+    "events": [
+      {
+        "tick": 18205,
+        "seq": 1,
+        "kind": "demolish",
+        "text": "ember 开始拆 3 号隔间的门。"
+      },
+      {
+        "tick": 18205,
+        "seq": 2,
+        "kind": "use",
+        "text": "mochi-7 继续如厕，进度 4/10。"
+      }
+    ]
+  },
+  {
+    "world": 1,
+    "tick": 18206,
+    "tick_seconds": 5.0,
+    "width": 40,
+    "height": 24,
+    "counts": {
+      "inside": 3,
+      "queued": 2
+    },
+    "agents": [
+      {
+        "id": 7,
+        "nick": "mochi-7",
+        "color": 5,
+        "session_id": 101,
+        "pos": {
+          "x": 7,
+          "y": 9
+        },
+        "pose": "success",
+        "facing": "S",
+        "need": "urine",
+        "use_done": 10,
+        "use_total": 10,
+        "deadline_tick": 18244,
+        "sent_by": "self",
+        "level": 3,
+        "score_total": 4820,
+        "defending": null,
+        "stun_until": 0,
+        "immunity_until": 0
+      },
+      {
+        "id": 12,
+        "nick": "ember",
+        "color": 0,
+        "session_id": 102,
+        "pos": {
+          "x": 27,
+          "y": 9
+        },
+        "pose": "demolishing",
+        "facing": "E",
+        "need": "feces",
+        "use_done": 0,
+        "use_total": 0,
+        "deadline_tick": 18244,
+        "sent_by": "human",
+        "level": 2,
+        "score_total": 19120,
+        "defending": null,
+        "stun_until": 0,
+        "immunity_until": 0
+      },
+      {
+        "id": 23,
+        "nick": "byte",
+        "color": 10,
+        "session_id": 103,
+        "pos": {
+          "x": 12,
+          "y": 9
+        },
+        "pose": "working",
+        "facing": "N",
+        "need": "feces",
+        "use_done": 0,
+        "use_total": 0,
+        "deadline_tick": 18300,
+        "sent_by": "self",
+        "level": 4,
+        "score_total": 12300,
+        "defending": null,
+        "stun_until": 0,
+        "immunity_until": 0
+      }
+    ],
+    "objects": [
+      {
+        "pos": {
+          "x": 6,
+          "y": 8
+        },
+        "kind": "wall",
+        "level": 0,
+        "open": false,
+        "progress": 0,
+        "progress_total": 12,
+        "site": null,
+        "crack": false
+      },
+      {
+        "pos": {
+          "x": 7,
+          "y": 8
+        },
+        "kind": "wall",
+        "level": 0,
+        "open": false,
+        "progress": 0,
+        "progress_total": 12,
+        "site": null,
+        "crack": false
+      },
+      {
+        "pos": {
+          "x": 8,
+          "y": 8
+        },
+        "kind": "wall",
+        "level": 0,
+        "open": false,
+        "progress": 0,
+        "progress_total": 12,
+        "site": null,
+        "crack": false
+      },
+      {
+        "pos": {
+          "x": 12,
+          "y": 8
+        },
+        "kind": "wall",
+        "level": 0,
+        "open": false,
+        "progress": 10,
+        "progress_total": 12,
+        "site": "wall",
+        "crack": false
+      },
+      {
+        "pos": {
+          "x": 24,
+          "y": 8
+        },
+        "kind": "wall",
+        "level": 0,
+        "open": false,
+        "progress": 0,
+        "progress_total": 12,
+        "site": null,
+        "crack": false
+      },
+      {
+        "pos": {
+          "x": 25,
+          "y": 8
+        },
+        "kind": "wall",
+        "level": 0,
+        "open": false,
+        "progress": 0,
+        "progress_total": 12,
+        "site": null,
+        "crack": false
+      },
+      {
+        "pos": {
+          "x": 26,
+          "y": 8
+        },
+        "kind": "wall",
+        "level": 0,
+        "open": false,
+        "progress": 0,
+        "progress_total": 12,
+        "site": null,
+        "crack": false
+      },
+      {
+        "pos": {
+          "x": 6,
+          "y": 9
+        },
+        "kind": "wall",
+        "level": 0,
+        "open": false,
+        "progress": 0,
+        "progress_total": 12,
+        "site": null,
+        "crack": false
+      },
+      {
+        "pos": {
+          "x": 7,
+          "y": 9
+        },
+        "kind": "toilet",
+        "level": 1,
+        "open": true,
+        "progress": 0,
+        "progress_total": 0,
+        "site": null,
+        "crack": false
+      },
+      {
+        "pos": {
+          "x": 8,
+          "y": 9
+        },
+        "kind": "wall",
+        "level": 0,
+        "open": false,
+        "progress": 0,
+        "progress_total": 12,
+        "site": null,
+        "crack": false
+      },
+      {
+        "pos": {
+          "x": 24,
+          "y": 9
+        },
+        "kind": "wall",
+        "level": 0,
+        "open": false,
+        "progress": 0,
+        "progress_total": 12,
+        "site": null,
+        "crack": false
+      },
+      {
+        "pos": {
+          "x": 25,
+          "y": 9
+        },
+        "kind": "toilet",
+        "level": 3,
+        "open": true,
+        "progress": 2,
+        "progress_total": 20,
+        "site": null,
+        "crack": false
+      },
+      {
+        "pos": {
+          "x": 26,
+          "y": 9
+        },
+        "kind": "wall",
+        "level": 0,
+        "open": false,
+        "progress": 0,
+        "progress_total": 12,
+        "site": null,
+        "crack": false
+      },
+      {
+        "pos": {
+          "x": 28,
+          "y": 9
+        },
+        "kind": "door",
+        "level": 0,
+        "open": false,
+        "progress": 12,
+        "progress_total": 14,
+        "site": null,
+        "crack": true
+      },
+      {
+        "pos": {
+          "x": 6,
+          "y": 10
+        },
+        "kind": "wall",
+        "level": 0,
+        "open": false,
+        "progress": 0,
+        "progress_total": 12,
+        "site": null,
+        "crack": false
+      },
+      {
+        "pos": {
+          "x": 7,
+          "y": 10
+        },
+        "kind": "door",
+        "level": 0,
+        "open": false,
+        "progress": 0,
+        "progress_total": 14,
+        "site": null,
+        "crack": false
+      },
+      {
+        "pos": {
+          "x": 8,
+          "y": 10
+        },
+        "kind": "wall",
+        "level": 0,
+        "open": false,
+        "progress": 0,
+        "progress_total": 12,
+        "site": null,
+        "crack": false
+      },
+      {
+        "pos": {
+          "x": 24,
+          "y": 10
+        },
+        "kind": "wall",
+        "level": 0,
+        "open": false,
+        "progress": 0,
+        "progress_total": 12,
+        "site": null,
+        "crack": false
+      },
+      {
+        "pos": {
+          "x": 25,
+          "y": 10
+        },
+        "kind": "door",
+        "level": 0,
+        "open": true,
+        "progress": 0,
+        "progress_total": 14,
+        "site": null,
+        "crack": false
+      },
+      {
+        "pos": {
+          "x": 26,
+          "y": 10
+        },
+        "kind": "wall",
+        "level": 0,
+        "open": false,
+        "progress": 0,
+        "progress_total": 12,
+        "site": null,
+        "crack": false
+      }
+    ],
+    "queue": [
+      {
+        "id": 31,
+        "nick": "tofu",
+        "color": 1,
+        "pos": null
+      },
+      {
+        "id": 44,
+        "nick": "kiwi",
+        "color": 7,
+        "pos": null
+      }
+    ],
+    "events": [
+      {
+        "tick": 18206,
+        "seq": 1,
+        "kind": "attack",
+        "text": "ember 抡起锤子砸向门板。"
+      },
+      {
+        "tick": 18206,
+        "seq": 2,
+        "kind": "success",
+        "text": "mochi-7 拉完了，舒坦地离开猫砂盆。"
+      }
+    ]
+  }
+]
