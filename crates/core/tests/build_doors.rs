@@ -891,3 +891,56 @@ fn cancel_stops_an_action_without_changing_the_world() {
         }
     )));
 }
+
+#[test]
+fn a_deadline_failure_opens_the_stall_door_in_the_same_tick() {
+    let cfg = Config::default();
+    let mut world = build(STALL);
+    world = claim(&world, &cfg, 1, "dev-1");
+    place(&mut world, 1, STALL_TOILET);
+    let session = world.session_of(1).expect("session").id;
+    let entry = world.sessions.get_mut(&session).expect("session");
+    entry.need = Some(Need::Feces);
+    entry.deadline = 1;
+    assert_eq!(
+        world.object_at(STALL_DOOR),
+        Some(Object::Door {
+            open: false,
+            damage: 0
+        })
+    );
+
+    let (end, events) = step(&world, &[], 1, &cfg);
+    assert!(end.sessions.is_empty(), "the deadline ends the session");
+    assert!(end.agents.is_empty());
+    assert_eq!(
+        end.object_at(STALL_DOOR),
+        Some(Object::Door {
+            open: true,
+            damage: 0
+        }),
+        "the door opens in the same tick the person disappears"
+    );
+    let failed_seq = events
+        .iter()
+        .find(|event| matches!(event.kind, EventKind::UseFailed { .. }))
+        .expect("the failure is recorded")
+        .seq;
+    let door_seq = events
+        .iter()
+        .find(|event| {
+            matches!(
+                event.kind,
+                EventKind::ObjectChanged {
+                    cause: ObjectCause::AutoOpened,
+                    ..
+                }
+            )
+        })
+        .expect("the automatic open is recorded")
+        .seq;
+    assert!(
+        failed_seq < door_seq,
+        "the person goes before the door opens"
+    );
+}

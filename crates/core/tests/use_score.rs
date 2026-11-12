@@ -896,3 +896,35 @@ fn a_full_need_and_use_log_restores_the_world_exactly() {
         );
     }
 }
+
+#[test]
+fn a_resume_on_the_last_recovery_tick_still_counts() {
+    let cfg = Config::default();
+    let (world, _) = claim(&build(TOILETS), &cfg, 1);
+    let world = armed(&world, 1, FIVE, Need::Feces, 1000);
+    let (world, _) = run(&world, &[use_intent(1, FIVE)], 2, &cfg);
+    let (world, _) = run(&world, &[cancel_intent(1)], 1, &cfg);
+    assert_eq!(
+        world.session_of(1).expect("session").recovery_deadline,
+        Some(15),
+        "cancel at tick 3 opens a 12 tick window"
+    );
+
+    let (world, _) = run(&world, &[], 11, &cfg);
+    assert_eq!(world.tick, 14, "the window is still open the tick before");
+    let (world, events) = run(&world, &[use_intent(1, FIVE)], 1, &cfg);
+    let session = world
+        .session_of(1)
+        .expect("the last window tick may still resume");
+    assert_eq!(
+        session.recovery_deadline, None,
+        "the resume clears the window"
+    );
+    assert_eq!(session.use_ticks_done, 3, "the resumed tick adds progress");
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event.kind, EventKind::UseFailed { .. })),
+        "a resume on the last tick is not a failure"
+    );
+}
