@@ -236,6 +236,7 @@ async fn register(
 
 async fn auth_register(
     State(app): State<Arc<AppState>>,
+    headers: HeaderMap,
     body: Option<Json<AuthRegisterRequest>>,
 ) -> Response {
     if !app.server.official() {
@@ -270,7 +271,7 @@ async fn auth_register(
         };
         return respond_status(status, env);
     }
-    let cookies = match begin_session(&app, &body.username) {
+    let cookies = match begin_session(&app, &body.username, forwarded_https(&headers)) {
         Ok(cookies) => cookies,
         Err(response) => return *response,
     };
@@ -279,6 +280,7 @@ async fn auth_register(
 
 async fn auth_login(
     State(app): State<Arc<AppState>>,
+    headers: HeaderMap,
     body: Option<Json<AuthLoginRequest>>,
 ) -> Response {
     if !app.server.official() {
@@ -294,7 +296,7 @@ async fn auth_login(
     if !env.ok {
         return respond(env);
     }
-    let cookies = match begin_session(&app, &body.username) {
+    let cookies = match begin_session(&app, &body.username, forwarded_https(&headers)) {
         Ok(cookies) => cookies,
         Err(response) => return *response,
     };
@@ -317,7 +319,7 @@ async fn auth_logout(State(app): State<Arc<AppState>>, headers: HeaderMap) -> Re
     }
     with_cookies(
         respond(Envelope::ok(serde_json::json!({}), Vec::new(), None)),
-        &clear_cookies(),
+        &clear_cookies(forwarded_https(&headers)),
     )
 }
 
@@ -938,7 +940,11 @@ fn session_user(app: &AppState, headers: &HeaderMap) -> Result<u64, Box<Response
 }
 
 /// A fresh session id, stored hashed, mirrored into both cookies.
-fn begin_session(app: &AppState, username: &str) -> Result<Vec<String>, Box<Response>> {
+fn begin_session(
+    app: &AppState,
+    username: &str,
+    secure: bool,
+) -> Result<Vec<String>, Box<Response>> {
     let user_id = match app.server.store().user_by_username(username) {
         Ok(Some((user_id, _))) => user_id,
         Ok(None) => {
@@ -962,23 +968,46 @@ fn begin_session(app: &AppState, username: &str) -> Result<Vec<String>, Box<Resp
             "storing the session failed: {error}"
         ))));
     }
-    Ok(session_cookies(&session))
+    Ok(session_cookies(&session, secure))
 }
 
-fn session_cookies(session: &str) -> Vec<String> {
+fn secure_suffix(secure: bool) -> &'static str {
+    if secure {
+        "; Secure"
+    } else {
+        ""
+    }
+}
+
+fn session_cookies(session: &str, secure: bool) -> Vec<String> {
+    let secure = secure_suffix(secure);
     vec![
         format!(
-            "{SESSION_COOKIE}={session}; HttpOnly; Path=/; SameSite=Lax; Max-Age={SESSION_MAX_AGE}"
+            "{SESSION_COOKIE}={session}; HttpOnly; Path=/; SameSite=Lax; Max-Age={SESSION_MAX_AGE}{secure}"
         ),
-        format!("{CSRF_COOKIE}={session}; Path=/; SameSite=Lax; Max-Age={SESSION_MAX_AGE}"),
+        format!("{CSRF_COOKIE}={session}; Path=/; SameSite=Lax; Max-Age={SESSION_MAX_AGE}{secure}"),
     ]
 }
 
-fn clear_cookies() -> Vec<String> {
+fn clear_cookies(secure: bool) -> Vec<String> {
+    let secure = secure_suffix(secure);
     vec![
-        format!("{SESSION_COOKIE}=; HttpOnly; Path=/; SameSite=Lax; Max-Age=0"),
-        format!("{CSRF_COOKIE}=; Path=/; SameSite=Lax; Max-Age=0"),
+        format!("{SESSION_COOKIE}=; HttpOnly; Path=/; SameSite=Lax; Max-Age=0{secure}"),
+        format!("{CSRF_COOKIE}=; Path=/; SameSite=Lax; Max-Age=0{secure}"),
     ]
+}
+
+/// Traefik/Cloudflare terminate TLS in front of the process. Honour the
+/// forwarded scheme so install commands point at HTTPS and session cookies are
+/// marked `Secure` in production; a plain dev server without the header keeps
+/// the old HTTP behaviour.
+fn forwarded_https(headers: &HeaderMap) -> bool {
+    headers
+        .get("x-forwarded-proto")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(',').next())
+        .map(|value| value.trim().eq_ignore_ascii_case("https"))
+        .unwrap_or(false)
 }
 
 fn request_base(headers: &HeaderMap) -> Result<String, Box<Response>> {
@@ -993,7 +1022,12 @@ fn request_base(headers: &HeaderMap) -> Result<String, Box<Response>> {
                 bad_request::<()>("the Host header is required"),
             ))
         })?;
-    Ok(format!("http://{}", host.trim_end_matches('/')))
+    let scheme = if forwarded_https(headers) {
+        "https"
+    } else {
+        "http"
+    };
+    Ok(format!("{scheme}://{}", host.trim_end_matches('/')))
 }
 
 fn with_cookies(mut response: Response, cookies: &[String]) -> Response {
@@ -1046,4 +1080,45 @@ fn respond<T: Serialize>(env: Envelope<T>) -> Response {
 
 fn respond_status<T: Serialize>(status: StatusCode, env: Envelope<T>) -> Response {
     (status, Json(env)).into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn headers(host: &str, proto: Option<&str>) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::HOST, host.parse().expect("host"));
+        if let Some(proto) = proto {
+            headers.insert("x-forwarded-proto", proto.parse().expect("proto"));
+        }
+        headers
+    }
+
+    #[test]
+    fn install_base_uses_https_behind_a_tls_proxy() {
+        assert_eq!(
+            request_base(&headers("slacking-off.mainstayx.com", None)).unwrap(),
+            "http://slacking-off.mainstayx.com"
+        );
+        assert_eq!(
+            request_base(&headers("slacking-off.mainstayx.com", Some("https"))).unwrap(),
+            "https://slacking-off.mainstayx.com"
+        );
+        assert_eq!(
+            request_base(&headers("slacking-off.mainstayx.com", Some("https, http"))).unwrap(),
+            "https://slacking-off.mainstayx.com"
+        );
+    }
+
+    #[test]
+    fn session_cookies_are_secure_only_behind_tls() {
+        let plain = session_cookies("session", false);
+        let secure = session_cookies("session", true);
+        assert!(plain.iter().all(|cookie| !cookie.contains("; Secure")));
+        assert!(secure.iter().all(|cookie| cookie.contains("; Secure")));
+        assert!(clear_cookies(true)
+            .iter()
+            .all(|cookie| cookie.contains("; Secure")));
+    }
 }
