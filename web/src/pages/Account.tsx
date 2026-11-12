@@ -10,12 +10,12 @@ import { navigate } from '../router';
 import type { AccountResponse, InstallCommands, TokenCreateResponse } from '../types';
 
 const PLATFORMS = [
-  { name: 'Linux x64', file: 'loo-linux-x64', available: true },
-  { name: 'Linux arm64', file: 'loo-linux-arm64', available: false },
-  { name: 'macOS x64', file: 'loo-macos-x64', available: false },
-  { name: 'macOS arm64', file: 'loo-macos-arm64', available: false },
-  { name: 'Windows x64', file: 'loo-windows-x64.exe', available: false },
-  { name: 'Windows arm64', file: 'loo-windows-arm64.exe', available: false },
+  { name: 'Linux x64', file: 'loo-linux-x64' },
+  { name: 'Linux arm64', file: 'loo-linux-arm64' },
+  { name: 'macOS x64', file: 'loo-macos-x64' },
+  { name: 'macOS arm64', file: 'loo-macos-arm64' },
+  { name: 'Windows x64', file: 'loo-windows-x64.exe' },
+  { name: 'Windows arm64', file: 'loo-windows-arm64.exe' },
 ] as const;
 
 const MAX_AGENTS = 5;
@@ -63,6 +63,27 @@ export function Account() {
   const [tab, setTab] = useState<keyof InstallCommands>('sh');
   const [copied, setCopied] = useState(false);
   const [copyError, setCopyError] = useState(false);
+  const [available, setAvailable] = useState<Record<string, boolean>>({});
+
+  useEffect(() => {
+    let alive = true;
+    for (const platform of PLATFORMS) {
+      fetch(`/downloads/${platform.file}`, { method: 'HEAD' })
+        .then((response) => {
+          if (alive) {
+            setAvailable((previous) => ({ ...previous, [platform.file]: response.ok }));
+          }
+        })
+        .catch(() => {
+          if (alive) {
+            setAvailable((previous) => ({ ...previous, [platform.file]: false }));
+          }
+        });
+    }
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   useEffect(() => {
     let alive = true;
@@ -282,15 +303,16 @@ export function Account() {
           <Panel label="下载">
             <p class="hint-line">二进制对应的平台文件名。没有构建的平台会返回「暂无构建」。</p>
             <div class="platform-list">
-              {PLATFORMS.map((platform) => (
-                <div class="platform-row" key={platform.file}>
-                  <span class="platform-name">{platform.name}</span>
-                  <span class="platform-note">{platform.available ? '可下载' : '暂无构建'}</span>
-                  <a href={`/downloads/${platform.file}`}>
-                    {platform.available ? '下载' : '查看'}
-                  </a>
-                </div>
-              ))}
+              {PLATFORMS.map((platform) => {
+                const can = available[platform.file] === true;
+                return (
+                  <div class="platform-row" key={platform.file}>
+                    <span class="platform-name">{platform.name}</span>
+                    <span class="platform-note">{can ? '可下载' : '暂无构建'}</span>
+                    <a href={`/downloads/${platform.file}`}>{can ? '下载' : '查看'}</a>
+                  </div>
+                );
+              })}
             </div>
           </Panel>
         </div>
