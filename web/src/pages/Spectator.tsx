@@ -5,6 +5,7 @@ import { useBoardControls } from '../board';
 import { AgentCard } from '../components/AgentCard';
 import { EventText, eventColors } from '../components/EventText';
 import { Nav } from '../components/Nav';
+import { QueueStrip } from '../components/QueueStrip';
 import { EVENT_LABEL, formatNumber } from '../labels';
 import { drawWorld } from '../render';
 import type { LeaderRow, Projection, ProjectionEvent, Terrain } from '../types';
@@ -186,6 +187,8 @@ export function Spectator() {
             <div class="chip mono">TICK {projection ? formatNumber(projection.tick) : '–'}</div>
           </div>
         </header>
+
+        <QueueStrip queue={projection?.queue ?? []} />
 
         <div class="board-wrap" ref={wrapRef}>
           <canvas class="board" ref={canvasRef} role="img" aria-label={boardLabel} />

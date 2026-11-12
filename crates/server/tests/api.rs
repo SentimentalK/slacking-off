@@ -19,7 +19,7 @@ grid
 #######
 #..#..#
 #..E..#
-#..#..#
+#..q..#
 #######
 ";
 
@@ -29,7 +29,7 @@ grid
 #########
 #.......#
 #.......#
-#E......#
+qE......#
 #.......#
 #########
 ";
@@ -41,7 +41,7 @@ grid
 #######
 #.#...#
 ##1'..#
-#.#E..#
+#.#Eq.#
 #######
 ";
 
@@ -51,7 +51,7 @@ grid
 ###############
 #.............#
 #.............#
-#E............#
+qE............#
 #.............#
 ###############
 ";
@@ -66,7 +66,10 @@ fn fresh_dir(name: &str) -> PathBuf {
     dir
 }
 
-fn open_with_map(dir: &Path, cfg: Config, map_text: &str) -> Arc<Server> {
+fn open_with_map(dir: &Path, mut cfg: Config, map_text: &str) -> Arc<Server> {
+    // Command-rate limiting is exercised by its own test; other acceptance
+    // tests issue many commands within the same real second.
+    cfg.limits.requests_per_second = 0;
     let def = map::parse(map_text).expect("test map parses");
     Arc::new(Server::open(cfg, def, "test", map_text, dir, 7).expect("server opens"))
 }
@@ -713,10 +716,11 @@ fn open_map(width: usize) -> String {
     text.push('E');
     text.push_str(&".".repeat(width - 1));
     text.push('\n');
-    for _ in 0..2 {
-        text.push_str(&".".repeat(width));
-        text.push('\n');
-    }
+    text.push('q');
+    text.push_str(&".".repeat(width - 1));
+    text.push('\n');
+    text.push_str(&".".repeat(width));
+    text.push('\n');
     text
 }
 
@@ -945,7 +949,7 @@ async fn restart_restores_immediate_and_queued_joins_without_a_snapshot() {
     assert_eq!(world.agents.len(), 2);
     assert_eq!(world.sessions.len(), 2);
     assert_eq!(world.agents[&1].pos, Some(Pos::new(3, 2)));
-    assert_eq!(world.agents[&2].pos, None);
+    assert_eq!(world.agents[&2].pos, Some(Pos::new(3, 3)));
     assert_eq!(world.entry_queue.len(), 1);
 
     let state_b = server.status(&token_b).await.state.expect("state");
@@ -958,7 +962,7 @@ async fn restart_restores_immediate_and_queued_joins_without_a_snapshot() {
     let world = server.world_state().await;
     assert_eq!(world.tick, 1);
     assert_eq!(world.entry_queue.len(), 1);
-    assert_eq!(world.agents[&2].pos, None);
+    assert_eq!(world.agents[&2].pos, Some(Pos::new(3, 3)));
     assert_eq!(world.sessions[&2].status, loo_core::SessionStatus::Waiting);
 
     // After dev-a moves away, dev-b is admitted exactly once.

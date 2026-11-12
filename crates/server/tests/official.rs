@@ -14,7 +14,7 @@ grid
 #######
 #..#..#
 #..E..#
-#..#..#
+#..q..#
 #######
 ";
 
@@ -32,10 +32,13 @@ fn fresh_dir(name: &str) -> PathBuf {
 
 fn open(dir: &Path, official: bool) -> Arc<Server> {
     let def = map::parse(TEST_MAP).expect("test map parses");
+    let mut cfg = Config::default();
+    // Most acceptance flows issue commands in one burst.
+    cfg.limits.requests_per_second = 0;
     let server = if official {
-        Server::open_official(Config::default(), def, "test", TEST_MAP, dir, 7)
+        Server::open_official(cfg, def, "test", TEST_MAP, dir, 7)
     } else {
-        Server::open(Config::default(), def, "test", TEST_MAP, dir, 7)
+        Server::open(cfg, def, "test", TEST_MAP, dir, 7)
     };
     Arc::new(server.expect("server opens"))
 }

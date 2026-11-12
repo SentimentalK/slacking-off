@@ -69,6 +69,8 @@ export interface ProjectionCounts {
   queued: number;
   /** `config.max_on_field`. */
   capacity: number;
+  /** `session.queue_capacity`. */
+  queue_capacity: number;
 }
 
 export interface ProjectionAgent {
@@ -107,8 +109,10 @@ export interface ProjectionQueueEntry {
   id: AgentId;
   nick: string;
   color: number;
-  /** `None` until the world assigns queue cells; only the count matters now. */
-  pos: Pos | null;
+  /** The physical queue cell the waiter stands on. */
+  pos: Pos;
+  /** 1-based place in the line; `1` enters next. */
+  index: number;
 }
 
 export interface ProjectionEvent {

@@ -46,15 +46,21 @@ pub fn build(
             inside: world.inside_count(),
             queued: world.entry_queue.len(),
             capacity: cfg.max_on_field,
+            queue_capacity: cfg.session.queue_capacity,
         },
         agents: project_agents(cfg, world, agents),
         objects: project_objects(cfg, world),
         queue: project_queue(world),
-        // Contract §2: a settlement marker has no user-facing meaning and
-        // would flood the live log.
+        // Contract §2: settlement markers and queue heartbeats have no
+        // user-facing meaning and would flood the live log.
         events: events
             .iter()
-            .filter(|event| !matches!(event.kind, EventKind::TickSettled))
+            .filter(|event| {
+                !matches!(
+                    event.kind,
+                    EventKind::TickSettled | EventKind::QueueTouched { .. }
+                )
+            })
             .map(project_event)
             .collect(),
     }
@@ -245,20 +251,25 @@ fn toilet_progress_total(cfg: &Config, level: u8) -> u32 {
 
 fn project_queue(world: &WorldState) -> Vec<ProjectionQueueEntry> {
     let mut out = Vec::new();
-    // `entry_queue` order is the line order.
-    for session_id in &world.entry_queue {
+    // The physical queue decides the order; `queue_position` counts the same
+    // sequence, so `index` and `queue_ahead` always agree.
+    for (index, session_id) in world.waiting_sessions().iter().enumerate() {
         let Some(session) = world.sessions.get(session_id) else {
             continue;
         };
         let Some(agent) = world.agents.get(&session.agent) else {
             continue;
         };
+        // Core puts every waiter on a queue cell; a missing pos is a bug.
+        let pos = agent
+            .pos
+            .expect("a waiting session always stands on a queue cell");
         out.push(ProjectionQueueEntry {
             id: agent.id,
             nick: agent.nick.to_string(),
             color: color(agent.id),
-            // Core has no queue cells yet; `None` means "outside the world".
-            pos: agent.pos,
+            pos,
+            index: index as u32 + 1,
         });
     }
     out

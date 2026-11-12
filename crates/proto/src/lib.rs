@@ -601,6 +601,7 @@ pub enum ErrorCode {
     NotAuthenticated,
     NoSession,
     QueueFull,
+    RateLimited,
     BadRequest,
     Internal,
 }
@@ -630,6 +631,7 @@ impl ApiError {
             ErrorCode::NotAuthenticated => 401,
             ErrorCode::NoSession => 409,
             ErrorCode::QueueFull => 409,
+            ErrorCode::RateLimited => 429,
             ErrorCode::BadRequest => 400,
             ErrorCode::Internal => 500,
         }
@@ -656,11 +658,13 @@ pub struct Projection {
     pub events: Vec<ProjectionEvent>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ProjectionCounts {
     pub inside: usize,
     pub queued: usize,
     pub capacity: usize,
+    /// `session.queue_capacity`: how many waiters the line takes.
+    pub queue_capacity: usize,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -723,8 +727,29 @@ pub struct ProjectionQueueEntry {
     pub id: AgentId,
     pub nick: String,
     pub color: u8,
-    /// `None` while the queue has no cell assigned (contract amendment E-2).
-    pub pos: Option<Pos>,
+    /// The physical queue cell the waiter stands on.
+    pub pos: Pos,
+    /// 1-based place in the line; `1` enters next.
+    pub index: u32,
+}
+
+/// `GET /api/metrics`: latency and occupancy of the running world.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct MetricsResponse {
+    pub tick: Tick,
+    /// Settled ticks whose duration is included in `settle_ms`.
+    pub ticks: u64,
+    pub settle_ms: SettleMs,
+    pub inside: usize,
+    pub queued: usize,
+}
+
+/// Settlement duration percentiles in milliseconds.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SettleMs {
+    pub p50: f64,
+    pub p99: f64,
+    pub max: f64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

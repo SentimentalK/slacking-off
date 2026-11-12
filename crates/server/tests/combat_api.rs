@@ -18,7 +18,7 @@ grid
 #########
 #.......#
 #.......#
-#E......#
+qE......#
 #.......#
 #########
 ";
@@ -28,7 +28,7 @@ const TOILET_MAP: &str = "\
 grid
 #########
 #.1.....#
-#E......#
+qE......#
 #.......#
 #########
 ";
@@ -40,7 +40,7 @@ grid
 #######
 #.#...#
 ##1'..#
-#.#E..#
+#.#Eq.#
 #######
 ";
 
@@ -54,7 +54,9 @@ fn fresh_dir(name: &str) -> PathBuf {
     dir
 }
 
-fn open_map(dir: &Path, cfg: Config, map_text: &str) -> Arc<Server> {
+fn open_map(dir: &Path, mut cfg: Config, map_text: &str) -> Arc<Server> {
+    // Rate limiting has its own test; combat tests issue bursts.
+    cfg.limits.requests_per_second = 0;
     let def = map::parse(map_text).expect("test map parses");
     Arc::new(Server::open(cfg, def, "test", map_text, dir, 7).expect("server opens"))
 }

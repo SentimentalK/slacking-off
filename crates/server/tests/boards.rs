@@ -15,7 +15,7 @@ grid
 #######
 #.....#
 #..E..#
-#.....#
+#..q..#
 #######
 ";
 
@@ -29,15 +29,16 @@ fn fresh_dir(name: &str) -> PathBuf {
 
 fn open_official(dir: &Path) -> Arc<Server> {
     let def = map::parse(TEST_MAP).expect("test map parses");
-    Arc::new(
-        Server::open_official(Config::default(), def, "test", TEST_MAP, dir, 7)
-            .expect("server opens"),
-    )
+    let mut cfg = Config::default();
+    cfg.limits.requests_per_second = 0;
+    Arc::new(Server::open_official(cfg, def, "test", TEST_MAP, dir, 7).expect("server opens"))
 }
 
 fn open_dev(dir: &Path) -> Arc<Server> {
     let def = map::parse(TEST_MAP).expect("test map parses");
-    Arc::new(Server::open(Config::default(), def, "test", TEST_MAP, dir, 7).expect("server opens"))
+    let mut cfg = Config::default();
+    cfg.limits.requests_per_second = 0;
+    Arc::new(Server::open(cfg, def, "test", TEST_MAP, dir, 7).expect("server opens"))
 }
 
 async fn account(server: &Server, username: &str) -> (u64, String) {
