@@ -10,12 +10,17 @@
 //!
 //! Characters: `#` wall, `+` closed door, `'` open door, `1`..`5` toilet of
 //! that level, `x` unfinished build site (blocks movement), `.` buildable
-//! floor, `:` no-build floor, `E` entrance (no-build floor). Exactly one `E` is
-//! required.
+//! floor, `:` no-build floor, `E` entrance (no-build floor), `q` primary queue
+//! lane, `r` overflow queue lane. Exactly one `E` is required.
+//!
+//! Every map has a queue area: the primary lane (`q`) must be non-empty, must
+//! touch the entrance through exactly one mouth cell, and both lanes must be
+//! connected and orderable head to tail (see [`parse`]).
 
 use crate::state::{Object, SiteKind};
 use loo_proto::{Dir, Pos};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::fmt;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -105,6 +110,10 @@ pub struct MapDef {
     pub map: Map,
     pub objects: Vec<Option<Object>>,
     pub entrance: Pos,
+    /// Primary queue lane, head (the mouth next to the entrance) first.
+    pub queue_primary: Vec<Pos>,
+    /// Overflow queue lane, head first. Empty when the map has no overflow.
+    pub queue_overflow: Vec<Pos>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -158,6 +167,8 @@ pub fn parse(text: &str) -> Result<MapDef, MapError> {
     let mut terrain = Vec::with_capacity((width * height) as usize);
     let mut objects = Vec::with_capacity((width * height) as usize);
     let mut entrance = None;
+    let mut primary_cells: Vec<Pos> = Vec::new();
+    let mut overflow_cells: Vec<Pos> = Vec::new();
 
     for (row_index, (line_no, row)) in rows.iter().enumerate() {
         if row.len() as i32 != width {
@@ -171,6 +182,14 @@ pub fn parse(text: &str) -> Result<MapDef, MapError> {
             let (t, object) = match ch {
                 '.' => (Terrain::Buildable, None),
                 ':' => (Terrain::NoBuild, None),
+                'q' => {
+                    primary_cells.push(pos);
+                    (Terrain::NoBuild, None)
+                }
+                'r' => {
+                    overflow_cells.push(pos);
+                    (Terrain::NoBuild, None)
+                }
                 'E' => {
                     if entrance.replace(pos).is_some() {
                         return Err(MapError {
@@ -225,6 +244,8 @@ pub fn parse(text: &str) -> Result<MapDef, MapError> {
         line: 1,
         message: "map has no entrance (`E`)".to_string(),
     })?;
+    let (queue_primary, queue_overflow) =
+        order_queue_lanes(entrance, &primary_cells, &overflow_cells)?;
 
     Ok(MapDef {
         map: Map {
@@ -234,7 +255,168 @@ pub fn parse(text: &str) -> Result<MapDef, MapError> {
         },
         objects,
         entrance,
+        queue_primary,
+        queue_overflow,
     })
+}
+
+/// Orders both queue lanes head to tail.
+///
+/// A map that declares no `q` and no `r` has no queue area at all. Once it
+/// declares a lane, the primary lane must be non-empty and its mouth must be
+/// the single `q` cell orthogonally adjacent to the entrance. The overflow lane
+/// is optional; its mouth is the unique `r` cell closest to the entrance.
+/// Both lanes are ordered by BFS distance from their mouth, so every distance
+/// must belong to exactly one cell — otherwise the order would be ambiguous.
+fn order_queue_lanes(
+    entrance: Pos,
+    primary_cells: &[Pos],
+    overflow_cells: &[Pos],
+) -> Result<(Vec<Pos>, Vec<Pos>), MapError> {
+    if primary_cells.is_empty() {
+        return Err(MapError {
+            line: 1,
+            message:
+                "queue primary lane (`q`) is empty: the map needs a queue next to the entrance"
+                    .to_string(),
+        });
+    }
+
+    let mouths: Vec<Pos> = Dir::ALL
+        .into_iter()
+        .map(|dir| entrance.step(dir))
+        .filter(|pos| primary_cells.contains(pos))
+        .collect();
+    let primary_mouth = match mouths.as_slice() {
+        [mouth] => *mouth,
+        [] => {
+            return Err(MapError {
+                line: 1,
+                message: format!(
+                    "queue primary lane has no mouth: no `q` is orthogonally adjacent to the entrance {entrance}"
+                ),
+            })
+        }
+        many => {
+            return Err(MapError {
+                line: 1,
+                message: format!(
+                    "queue primary lane has {} mouths next to the entrance {entrance}: {}",
+                    many.len(),
+                    join_positions(many)
+                ),
+            })
+        }
+    };
+    let primary = order_lane(primary_cells, primary_mouth, "primary")?;
+
+    let overflow = if overflow_cells.is_empty() {
+        Vec::new()
+    } else {
+        let closest = overflow_cells
+            .iter()
+            .map(|pos| (pos.manhattan(entrance), *pos))
+            .min()
+            .map(|(_, pos)| pos)
+            .expect("overflow lane is not empty");
+        let distance = closest.manhattan(entrance);
+        let tied: Vec<Pos> = overflow_cells
+            .iter()
+            .copied()
+            .filter(|pos| pos.manhattan(entrance) == distance)
+            .collect();
+        if tied.len() > 1 {
+            return Err(MapError {
+                line: 1,
+                message: format!(
+                    "queue overflow lane has {} mouths equally close to the entrance {entrance}: {}",
+                    tied.len(),
+                    join_positions(&tied)
+                ),
+            });
+        }
+        order_lane(overflow_cells, closest, "overflow")?
+    };
+
+    if !overflow.is_empty() && !lanes_connected(primary_cells, overflow_cells) {
+        return Err(MapError {
+            line: 1,
+            message: format!(
+                "queue lanes are not connected: primary mouth {primary_mouth} and overflow mouth {} never meet",
+                overflow[0]
+            ),
+        });
+    }
+
+    Ok((primary, overflow))
+}
+
+/// BFS from `mouth` through cells of one lane. Distances must be unique: two
+/// cells at the same distance would leave their queue order undefined.
+fn order_lane(cells: &[Pos], mouth: Pos, lane: &str) -> Result<Vec<Pos>, MapError> {
+    let mut distances: BTreeMap<Pos, usize> = BTreeMap::new();
+    distances.insert(mouth, 0);
+    let mut frontier = vec![mouth];
+    while !frontier.is_empty() {
+        let mut next = Vec::new();
+        for pos in frontier {
+            let distance = distances[&pos];
+            for dir in Dir::ALL {
+                let neighbour = pos.step(dir);
+                if !cells.contains(&neighbour) || distances.contains_key(&neighbour) {
+                    continue;
+                }
+                distances.insert(neighbour, distance + 1);
+                next.push(neighbour);
+            }
+        }
+        frontier = next;
+    }
+    if distances.len() != cells.len() {
+        let unreachable: Vec<Pos> = cells
+            .iter()
+            .copied()
+            .filter(|pos| !distances.contains_key(pos))
+            .collect();
+        return Err(MapError {
+            line: 1,
+            message: format!(
+                "queue {lane} lane is not connected to its mouth {mouth}: {} unreachable",
+                join_positions(&unreachable)
+            ),
+        });
+    }
+    let mut by_distance: BTreeMap<usize, Vec<Pos>> = BTreeMap::new();
+    for (pos, distance) in &distances {
+        by_distance.entry(*distance).or_default().push(*pos);
+    }
+    if let Some((distance, tied)) = by_distance.iter().find(|(_, cells)| cells.len() > 1) {
+        return Err(MapError {
+            line: 1,
+            message: format!(
+                "queue {lane} lane has {} cells at distance {distance} from its mouth {mouth}: {}",
+                tied.len(),
+                join_positions(tied)
+            ),
+        });
+    }
+    Ok(by_distance.into_values().flatten().collect())
+}
+
+/// Whether the two lanes touch each other, so a waiter can shove their way
+/// from the overflow lane into the primary one.
+fn lanes_connected(primary: &[Pos], overflow: &[Pos]) -> bool {
+    overflow
+        .iter()
+        .any(|pos| Dir::ALL.iter().any(|dir| primary.contains(&pos.step(*dir))))
+}
+
+fn join_positions(cells: &[Pos]) -> String {
+    cells
+        .iter()
+        .map(|pos| pos.to_string())
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 #[cfg(test)]
@@ -247,13 +429,16 @@ grid
 #####
 #.1.#
 #+.E#
-#####
+###q#
+###r#
 ";
 
     #[test]
     fn parses_objects_and_entrance() {
         let def = parse(TINY).expect("tiny map parses");
-        assert_eq!((def.map.width(), def.map.height()), (5, 4));
+        assert_eq!((def.map.width(), def.map.height()), (5, 5));
+        assert_eq!(def.queue_primary, vec![Pos::new(3, 3)]);
+        assert_eq!(def.queue_overflow, vec![Pos::new(3, 4)]);
         assert_eq!(def.entrance, Pos::new(3, 2));
         assert_eq!(def.objects[0], Some(Object::Wall { damage: 0 }));
         assert_eq!(
@@ -279,29 +464,22 @@ grid
         assert!(parse("grid\n##\n").is_err(), "no entrance");
         assert!(parse("grid\n#E#\nEE#\n").is_err(), "two entrances");
         assert!(parse("grid\n#Z#\n").is_err(), "unknown character");
+        assert!(parse("grid\n.E.\n").is_err(), "no queue lane");
         assert!(parse("###\n").is_err(), "no grid marker");
     }
 
     #[test]
     fn no_build_rects_cover_no_build_cells() {
-        let def = parse("grid\n:E.\n:..\n").unwrap();
+        let def = parse("grid\n:E.\n:q.\n:r.\n").unwrap();
         let rects = def.map.no_build_rects();
         assert_eq!(
             rects,
-            vec![
-                loo_proto::Rect {
-                    x: 0,
-                    y: 0,
-                    w: 2,
-                    h: 1
-                },
-                loo_proto::Rect {
-                    x: 0,
-                    y: 1,
-                    w: 1,
-                    h: 1
-                },
-            ]
+            vec![loo_proto::Rect {
+                x: 0,
+                y: 0,
+                w: 2,
+                h: 3
+            }]
         );
     }
 }

@@ -34,8 +34,58 @@ const ONE: Pos = Pos::new(3, 1);
 const WALK_IN: Pos = Pos::new(1, 1);
 const WALK_IN_DOOR: Pos = Pos::new(2, 1);
 
+/// Test maps describe the field only; give their entrance a physical queue so
+/// a join that arrives while it is occupied has somewhere to wait. Two rows are
+/// inserted right below the entrance row: the primary lane running east from
+/// under the entrance, then the overflow lane below it. A map that already
+/// declares queue cells is used verbatim.
+fn with_queue(text: &str) -> String {
+    let mut lines = text.lines();
+    let mut prefix: Vec<&str> = Vec::new();
+    let mut rows: Vec<String> = Vec::new();
+    let mut seen_grid = false;
+    for line in lines.by_ref() {
+        if !seen_grid {
+            if line.trim() == "grid" {
+                seen_grid = true;
+            } else {
+                prefix.push(line);
+            }
+            continue;
+        }
+        if !line.trim().is_empty() {
+            rows.push(line.to_string());
+        }
+    }
+    if rows
+        .iter()
+        .any(|row| row.contains('q') || row.contains('r'))
+    {
+        return text.to_string();
+    }
+    let width = rows.first().map_or(0, |row| row.chars().count());
+    let entrance = rows
+        .iter()
+        .enumerate()
+        .find_map(|(y, row)| row.chars().position(|ch| ch == 'E').map(|x| (x, y)))
+        .expect("test map has an entrance");
+    let (ex, ey) = entrance;
+    let lane = |ch: char| format!("{}{}", "#".repeat(ex), ch.to_string().repeat(width - ex));
+    rows.insert(ey + 1, lane('q'));
+    rows.insert(ey + 2, lane('r'));
+    let mut out = prefix.join("\n");
+    if !out.is_empty() {
+        out.push('\n');
+    }
+    out.push_str("grid\n");
+    out.push_str(&rows.join("\n"));
+    out.push('\n');
+    out
+}
+
 fn build(text: &str) -> WorldState {
-    WorldState::new(map::parse(text).expect("test map parses"))
+    let text = with_queue(text);
+    WorldState::new(map::parse(&text).expect("test map parses"))
 }
 
 fn nick(name: &str) -> Nick {
@@ -670,10 +720,16 @@ fn leave_ends_a_session_with_its_score_and_frees_the_slot() {
     assert!(left.sessions.contains_key(&20));
     assert_eq!(left.agents.get(&3), None);
     assert!(left.entry_queue.is_empty());
-    assert!(matches!(
-        events[0].kind,
-        EventKind::SessionEnded { pos: None, .. }
-    ));
+    assert!(
+        matches!(
+            events[0].kind,
+            EventKind::SessionEnded {
+                pos: Some(Pos { x: 1, y: 4 }),
+                ..
+            }
+        ),
+        "the queued session ended at its queue cell: {events:?}"
+    );
 
     assert!(
         leave(&left, 99, 0, 0, &cfg).is_err(),

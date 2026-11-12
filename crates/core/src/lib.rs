@@ -8,7 +8,7 @@
 //! use loo_core::{map, Config, EventKind, Intent, WorldState, join, step, JoinCommand, JoinOutcome};
 //! use loo_proto::Nick;
 //!
-//! let def = map::parse("grid\n.1.\n..E\n").unwrap();
+//! let def = map::parse("grid\n.1.\n..E\n##q\n##r\n").unwrap();
 //! let cfg = Config::default();
 //! let world = WorldState::new(def);
 //! let (world, outcome, _events) = join(
@@ -36,7 +36,7 @@ pub mod step;
 pub mod view;
 
 pub use config::Config;
-pub use event::{ActionOutcome, Blocker, Event, EventKind, ObjectCause};
+pub use event::{touch, ActionOutcome, Blocker, Event, EventKind, ObjectCause};
 pub use map::{Map, MapDef, MapError, Terrain};
 pub use replay::{diff_worlds, replay, restore, ReplayError, Snapshot, WorldDiff};
 pub use rules::{
@@ -44,7 +44,9 @@ pub use rules::{
     validate_defend, validate_defend_at, validate_demolish, validate_door, validate_downgrade,
     validate_upgrade, validate_use, weighted_score,
 };
-pub use state::{is_stunned, Action, Agent, Object, Session, SessionStatus, SiteKind, WorldState};
+pub use state::{
+    is_stunned, Action, Agent, Object, QueueLane, Session, SessionStatus, SiteKind, WorldState,
+};
 pub use step::{
     join, leave, step, Intent, IntentKind, JoinCommand, JoinOutcome, JoinReject, JoinRejectKind,
 };

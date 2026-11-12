@@ -50,8 +50,58 @@ const LEVEL_3: u32 = 3000;
 /// Cumulative score for agent level 5.
 const LEVEL_5: u32 = 20000;
 
+/// Test maps describe the field only; give their entrance a physical queue so
+/// a join that arrives while it is occupied has somewhere to wait. Two rows are
+/// inserted right below the entrance row: the primary lane running east from
+/// under the entrance, then the overflow lane below it. A map that already
+/// declares queue cells is used verbatim.
+fn with_queue(text: &str) -> String {
+    let mut lines = text.lines();
+    let mut prefix: Vec<&str> = Vec::new();
+    let mut rows: Vec<String> = Vec::new();
+    let mut seen_grid = false;
+    for line in lines.by_ref() {
+        if !seen_grid {
+            if line.trim() == "grid" {
+                seen_grid = true;
+            } else {
+                prefix.push(line);
+            }
+            continue;
+        }
+        if !line.trim().is_empty() {
+            rows.push(line.to_string());
+        }
+    }
+    if rows
+        .iter()
+        .any(|row| row.contains('q') || row.contains('r'))
+    {
+        return text.to_string();
+    }
+    let width = rows.first().map_or(0, |row| row.chars().count());
+    let entrance = rows
+        .iter()
+        .enumerate()
+        .find_map(|(y, row)| row.chars().position(|ch| ch == 'E').map(|x| (x, y)))
+        .expect("test map has an entrance");
+    let (ex, ey) = entrance;
+    let lane = |ch: char| format!("{}{}", "#".repeat(ex), ch.to_string().repeat(width - ex));
+    rows.insert(ey + 1, lane('q'));
+    rows.insert(ey + 2, lane('r'));
+    let mut out = prefix.join("\n");
+    if !out.is_empty() {
+        out.push('\n');
+    }
+    out.push_str("grid\n");
+    out.push_str(&rows.join("\n"));
+    out.push('\n');
+    out
+}
+
 fn build(text: &str) -> WorldState {
-    WorldState::new(map::parse(text).expect("test map parses"))
+    let text = with_queue(text);
+    WorldState::new(map::parse(&text).expect("test map parses"))
 }
 
 fn nick(name: &str) -> Nick {
