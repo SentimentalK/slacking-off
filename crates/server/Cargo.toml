@@ -17,3 +17,7 @@ serde.workspace = true
 serde_json.workspace = true
 clap.workspace = true
 rusqlite.workspace = true
+argon2 = "0.5"
+sha2 = "0.10"
+rand = "0.8"
+hex = "0.4"

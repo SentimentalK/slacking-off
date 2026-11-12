@@ -10,9 +10,12 @@ use std::sync::Arc;
     version
 )]
 struct Args {
-    /// The dev server needs no accounts yet; this flag must be present.
-    #[arg(long)]
+    /// Dev mode: temporary identities, no accounts.
+    #[arg(long, conflicts_with = "official")]
     dev: bool,
+    /// Official mode: accounts, hashed tokens and installers.
+    #[arg(long, conflicts_with = "dev")]
+    official: bool,
     #[arg(long, default_value = "127.0.0.1:18080")]
     addr: String,
     #[arg(long, default_value = "maps/default.txt")]
@@ -29,13 +32,16 @@ struct Args {
     /// Seed for the first world in an empty data directory.
     #[arg(long, default_value_t = 42)]
     seed: u64,
+    /// Directory `/downloads/*` serves `loo` / `loo.exe` from.
+    #[arg(long, default_value = "target/release")]
+    downloads_dir: PathBuf,
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
-    if !args.dev {
-        eprintln!("the dev server requires --dev");
+    if !args.dev && !args.official {
+        eprintln!("pass --dev or --official");
         std::process::exit(2);
     }
 
@@ -50,20 +56,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let map_text = std::fs::read_to_string(&args.map)?;
     let def = map::parse(&map_text).map_err(|error| format!("{}: {error}", args.map.display()))?;
     let map_name = args.map.display().to_string();
-    let server = Arc::new(Server::open(
-        cfg,
-        def,
-        &map_name,
-        &map_text,
-        &args.data_dir,
-        args.seed,
-    )?);
+    let server = Arc::new(if args.official {
+        Server::open_official(cfg, def, &map_name, &map_text, &args.data_dir, args.seed)?
+    } else {
+        Server::open(cfg, def, &map_name, &map_text, &args.data_dir, args.seed)?
+    });
     let tick = server.world_state().await.tick;
     server.spawn_ticker();
 
     let listener = tokio::net::TcpListener::bind(&args.addr).await?;
     println!(
-        "loo dev server on http://{} tick={}s map={} data={} tick={} seed={}",
+        "loo {} server on http://{} tick={}s map={} data={} tick={} seed={}",
+        if args.official { "official" } else { "dev" },
         args.addr,
         server.config().tick_seconds,
         map_name,
@@ -71,7 +75,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tick,
         args.seed
     );
-    axum::serve(listener, http::router(server.clone()))
+    let options = http::HttpOptions {
+        downloads_dir: args.downloads_dir,
+    };
+    axum::serve(listener, http::router_with(server.clone(), options))
         .with_graceful_shutdown(shutdown())
         .await?;
     server.save_snapshot().await?;

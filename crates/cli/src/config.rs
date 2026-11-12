@@ -1,5 +1,8 @@
 //! `LOO_HOME` holds one identity per directory (design §2.3): pointing two
 //! tools at two directories gives two agents.
+//!
+//! Contract §1: official installs start with only `server` and `token`;
+//! `agent_id` and `nick` appear after `loo register`.
 
 use loo_proto::{AgentId, Nick};
 use serde::{Deserialize, Serialize};
@@ -10,9 +13,11 @@ pub const DEFAULT_SERVER: &str = "http://127.0.0.1:18080";
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct LocalConfig {
     pub server: String,
-    pub agent_id: AgentId,
-    pub nick: Nick,
     pub token: String,
+    #[serde(default)]
+    pub agent_id: Option<AgentId>,
+    #[serde(default)]
+    pub nick: Option<Nick>,
 }
 
 pub fn home() -> PathBuf {

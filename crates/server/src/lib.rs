@@ -10,12 +10,13 @@ use loo_core::{
     Snapshot, WorldState,
 };
 use loo_proto::{
-    ActionQueued, ActionState, AgentId, AgentView, ApiError, AttackRequest, Briefing, BuildKind,
-    BuildRequest, ConfigResponse, DefendRequest, DemolishRequest, DoorRequest, DowngradeRequest,
-    Envelope, ErrorCode, EventView, JoinRequest, JoinResponse, LeaveResponse, LookResponse,
+    AccountAgent, AccountRegisterResponse, AccountResponse, ActionQueued, ActionState, AgentId,
+    AgentView, ApiError, AttackRequest, AuthMeResponse, Briefing, BuildKind, BuildRequest,
+    ConfigResponse, DefendRequest, DemolishRequest, DoorRequest, DowngradeRequest, Envelope,
+    ErrorCode, EventView, InstallCommands, JoinRequest, JoinResponse, LeaveResponse, LookResponse,
     MapResponse, MoveRequest, Need, Placement, PlacementKind, Pos, RegisterRequest,
-    RegisterResponse, RulesResponse, SentBy, SessionId, TargetSpec, Tick, UpgradeRequest,
-    WaitRequest, WaitResponse, WaitWake,
+    RegisterResponse, RulesResponse, SentBy, SessionId, TargetSpec, Tick, TokenCreateResponse,
+    UpgradeRequest, WaitRequest, WaitResponse, WaitWake,
 };
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
@@ -32,6 +33,10 @@ pub struct Server {
     inner: Mutex<Inner>,
     tick_tx: broadcast::Sender<Tick>,
     store: Store,
+    /// Contract §1 mode: accounts are required and tokens are hashed in the DB.
+    official: bool,
+    /// Dev identities: `agents.token` -> agent. Only read in dev mode.
+    dev_tokens: std::sync::Mutex<HashMap<String, AgentId>>,
 }
 
 struct Inner {
@@ -40,7 +45,6 @@ struct Inner {
     /// a later command replaces the earlier one (design §3).
     pending: BTreeMap<AgentId, Vec<IntentKind>>,
     agents: BTreeMap<AgentId, AgentMeta>,
-    tokens: HashMap<String, AgentId>,
     /// Current session per agent; removed when the session leaves.
     sessions: BTreeMap<AgentId, SessionId>,
     /// Undelivered events per agent. Keyed by agent, not session, so the last
@@ -85,7 +89,40 @@ impl Server {
         data_dir: &Path,
         seed_base: u64,
     ) -> Result<Server, StoreError> {
+        Self::open_mode(
+            cfg, def, map_name, map_text, data_dir, seed_base, /* official */ false,
+        )
+    }
+
+    /// Official mode (contract §1): accounts are required, `/api/dev/register`
+    /// is gone, and the world row is marked `official = 1`.
+    pub fn open_official(
+        cfg: Config,
+        def: MapDef,
+        map_name: &str,
+        map_text: &str,
+        data_dir: &Path,
+        seed_base: u64,
+    ) -> Result<Server, StoreError> {
+        Self::open_mode(
+            cfg, def, map_name, map_text, data_dir, seed_base, /* official */ true,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn open_mode(
+        cfg: Config,
+        def: MapDef,
+        map_name: &str,
+        map_text: &str,
+        data_dir: &Path,
+        seed_base: u64,
+        official: bool,
+    ) -> Result<Server, StoreError> {
         let store = Store::open(data_dir, map_name, map_text, seed_base)?;
+        if official {
+            store.mark_world_official()?;
+        }
         if loo_core::map::parse(&store.map_text()?)? != def {
             return Err(StoreError::MapMismatch);
         }
@@ -117,10 +154,12 @@ impl Server {
 
         let stored_agents = store.agents()?;
         let mut agents = BTreeMap::new();
-        let mut tokens = HashMap::new();
+        let mut dev_tokens = HashMap::new();
         for stored in &stored_agents {
             agents.insert(stored.id, agent_meta(stored)?);
-            tokens.insert(stored.token.clone(), stored.id);
+            if !stored.token.is_empty() {
+                dev_tokens.insert(stored.token.clone(), stored.id);
+            }
         }
         let sessions = world
             .sessions
@@ -147,7 +186,6 @@ impl Server {
                 world,
                 pending,
                 agents,
-                tokens,
                 sessions,
                 outbox: BTreeMap::new(),
                 seed_base,
@@ -157,7 +195,19 @@ impl Server {
             }),
             tick_tx,
             store,
+            official,
+            dev_tokens: std::sync::Mutex::new(dev_tokens),
         })
+    }
+
+    /// Contract §1 mode; `--official`.
+    pub fn official(&self) -> bool {
+        self.official
+    }
+
+    /// The store itself, for the HTTP layer's web-session bookkeeping.
+    pub fn store(&self) -> &Store {
+        &self.store
     }
 
     pub fn config(&self) -> &Config {
@@ -324,6 +374,321 @@ impl Server {
         self.store.path()
     }
 
+    fn remember_dev_token(&self, token: &str, agent_id: AgentId) {
+        if let Ok(mut tokens) = self.dev_tokens.lock() {
+            tokens.insert(token.to_string(), agent_id);
+        }
+    }
+
+    /// Resolves a caller string to an agent (contract §1). Dev mode looks the
+    /// token up in memory exactly as before. Official mode receives
+    /// `"{account token}:{agent id}"` from the HTTP layer: the token must be
+    /// live and the agent must belong to the token's account.
+    fn authenticate(&self, caller: &str) -> Option<AgentId> {
+        if !self.official {
+            return self.dev_tokens.lock().ok()?.get(caller).copied();
+        }
+        let (token, agent) = caller.split_once(':')?;
+        let agent = agent.parse::<AgentId>().ok()?;
+        let user_id = self
+            .store
+            .auth_token_lookup(&auth::sha256_hex(token))
+            .ok()??;
+        (self.store.agent_owner(agent).ok()?? == user_id).then_some(agent)
+    }
+
+    /// Creates an account (contract §1). The caller sets cookies from this.
+    pub async fn register_account(
+        &self,
+        username: &str,
+        password: &str,
+    ) -> Envelope<AuthMeResponse> {
+        if let Err(message) = auth::validate_username(username) {
+            return error_envelope(ErrorCode::BadRequest, message);
+        }
+        if let Err(message) = auth::validate_password(password) {
+            return error_envelope(ErrorCode::BadRequest, message);
+        }
+        let hash = match auth::hash_password_async(password.to_string()).await {
+            Ok(hash) => hash,
+            Err(message) => return error_envelope(ErrorCode::Internal, message),
+        };
+        match self.store.create_user(username, &hash) {
+            Ok(_) => Envelope::ok(
+                AuthMeResponse {
+                    username: username.to_string(),
+                },
+                Vec::new(),
+                None,
+            ),
+            Err(StoreError::Conflict(message)) => error_envelope(ErrorCode::BadRequest, message),
+            Err(error) => error_envelope(
+                ErrorCode::Internal,
+                format!("storing the account failed: {error}"),
+            ),
+        }
+    }
+
+    /// Checks a username/password pair. Wrong username and wrong password are
+    /// indistinguishable on the wire.
+    pub async fn login_account(&self, username: &str, password: &str) -> Envelope<AuthMeResponse> {
+        let stored = match self.store.user_by_username(username) {
+            Ok(stored) => stored,
+            Err(error) => {
+                return error_envelope(
+                    ErrorCode::Internal,
+                    format!("reading the account failed: {error}"),
+                )
+            }
+        };
+        let Some((user_id, password_hash)) = stored else {
+            return error_envelope(ErrorCode::NotAuthenticated, "wrong username or password");
+        };
+        match auth::verify_password_async(password.to_string(), password_hash).await {
+            Ok(true) => Envelope::ok(
+                AuthMeResponse {
+                    username: self
+                        .store
+                        .username_of(user_id)
+                        .ok()
+                        .flatten()
+                        .unwrap_or_else(|| username.to_string()),
+                },
+                Vec::new(),
+                None,
+            ),
+            Ok(false) => error_envelope(ErrorCode::NotAuthenticated, "wrong username or password"),
+            Err(message) => error_envelope(ErrorCode::Internal, message),
+        }
+    }
+
+    /// The account page payload; `agents` is ordered by agent id.
+    pub fn account_for_user(&self, user_id: u64) -> Envelope<AccountResponse> {
+        let username = match self.store.username_of(user_id) {
+            Ok(Some(username)) => username,
+            Ok(None) => return error_envelope(ErrorCode::BadRequest, "unknown account"),
+            Err(error) => {
+                return error_envelope(
+                    ErrorCode::Internal,
+                    format!("reading the account failed: {error}"),
+                )
+            }
+        };
+        let stored = match self.store.agents_of_user(user_id) {
+            Ok(stored) => stored,
+            Err(error) => {
+                return error_envelope(
+                    ErrorCode::Internal,
+                    format!("reading the account agents failed: {error}"),
+                )
+            }
+        };
+        let token = match self.store.auth_token_info(user_id) {
+            Ok(token) => token,
+            Err(error) => {
+                return error_envelope(
+                    ErrorCode::Internal,
+                    format!("reading the token state failed: {error}"),
+                )
+            }
+        };
+        let agents = stored
+            .iter()
+            .map(|agent| AccountAgent {
+                agent_id: agent.id,
+                nick: agent.nick.clone(),
+                model: agent.model.clone(),
+                intro: agent.intro.clone(),
+                score_total: agent.score_total,
+                level: loo_core::agent_level(agent.score_total, &self.cfg),
+                created_at_ms: agent.created_at_ms,
+            })
+            .collect();
+        Envelope::ok(
+            AccountResponse {
+                username,
+                agents,
+                token,
+            },
+            Vec::new(),
+            None,
+        )
+    }
+
+    /// Revokes every live token, then issues one new one. The plaintext appears
+    /// only in this response (contract §1).
+    pub fn create_account_token(&self, user_id: u64, base: &str) -> Envelope<TokenCreateResponse> {
+        if let Err(error) = self.store.auth_token_revoke_all(user_id) {
+            return error_envelope(
+                ErrorCode::Internal,
+                format!("revoking the old tokens failed: {error}"),
+            );
+        }
+        let token = auth::new_token();
+        match self
+            .store
+            .auth_token_insert(user_id, &auth::sha256_hex(&token))
+        {
+            Ok(created_at_ms) => Envelope::ok(
+                TokenCreateResponse {
+                    install: install_commands(base, &token),
+                    token,
+                    created_at_ms,
+                },
+                Vec::new(),
+                None,
+            ),
+            Err(error) => error_envelope(
+                ErrorCode::Internal,
+                format!("storing the token failed: {error}"),
+            ),
+        }
+    }
+
+    pub fn revoke_account_tokens(&self, user_id: u64) -> Result<(), StoreError> {
+        self.store.auth_token_revoke_all(user_id).map(|_| ())
+    }
+
+    /// Official agent registration (contract §1): attach, create, or refuse.
+    /// `caller_token` is the account token from `Authorization: Bearer`.
+    pub async fn register_official_agent(
+        &self,
+        caller_token: &str,
+        req: RegisterRequest,
+    ) -> Envelope<AccountRegisterResponse> {
+        let user_id = match self
+            .store
+            .auth_token_lookup(&auth::sha256_hex(caller_token))
+        {
+            Ok(Some(user_id)) => user_id,
+            Ok(None) => {
+                return error_envelope(ErrorCode::NotAuthenticated, not_authenticated().message)
+            }
+            Err(error) => {
+                return error_envelope(
+                    ErrorCode::Internal,
+                    format!("reading the token failed: {error}"),
+                )
+            }
+        };
+
+        let Some(nick) = req.name else {
+            return error_envelope(ErrorCode::BadRequest, "--name is required");
+        };
+        let model = req.model.unwrap_or_default();
+        if model.trim().is_empty() || model.len() > 64 {
+            return error_envelope(ErrorCode::BadRequest, "model must be 1-64 bytes");
+        }
+        let intro = req.intro.unwrap_or_default();
+        if intro.trim().is_empty() || intro.len() > 200 {
+            return error_envelope(ErrorCode::BadRequest, "intro must be 1-200 bytes");
+        }
+
+        let mut inner = self.inner.lock().await;
+        match self.store.agent_by_nick(nick.as_str()) {
+            Ok(Some((_, owner))) if owner == Some(user_id) => {
+                match self
+                    .store
+                    .update_account_agent(user_id, nick.as_str(), &model, &intro)
+                {
+                    Ok(Some(agent_id)) => {
+                        if let Some(meta) = inner.agents.get_mut(&agent_id) {
+                            meta.model = model;
+                            meta.intro = intro;
+                        }
+                        return Envelope::ok(
+                            AccountRegisterResponse {
+                                agent_id,
+                                nick: nick.to_string(),
+                                attached: true,
+                            },
+                            Vec::new(),
+                            None,
+                        );
+                    }
+                    Ok(None) => {
+                        return error_envelope(
+                            ErrorCode::BadRequest,
+                            format!("nickname {nick} is not yours to attach"),
+                        )
+                    }
+                    Err(error) => {
+                        return error_envelope(
+                            ErrorCode::Internal,
+                            format!("updating the agent failed: {error}"),
+                        )
+                    }
+                }
+            }
+            Ok(Some((_, _))) => {
+                drop(inner);
+                return error_envelope(
+                    ErrorCode::BadRequest,
+                    format!("nickname {nick} is already taken"),
+                );
+            }
+            Ok(None) => {}
+            Err(error) => {
+                return error_envelope(
+                    ErrorCode::Internal,
+                    format!("reading the nickname failed: {error}"),
+                )
+            }
+        }
+
+        let limit = self.cfg.session.max_agents_per_user;
+        let count = match self.store.agents_of_user(user_id) {
+            Ok(agents) => agents.len(),
+            Err(error) => {
+                return error_envelope(
+                    ErrorCode::Internal,
+                    format!("counting the account agents failed: {error}"),
+                )
+            }
+        };
+        if count >= limit {
+            drop(inner);
+            return error_envelope(
+                ErrorCode::BadRequest,
+                format!("this account already has {count} agents; the limit is {limit}"),
+            );
+        }
+        let agent_id = match self
+            .store
+            .create_account_agent(user_id, nick.as_str(), &model, &intro)
+        {
+            Ok(agent_id) => agent_id,
+            Err(error) => {
+                return error_envelope(
+                    ErrorCode::Internal,
+                    format!("creating the agent failed: {error}"),
+                )
+            }
+        };
+        inner.agents.insert(
+            agent_id,
+            AgentMeta {
+                nick: nick.clone(),
+                model,
+                intro,
+                token: String::new(),
+                sent_by: None,
+                why: String::new(),
+                score_total: 0,
+            },
+        );
+        inner.next_agent_id = inner.next_agent_id.max(agent_id + 1);
+        Envelope::ok(
+            AccountRegisterResponse {
+                agent_id,
+                nick: nick.to_string(),
+                attached: false,
+            },
+            Vec::new(),
+            None,
+        )
+    }
+
     /// Dev mode only (design §2.3): hands out a temporary identity, no account.
     pub async fn dev_register(&self, req: RegisterRequest) -> Envelope<RegisterResponse> {
         let started = Instant::now();
@@ -382,7 +747,7 @@ impl Server {
         let intro = req.intro.unwrap_or_default();
         let token = format!("dev-{agent_id:x}-{:x}", next_nonce());
         inner.next_agent_id += 1;
-        inner.tokens.insert(token.clone(), agent_id);
+        self.remember_dev_token(&token, agent_id);
         inner.agents.insert(
             agent_id,
             AgentMeta {
@@ -429,7 +794,7 @@ impl Server {
     pub async fn join(&self, token: &str, req: JoinRequest) -> Envelope<JoinResponse> {
         let started = Instant::now();
         let mut inner = self.inner.lock().await;
-        let Some(agent) = inner.tokens.get(token).copied() else {
+        let Some(agent) = self.authenticate(token) else {
             let env = failed_env(&self.cfg, &mut inner, None, not_authenticated());
             drop(inner);
             return self.finish("join", None, 0, env, started, "not authenticated", None);
@@ -587,7 +952,7 @@ impl Server {
     pub async fn look(&self, token: &str) -> Envelope<LookResponse> {
         let started = Instant::now();
         let mut inner = self.inner.lock().await;
-        let Some(agent) = inner.tokens.get(token).copied() else {
+        let Some(agent) = self.authenticate(token) else {
             let env = failed_env(&self.cfg, &mut inner, None, not_authenticated());
             drop(inner);
             return self.finish("look", None, 0, env, started, "not authenticated", None);
@@ -608,7 +973,7 @@ impl Server {
     pub async fn map_view(&self, token: &str) -> Envelope<MapResponse> {
         let started = Instant::now();
         let mut inner = self.inner.lock().await;
-        let Some(agent) = inner.tokens.get(token).copied() else {
+        let Some(agent) = self.authenticate(token) else {
             let env = failed_env(&self.cfg, &mut inner, None, not_authenticated());
             drop(inner);
             return self.finish("map", None, 0, env, started, "not authenticated", None);
@@ -629,7 +994,7 @@ impl Server {
     pub async fn status(&self, token: &str) -> Envelope<()> {
         let started = Instant::now();
         let mut inner = self.inner.lock().await;
-        let Some(agent) = inner.tokens.get(token).copied() else {
+        let Some(agent) = self.authenticate(token) else {
             let env = failed_env(&self.cfg, &mut inner, None, not_authenticated());
             drop(inner);
             return self.finish("status", None, 0, env, started, "not authenticated", None);
@@ -677,7 +1042,7 @@ impl Server {
     pub async fn move_cmd(&self, token: &str, req: MoveRequest) -> Envelope<ActionQueued> {
         let started = Instant::now();
         let mut inner = self.inner.lock().await;
-        let Some(agent) = inner.tokens.get(token).copied() else {
+        let Some(agent) = self.authenticate(token) else {
             let env = failed_env(&self.cfg, &mut inner, None, not_authenticated());
             drop(inner);
             return self.finish("move", None, 0, env, started, "not authenticated", None);
@@ -772,7 +1137,7 @@ impl Server {
     pub async fn build_cmd(&self, token: &str, req: BuildRequest) -> Envelope<ActionQueued> {
         let started = Instant::now();
         let mut inner = self.inner.lock().await;
-        let Some(agent) = inner.tokens.get(token).copied() else {
+        let Some(agent) = self.authenticate(token) else {
             let env = failed_env(&self.cfg, &mut inner, None, not_authenticated());
             drop(inner);
             return self.finish("build", None, 0, env, started, "not authenticated", None);
@@ -834,7 +1199,7 @@ impl Server {
     pub async fn demolish_cmd(&self, token: &str, req: DemolishRequest) -> Envelope<ActionQueued> {
         let started = Instant::now();
         let mut inner = self.inner.lock().await;
-        let Some(agent) = inner.tokens.get(token).copied() else {
+        let Some(agent) = self.authenticate(token) else {
             let env = failed_env(&self.cfg, &mut inner, None, not_authenticated());
             drop(inner);
             return self.finish("demolish", None, 0, env, started, "not authenticated", None);
@@ -902,7 +1267,7 @@ impl Server {
     pub async fn door_cmd(&self, token: &str, req: DoorRequest) -> Envelope<ActionQueued> {
         let started = Instant::now();
         let mut inner = self.inner.lock().await;
-        let Some(agent) = inner.tokens.get(token).copied() else {
+        let Some(agent) = self.authenticate(token) else {
             let env = failed_env(&self.cfg, &mut inner, None, not_authenticated());
             drop(inner);
             return self.finish("door", None, 0, env, started, "not authenticated", None);
@@ -965,7 +1330,7 @@ impl Server {
     pub async fn attack_cmd(&self, token: &str, req: AttackRequest) -> Envelope<ActionQueued> {
         let started = Instant::now();
         let mut inner = self.inner.lock().await;
-        let Some(agent) = inner.tokens.get(token).copied() else {
+        let Some(agent) = self.authenticate(token) else {
             let env = failed_env(&self.cfg, &mut inner, None, not_authenticated());
             drop(inner);
             return self.finish("attack", None, 0, env, started, "not authenticated", None);
@@ -1035,7 +1400,7 @@ impl Server {
     pub async fn defend_cmd(&self, token: &str, req: DefendRequest) -> Envelope<ActionQueued> {
         let started = Instant::now();
         let mut inner = self.inner.lock().await;
-        let Some(agent) = inner.tokens.get(token).copied() else {
+        let Some(agent) = self.authenticate(token) else {
             let env = failed_env(&self.cfg, &mut inner, None, not_authenticated());
             drop(inner);
             return self.finish("defend", None, 0, env, started, "not authenticated", None);
@@ -1103,7 +1468,7 @@ impl Server {
     pub async fn upgrade_cmd(&self, token: &str, req: UpgradeRequest) -> Envelope<ActionQueued> {
         let started = Instant::now();
         let mut inner = self.inner.lock().await;
-        let Some(agent) = inner.tokens.get(token).copied() else {
+        let Some(agent) = self.authenticate(token) else {
             let env = failed_env(&self.cfg, &mut inner, None, not_authenticated());
             drop(inner);
             return self.finish("upgrade", None, 0, env, started, "not authenticated", None);
@@ -1175,7 +1540,7 @@ impl Server {
     ) -> Envelope<ActionQueued> {
         let started = Instant::now();
         let mut inner = self.inner.lock().await;
-        let Some(agent) = inner.tokens.get(token).copied() else {
+        let Some(agent) = self.authenticate(token) else {
             let env = failed_env(&self.cfg, &mut inner, None, not_authenticated());
             drop(inner);
             return self.finish(
@@ -1251,7 +1616,7 @@ impl Server {
     pub async fn use_cmd(&self, token: &str) -> Envelope<ActionQueued> {
         let started = Instant::now();
         let mut inner = self.inner.lock().await;
-        let Some(agent) = inner.tokens.get(token).copied() else {
+        let Some(agent) = self.authenticate(token) else {
             let env = failed_env(&self.cfg, &mut inner, None, not_authenticated());
             drop(inner);
             return self.finish("use", None, 0, env, started, "not authenticated", None);
@@ -1302,7 +1667,7 @@ impl Server {
     pub async fn cancel_cmd(&self, token: &str) -> Envelope<ActionQueued> {
         let started = Instant::now();
         let mut inner = self.inner.lock().await;
-        let Some(agent) = inner.tokens.get(token).copied() else {
+        let Some(agent) = self.authenticate(token) else {
             let env = failed_env(&self.cfg, &mut inner, None, not_authenticated());
             drop(inner);
             return self.finish("cancel", None, 0, env, started, "not authenticated", None);
@@ -1339,7 +1704,7 @@ impl Server {
     pub async fn leave_cmd(&self, token: &str) -> Envelope<LeaveResponse> {
         let started = Instant::now();
         let mut inner = self.inner.lock().await;
-        let Some(agent) = inner.tokens.get(token).copied() else {
+        let Some(agent) = self.authenticate(token) else {
             let env = failed_env(&self.cfg, &mut inner, None, not_authenticated());
             drop(inner);
             return self.finish("leave", None, 0, env, started, "not authenticated", None);
@@ -1433,7 +1798,7 @@ impl Server {
             .unwrap_or_else(|| self.cfg.wait_default_seconds())
             .clamp(0.05, self.cfg.wait.max_seconds);
 
-        let agent = { self.inner.lock().await.tokens.get(token).copied() };
+        let agent = self.authenticate(token);
         let Some(agent) = agent else {
             let mut inner = self.inner.lock().await;
             let env = failed_env(&self.cfg, &mut inner, None, not_authenticated());
@@ -1585,6 +1950,20 @@ fn not_authenticated() -> ApiError {
         ErrorCode::NotAuthenticated,
         "unknown or missing token; run `loo register` first",
     )
+}
+
+fn error_envelope<T>(code: ErrorCode, message: impl Into<String>) -> Envelope<T> {
+    Envelope::failed(ApiError::new(code, message), Vec::new(), None)
+}
+
+/// Contract §1 installation commands. `base` comes from the request `Host`
+/// header, so the pasted command points at the server the visitor used.
+pub fn install_commands(base: &str, token: &str) -> InstallCommands {
+    let base = base.trim_end_matches('/');
+    InstallCommands {
+        sh: format!("curl -fsSL {base}/install.sh | sh -s -- --server {base} --token {token}"),
+        ps1: format!("irm {base}/install.ps1 | iex; Install-Loo -Server '{base}' -Token '{token}'"),
+    }
 }
 
 fn session_required(inner: &Inner, agent: AgentId) -> ApiError {
@@ -1844,5 +2223,6 @@ World facts
     )
 }
 
+pub mod auth;
 pub mod http;
 pub mod store;

@@ -6,7 +6,7 @@
 //! a crash never leaves a tick half-recorded.
 
 use loo_core::{Event, EventKind, IntentKind, Snapshot, WorldState};
-use loo_proto::{AgentId, Tick};
+use loo_proto::{AccountTokenInfo, AgentId, Tick};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
@@ -23,7 +23,8 @@ CREATE TABLE IF NOT EXISTS worlds(
     map_name TEXT NOT NULL,
     map_text TEXT NOT NULL,
     created_at_ms INTEGER NOT NULL,
-    tick INTEGER NOT NULL
+    tick INTEGER NOT NULL,
+    official INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS events(
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -62,11 +63,30 @@ CREATE TABLE IF NOT EXISTS agents(
     nick TEXT NOT NULL,
     model TEXT NOT NULL,
     intro TEXT NOT NULL,
-    token TEXT NOT NULL UNIQUE,
+    token TEXT UNIQUE,
     sent_by TEXT,
     why TEXT NOT NULL,
     created_at_ms INTEGER NOT NULL,
-    score_total INTEGER NOT NULL DEFAULT 0
+    score_total INTEGER NOT NULL DEFAULT 0,
+    user_id INTEGER
+);
+CREATE TABLE IF NOT EXISTS users(
+    id INTEGER PRIMARY KEY,
+    username TEXT NOT NULL UNIQUE,
+    password_hash TEXT NOT NULL,
+    created_at_ms INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS auth_tokens(
+    id INTEGER PRIMARY KEY,
+    user_id INTEGER NOT NULL,
+    token_hash TEXT NOT NULL UNIQUE,
+    created_at_ms INTEGER NOT NULL,
+    revoked_at_ms INTEGER
+);
+CREATE TABLE IF NOT EXISTS web_sessions(
+    token_hash TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL,
+    created_at_ms INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS events_by_tick ON events(world_id, tick, seq);
 ";
@@ -78,12 +98,16 @@ pub struct StoredAgent {
     pub nick: String,
     pub model: String,
     pub intro: String,
+    /// `""` for an account agent: its token lives in `auth_tokens`.
     pub token: String,
     /// `self` or `human`, recorded when the agent joins.
     pub sent_by: Option<String>,
     pub why: String,
     /// Cumulative score over every session, persisted with each scored tick.
     pub score_total: u32,
+    /// Owning account; `None` for dev agents.
+    pub user_id: Option<u64>,
+    pub created_at_ms: u64,
 }
 
 #[derive(Debug)]
@@ -94,6 +118,7 @@ pub enum StoreError {
     Replay(loo_core::ReplayError),
     MapMismatch,
     Corrupt(String),
+    Conflict(String),
 }
 
 impl std::fmt::Display for StoreError {
@@ -108,6 +133,7 @@ impl std::fmt::Display for StoreError {
                 "the stored world was created from a different map; point --map at that map or use a fresh --data-dir"
             ),
             StoreError::Corrupt(message) => write!(f, "corrupt store: {message}"),
+            StoreError::Conflict(message) => write!(f, "{message}"),
         }
     }
 }
@@ -119,7 +145,7 @@ impl std::error::Error for StoreError {
             StoreError::Json(error) => Some(error),
             StoreError::Io(error) => Some(error),
             StoreError::Replay(error) => Some(error),
-            StoreError::MapMismatch | StoreError::Corrupt(_) => None,
+            StoreError::MapMismatch | StoreError::Corrupt(_) | StoreError::Conflict(_) => None,
         }
     }
 }
@@ -175,7 +201,8 @@ impl Store {
         conn.query_row("PRAGMA journal_mode=WAL", [], |_| Ok(()))?;
         conn.execute_batch("PRAGMA synchronous=NORMAL;")?;
         conn.execute_batch(SCHEMA)?;
-        migrate_agents_score(&conn)?;
+        migrate_agents(&conn)?;
+        migrate_worlds_official(&conn)?;
 
         let existing: Option<i64> = conn
             .query_row(
@@ -440,21 +467,10 @@ impl Store {
     pub fn agents(&self) -> Result<Vec<StoredAgent>, StoreError> {
         let conn = self.conn()?;
         let mut stmt = conn.prepare(
-            "SELECT id, nick, model, intro, token, sent_by, why, score_total FROM agents \
-             WHERE world_id = ?1 ORDER BY id",
+            "SELECT id, nick, model, intro, COALESCE(token, ''), sent_by, why, score_total, user_id, \
+             created_at_ms FROM agents WHERE world_id = ?1 ORDER BY id",
         )?;
-        let rows = stmt.query_map([WORLD_ID], |row| {
-            Ok(StoredAgent {
-                id: row.get::<_, i64>(0)? as AgentId,
-                nick: row.get(1)?,
-                model: row.get(2)?,
-                intro: row.get(3)?,
-                token: row.get(4)?,
-                sent_by: row.get(5)?,
-                why: row.get(6)?,
-                score_total: row.get::<_, i64>(7)? as u32,
-            })
-        })?;
+        let rows = stmt.query_map([WORLD_ID], agent_from_row)?;
         let mut agents = Vec::new();
         for agent in rows {
             agents.push(agent?);
@@ -509,31 +525,397 @@ impl Store {
         }
         Ok(by_agent.into_iter().collect())
     }
+
+    // --- accounts and tokens (contract §1) ---
+
+    /// Inserts an account. The unique username index is the authority: a
+    /// concurrent double registration becomes `StoreError::Conflict`.
+    pub fn create_user(&self, username: &str, password_hash: &str) -> Result<u64, StoreError> {
+        let conn = self.conn()?;
+        match conn.execute(
+            "INSERT INTO users(username, password_hash, created_at_ms) VALUES(?1, ?2, ?3)",
+            params![username, password_hash, now_ms() as i64],
+        ) {
+            Ok(_) => Ok(conn.last_insert_rowid() as u64),
+            Err(error) if is_unique_violation(&error) => Err(StoreError::Conflict(format!(
+                "username {username:?} is already taken"
+            ))),
+            Err(error) => Err(StoreError::Sqlite(error)),
+        }
+    }
+
+    /// `(id, password_hash)` for a username.
+    pub fn user_by_username(&self, username: &str) -> Result<Option<(u64, String)>, StoreError> {
+        Ok(self
+            .conn()?
+            .query_row(
+                "SELECT id, password_hash FROM users WHERE username = ?1",
+                [username],
+                |row| Ok((row.get::<_, i64>(0)? as u64, row.get::<_, String>(1)?)),
+            )
+            .optional()?)
+    }
+
+    pub fn username_of(&self, user_id: u64) -> Result<Option<String>, StoreError> {
+        Ok(self
+            .conn()?
+            .query_row(
+                "SELECT username FROM users WHERE id = ?1",
+                [user_id as i64],
+                |row| row.get(0),
+            )
+            .optional()?)
+    }
+
+    /// Stores `sha256(token)` and returns the creation time.
+    pub fn auth_token_insert(&self, user_id: u64, token_hash: &str) -> Result<u64, StoreError> {
+        let created_at_ms = now_ms();
+        self.conn()?.execute(
+            "INSERT INTO auth_tokens(user_id, token_hash, created_at_ms, revoked_at_ms) \
+             VALUES(?1, ?2, ?3, NULL)",
+            params![user_id as i64, token_hash, created_at_ms as i64],
+        )?;
+        Ok(created_at_ms)
+    }
+
+    /// Revokes every active token of the account; returns how many were live.
+    pub fn auth_token_revoke_all(&self, user_id: u64) -> Result<usize, StoreError> {
+        Ok(self.conn()?.execute(
+            "UPDATE auth_tokens SET revoked_at_ms = ?1 \
+             WHERE user_id = ?2 AND revoked_at_ms IS NULL",
+            params![now_ms() as i64, user_id as i64],
+        )?)
+    }
+
+    pub fn auth_token_lookup(&self, token_hash: &str) -> Result<Option<u64>, StoreError> {
+        Ok(self
+            .conn()?
+            .query_row(
+                "SELECT user_id FROM auth_tokens WHERE token_hash = ?1 AND revoked_at_ms IS NULL",
+                [token_hash],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()?
+            .map(|id| id as u64))
+    }
+
+    /// Account-level token state. `active` is about any live token; the two
+    /// timestamps describe the newest token ever issued.
+    pub fn auth_token_info(&self, user_id: u64) -> Result<AccountTokenInfo, StoreError> {
+        let conn = self.conn()?;
+        let newest: Option<(i64, Option<i64>)> = conn
+            .query_row(
+                "SELECT created_at_ms, revoked_at_ms FROM auth_tokens \
+                 WHERE user_id = ?1 ORDER BY id DESC LIMIT 1",
+                [user_id as i64],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+        let active: bool = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM auth_tokens \
+             WHERE user_id = ?1 AND revoked_at_ms IS NULL)",
+            [user_id as i64],
+            |row| row.get(0),
+        )?;
+        let (created_at_ms, revoked_at_ms) = match newest {
+            Some((created, revoked)) => (Some(created as u64), revoked.map(|at| at as u64)),
+            None => (None, None),
+        };
+        Ok(AccountTokenInfo {
+            created_at_ms,
+            revoked_at_ms,
+            active,
+        })
+    }
+
+    pub fn web_session_insert(&self, token_hash: &str, user_id: u64) -> Result<(), StoreError> {
+        self.conn()?.execute(
+            "INSERT OR REPLACE INTO web_sessions(token_hash, user_id, created_at_ms) \
+             VALUES(?1, ?2, ?3)",
+            params![token_hash, user_id as i64, now_ms() as i64],
+        )?;
+        Ok(())
+    }
+
+    pub fn web_session_lookup(&self, token_hash: &str) -> Result<Option<u64>, StoreError> {
+        Ok(self
+            .conn()?
+            .query_row(
+                "SELECT user_id FROM web_sessions WHERE token_hash = ?1",
+                [token_hash],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()?
+            .map(|id| id as u64))
+    }
+
+    pub fn web_session_delete(&self, token_hash: &str) -> Result<(), StoreError> {
+        self.conn()?.execute(
+            "DELETE FROM web_sessions WHERE token_hash = ?1",
+            [token_hash],
+        )?;
+        Ok(())
+    }
+
+    pub fn agents_of_user(&self, user_id: u64) -> Result<Vec<StoredAgent>, StoreError> {
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(
+            "SELECT id, nick, model, intro, COALESCE(token, ''), sent_by, why, score_total, user_id, \
+             created_at_ms FROM agents WHERE world_id = ?1 AND user_id = ?2 ORDER BY id",
+        )?;
+        let rows = stmt.query_map(params![WORLD_ID, user_id as i64], agent_from_row)?;
+        let mut agents = Vec::new();
+        for agent in rows {
+            agents.push(agent?);
+        }
+        Ok(agents)
+    }
+
+    pub fn agent_owner(&self, agent_id: AgentId) -> Result<Option<u64>, StoreError> {
+        Ok(self
+            .conn()?
+            .query_row(
+                "SELECT user_id FROM agents WHERE id = ?1 AND world_id = ?2",
+                params![agent_id as i64, WORLD_ID],
+                |row| row.get::<_, Option<i64>>(0),
+            )
+            .optional()?
+            .flatten()
+            .map(|id| id as u64))
+    }
+
+    /// `(agent_id, user_id)` for a nickname; dev agents have no owner.
+    pub fn agent_by_nick(&self, nick: &str) -> Result<Option<(AgentId, Option<u64>)>, StoreError> {
+        Ok(self
+            .conn()?
+            .query_row(
+                "SELECT id, user_id FROM agents WHERE nick = ?1 AND world_id = ?2",
+                params![nick, WORLD_ID],
+                |row| {
+                    Ok((
+                        row.get::<_, i64>(0)? as AgentId,
+                        row.get::<_, Option<i64>>(1)?.map(|id| id as u64),
+                    ))
+                },
+            )
+            .optional()?)
+    }
+
+    /// Creates an account agent and returns its id.
+    pub fn create_account_agent(
+        &self,
+        user_id: u64,
+        nick: &str,
+        model: &str,
+        intro: &str,
+    ) -> Result<AgentId, StoreError> {
+        let conn = self.conn()?;
+        let next: i64 = conn.query_row(
+            "SELECT COALESCE(MAX(id), 0) + 1 FROM agents WHERE world_id = ?1",
+            [WORLD_ID],
+            |row| row.get(0),
+        )?;
+        conn.execute(
+            "INSERT INTO agents(id, world_id, nick, model, intro, token, sent_by, why, \
+             created_at_ms, score_total, user_id) \
+             VALUES(?1, ?2, ?3, ?4, ?5, NULL, NULL, '', ?6, 0, ?7)",
+            params![
+                next,
+                WORLD_ID,
+                nick,
+                model,
+                intro,
+                now_ms() as i64,
+                user_id as i64
+            ],
+        )?;
+        Ok(next as AgentId)
+    }
+
+    /// Updates the account's own agent with this nickname; `None` when the
+    /// nickname is not theirs.
+    pub fn update_account_agent(
+        &self,
+        user_id: u64,
+        nick: &str,
+        model: &str,
+        intro: &str,
+    ) -> Result<Option<AgentId>, StoreError> {
+        let conn = self.conn()?;
+        let changed = conn.execute(
+            "UPDATE agents SET model = ?1, intro = ?2 \
+             WHERE nick = ?3 AND user_id = ?4 AND world_id = ?5",
+            params![model, intro, nick, user_id as i64, WORLD_ID],
+        )?;
+        if changed == 0 {
+            return Ok(None);
+        }
+        Ok(conn
+            .query_row(
+                "SELECT id FROM agents WHERE nick = ?1 AND world_id = ?2",
+                params![nick, WORLD_ID],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()?
+            .map(|id| id as AgentId))
+    }
+
+    /// Records the mode this world was created in; only official worlds feed
+    /// the public leaderboard and stats.
+    pub fn mark_world_official(&self) -> Result<(), StoreError> {
+        self.conn()?
+            .execute("UPDATE worlds SET official = 1 WHERE id = ?1", [WORLD_ID])?;
+        Ok(())
+    }
+
+    pub fn is_official(&self) -> Result<bool, StoreError> {
+        Ok(self.conn()?.query_row(
+            "SELECT official FROM worlds WHERE id = ?1",
+            [WORLD_ID],
+            |row| row.get::<_, i64>(0),
+        )? != 0)
+    }
 }
 
-/// Adds `agents.score_total` to databases written before the column existed.
-/// `CREATE TABLE IF NOT EXISTS` never changes an existing table, so old rows
-/// keep every value and the new column starts at its default 0.
-fn migrate_agents_score(conn: &Connection) -> Result<(), StoreError> {
-    let has_score_total = {
-        let mut stmt = conn.prepare("PRAGMA table_info(agents)")?;
-        let mut rows = stmt.query([])?;
-        let mut found = false;
-        while let Some(row) = rows.next()? {
-            if row.get::<_, String>(1)? == "score_total" {
-                found = true;
-                break;
-            }
+/// Maps the ten selected agent columns to a `StoredAgent`.
+fn agent_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<StoredAgent> {
+    Ok(StoredAgent {
+        id: row.get::<_, i64>(0)? as AgentId,
+        nick: row.get(1)?,
+        model: row.get(2)?,
+        intro: row.get(3)?,
+        token: row.get(4)?,
+        sent_by: row.get(5)?,
+        why: row.get(6)?,
+        score_total: row.get::<_, i64>(7)? as u32,
+        user_id: row.get::<_, Option<i64>>(8)?.map(|id| id as u64),
+        created_at_ms: row.get::<_, i64>(9)? as u64,
+    })
+}
+
+fn is_unique_violation(error: &rusqlite::Error) -> bool {
+    matches!(
+        error,
+        rusqlite::Error::SqliteFailure(inner, _)
+            if inner.code == rusqlite::ErrorCode::ConstraintViolation
+    )
+}
+
+/// Brings `agents` up to the account schema: `user_id` added, `token` made
+/// nullable, `score_total` added, and a unique nickname index. A table that
+/// already has the shape is left alone.
+///
+/// Old databases can hold duplicate nicknames; the unique index cannot be built
+/// then, and silently dropping rows would lose identities, so that case is
+/// reported as `StoreError::Corrupt` naming the duplicates.
+fn migrate_agents(conn: &Connection) -> Result<(), StoreError> {
+    let columns = table_columns(conn, "agents")?;
+    let has = |name: &str| columns.iter().any(|column| column.name == name);
+    let has_score_total = has("score_total");
+    let has_user_id = has("user_id");
+    let token_nullable = columns
+        .iter()
+        .find(|column| column.name == "token")
+        .is_some_and(|column| !column.not_null);
+    if has_user_id && token_nullable {
+        if !has_score_total {
+            add_column(conn, "agents", "score_total INTEGER NOT NULL DEFAULT 0")?;
         }
-        found
-    };
-    if !has_score_total {
-        conn.execute(
-            "ALTER TABLE agents ADD COLUMN score_total INTEGER NOT NULL DEFAULT 0",
-            [],
-        )?;
+        ensure_nick_index(conn)?;
+        return Ok(());
+    }
+
+    let duplicates = duplicate_nicks(conn)?;
+    if !duplicates.is_empty() {
+        return Err(StoreError::Corrupt(format!(
+            "agents has duplicate nicknames {:?}; the account schema needs unique nicknames, \
+             so the table was left untouched — rename the duplicates and open again",
+            duplicates
+        )));
+    }
+
+    let score_expr = if has_score_total { "score_total" } else { "0" };
+    // SQLite cannot drop a NOT NULL constraint or add a column in front of an
+    // existing one, so the table is rebuilt and every row copied.
+    conn.execute_batch(&format!(
+        "\
+BEGIN IMMEDIATE;
+CREATE TABLE agents_rebuild(
+    id INTEGER PRIMARY KEY,
+    world_id INTEGER NOT NULL,
+    nick TEXT NOT NULL,
+    model TEXT NOT NULL,
+    intro TEXT NOT NULL,
+    token TEXT UNIQUE,
+    sent_by TEXT,
+    why TEXT NOT NULL,
+    created_at_ms INTEGER NOT NULL,
+    score_total INTEGER NOT NULL DEFAULT 0,
+    user_id INTEGER
+);
+INSERT INTO agents_rebuild(id, world_id, nick, model, intro, token, sent_by, why, created_at_ms, score_total, user_id)
+SELECT id, world_id, nick, model, intro, token, sent_by, why, created_at_ms, {score_expr}, NULL FROM agents;
+DROP TABLE agents;
+ALTER TABLE agents_rebuild RENAME TO agents;
+COMMIT;
+"
+    ))?;
+    ensure_nick_index(conn)?;
+    Ok(())
+}
+
+fn migrate_worlds_official(conn: &Connection) -> Result<(), StoreError> {
+    let columns = table_columns(conn, "worlds")?;
+    if !columns.iter().any(|column| column.name == "official") {
+        add_column(conn, "worlds", "official INTEGER NOT NULL DEFAULT 0")?;
     }
     Ok(())
+}
+
+fn add_column(conn: &Connection, table: &str, definition: &str) -> Result<(), StoreError> {
+    conn.execute_batch(&format!("ALTER TABLE {table} ADD COLUMN {definition}"))?;
+    Ok(())
+}
+
+fn table_columns(conn: &Connection, table: &str) -> Result<Vec<ColumnInfo>, StoreError> {
+    let mut stmt = conn.prepare(&format!("PRAGMA table_info({table})"))?;
+    let rows = stmt.query_map([], |row| {
+        Ok(ColumnInfo {
+            name: row.get(1)?,
+            not_null: row.get::<_, i64>(3)? != 0,
+        })
+    })?;
+    let mut columns = Vec::new();
+    for column in rows {
+        columns.push(column?);
+    }
+    Ok(columns)
+}
+
+struct ColumnInfo {
+    name: String,
+    not_null: bool,
+}
+
+fn duplicate_nicks(conn: &Connection) -> Result<Vec<String>, StoreError> {
+    let mut stmt = conn.prepare(
+        "SELECT nick FROM agents GROUP BY nick HAVING COUNT(*) > 1 ORDER BY nick LIMIT 10",
+    )?;
+    let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+    let mut nicks = Vec::new();
+    for nick in rows {
+        nicks.push(nick?);
+    }
+    Ok(nicks)
+}
+
+fn ensure_nick_index(conn: &Connection) -> Result<(), StoreError> {
+    match conn.execute_batch("CREATE UNIQUE INDEX IF NOT EXISTS agents_nick ON agents(nick)") {
+        Ok(()) => Ok(()),
+        Err(error) => Err(StoreError::Corrupt(format!(
+            "cannot enforce unique nicknames on agents: {error}"
+        ))),
+    }
 }
 
 fn now_ms() -> u64 {

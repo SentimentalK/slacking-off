@@ -276,6 +276,75 @@ pub struct RegisterResponse {
     pub server_tick: Tick,
 }
 
+/// One agent owned by an account (contract §1, `AccountResponse.agents`).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AccountAgent {
+    pub agent_id: AgentId,
+    pub nick: String,
+    pub model: String,
+    pub intro: String,
+    pub score_total: u32,
+    pub level: u8,
+    pub created_at_ms: u64,
+}
+
+/// Account-level token state: at most one token is active at a time.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AccountTokenInfo {
+    /// Creation time of the newest token, `None` when none was ever issued.
+    pub created_at_ms: Option<u64>,
+    /// Revocation time of the newest token, when it was revoked.
+    pub revoked_at_ms: Option<u64>,
+    /// Whether the account has any non-revoked token.
+    pub active: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AccountResponse {
+    pub username: String,
+    pub agents: Vec<AccountAgent>,
+    pub token: AccountTokenInfo,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct InstallCommands {
+    pub sh: String,
+    pub ps1: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct TokenCreateResponse {
+    /// Plaintext account token; this is the only response that carries it.
+    pub token: String,
+    pub created_at_ms: u64,
+    pub install: InstallCommands,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AccountRegisterResponse {
+    pub agent_id: AgentId,
+    pub nick: String,
+    /// `true` when the nickname already belonged to this account.
+    pub attached: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AuthRegisterRequest {
+    pub username: String,
+    pub password: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AuthLoginRequest {
+    pub username: String,
+    pub password: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AuthMeResponse {
+    pub username: String,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct JoinRequest {
     pub sent_by: SentBy,

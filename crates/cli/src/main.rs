@@ -9,10 +9,10 @@ mod render;
 
 use clap::{Parser, Subcommand, ValueEnum};
 use loo_proto::{
-    ActionQueued, AttackRequest, BuildKind, BuildRequest, ConfigResponse, DefendRequest,
-    DemolishRequest, Dir, DoorRequest, DowngradeRequest, Envelope, JoinRequest, JoinResponse,
-    LeaveResponse, LookResponse, MapResponse, MoveRequest, MoveSpec, Nick, RegisterResponse,
-    RulesResponse, SentBy, TargetSpec, UpgradeRequest, WaitRequest, WaitResponse,
+    AccountRegisterResponse, ActionQueued, AttackRequest, BuildKind, BuildRequest, ConfigResponse,
+    DefendRequest, DemolishRequest, Dir, DoorRequest, DowngradeRequest, Envelope, JoinRequest,
+    JoinResponse, LeaveResponse, LookResponse, MapResponse, MoveRequest, MoveSpec, Nick,
+    RegisterResponse, RulesResponse, SentBy, TargetSpec, UpgradeRequest, WaitRequest, WaitResponse,
 };
 use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
@@ -252,8 +252,15 @@ fn dispatch(cli: Cli) -> u8 {
         .or_else(|| saved.as_ref().map(|cfg| cfg.server.clone()))
         .unwrap_or_else(|| config::DEFAULT_SERVER.to_string());
     let token = saved.as_ref().map(|cfg| cfg.token.clone());
-    let http = client::Client::new(base.clone(), token);
+    let agent = saved.as_ref().and_then(|cfg| cfg.agent_id);
+    let http = client::Client::new(base.clone(), token.clone(), agent);
     let json = cli.json;
+
+    // Contract §1: an official config holds a token but no agent yet, so only
+    // registration and the rules are available.
+    let needs_agent = saved
+        .as_ref()
+        .is_some_and(|cfg| cfg.agent_id.is_none() && !cfg.token.is_empty());
 
     if !matches!(cli.command, Command::Register { .. } | Command::Rules) && saved.is_none() {
         eprintln!(
@@ -262,11 +269,19 @@ fn dispatch(cli: Cli) -> u8 {
         );
         return 2;
     }
+    if needs_agent && !matches!(cli.command, Command::Register { .. } | Command::Rules) {
+        eprintln!(
+            "this account has no agent yet · run `loo register --name ... --model ... --intro ...`"
+        );
+        return 2;
+    }
 
     match cli.command {
-        Command::Register { name, model, intro } => {
-            register(&http, &base, name, model, intro, json)
-        }
+        Command::Register { name, model, intro } => match token {
+            // Contract §1: a saved token means an official account.
+            Some(token) => register_account(&http, &base, token, name, model, intro, json),
+            None => register_dev(&http, &base, name, model, intro, json),
+        },
         Command::Join { sent_by, why } => {
             let request = JoinRequest {
                 sent_by: sent_by.into(),
@@ -375,7 +390,7 @@ fn wait_client_timeout(requested: Option<f64>, limits: WaitLimits) -> f64 {
         + CLIENT_WAIT_MARGIN_SECONDS
 }
 
-fn register(
+fn register_dev(
     http: &client::Client,
     base: &str,
     name: Option<String>,
@@ -446,8 +461,8 @@ fn register(
         };
         let local = config::LocalConfig {
             server: base.to_string(),
-            agent_id: result.agent_id,
-            nick,
+            agent_id: Some(result.agent_id),
+            nick: Some(nick),
             token: result.token.clone(),
         };
         match config::save(&local) {
@@ -466,6 +481,112 @@ fn register(
         }
     }
     code
+}
+
+/// Official registration (contract §1): all three fields are required and the
+/// returned identity is merged into the config, keeping server and token.
+fn register_account(
+    http: &client::Client,
+    base: &str,
+    token: String,
+    name: Option<String>,
+    model: Option<String>,
+    intro: Option<String>,
+    json: bool,
+) -> u8 {
+    let (Some(name), Some(model), Some(intro)) = (name, model, intro) else {
+        eprintln!("official registration needs --name, --model and --intro");
+        return 2;
+    };
+    if name.trim().is_empty() || model.trim().is_empty() || intro.trim().is_empty() {
+        eprintln!("--name, --model and --intro must not be empty");
+        return 2;
+    }
+    let nick = match Nick::parse(&name) {
+        Ok(nick) => nick,
+        Err(message) => {
+            eprintln!("{message}");
+            return 2;
+        }
+    };
+
+    let body = json!({ "name": nick, "model": model, "intro": intro });
+    let raw = match http.post("/api/register", body, SHORT_TIMEOUT) {
+        Ok(raw) => raw,
+        Err(message) => {
+            eprintln!("network error: {message}");
+            return 2;
+        }
+    };
+    let value: Value = match serde_json::from_str(&raw.body) {
+        Ok(value) => value,
+        Err(_) => {
+            eprintln!(
+                "unexpected non-JSON response (HTTP {}): {}",
+                raw.status,
+                raw.body.trim()
+            );
+            return 2;
+        }
+    };
+    let code = exit_code(&value);
+    let pretty_json = json.then(|| pretty(&value));
+    let envelope: Envelope<AccountRegisterResponse> = match serde_json::from_value(value) {
+        Ok(envelope) => envelope,
+        Err(error) => {
+            eprintln!("protocol error: {error}");
+            return 2;
+        }
+    };
+    if let Some(text) = pretty_json {
+        println!("{text}");
+    }
+    if code != 0 {
+        if let Some(error) = &envelope.error {
+            eprintln!("{}", error.message);
+        }
+        return code;
+    }
+    let Some(result) = envelope.result else {
+        eprintln!("protocol error: the server returned no agent");
+        return 2;
+    };
+    let nick = match Nick::parse(&result.nick) {
+        Ok(nick) => nick,
+        Err(message) => {
+            eprintln!("server returned an invalid nickname: {message}");
+            return 2;
+        }
+    };
+    let local = config::LocalConfig {
+        server: base.to_string(),
+        token,
+        agent_id: Some(result.agent_id),
+        nick: Some(nick),
+    };
+    let path = match config::save(&local) {
+        Ok(path) => path,
+        Err(message) => {
+            eprintln!("{message}");
+            return 2;
+        }
+    };
+    if json {
+        eprintln!("identity saved: {}", path.display());
+    } else {
+        println!(
+            "{} {} as agent {}",
+            if result.attached {
+                "attached"
+            } else {
+                "created"
+            },
+            result.nick,
+            result.agent_id
+        );
+        println!("identity saved: {}", path.display());
+    }
+    0
 }
 
 fn print_env<T>(raw: Result<client::RawResponse, String>, label: &str, json: bool) -> u8
@@ -491,6 +612,11 @@ where
         }
     };
     let code = exit_code(&value);
+    if code == 2 {
+        if let Some(message) = value.pointer("/error/message").and_then(Value::as_str) {
+            eprintln!("{message}");
+        }
+    }
     if json {
         println!("{}", pretty(&value));
         return code;
