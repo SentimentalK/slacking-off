@@ -6,7 +6,7 @@
 //! a crash never leaves a tick half-recorded.
 
 use loo_core::{Event, EventKind, IntentKind, Snapshot, WorldState};
-use loo_proto::{AccountTokenInfo, AgentId, Tick};
+use loo_proto::{AccountTokenInfo, AgentId, Tick, WorldSummary};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
@@ -386,6 +386,103 @@ impl Store {
                 }
             }
         }
+    }
+
+    /// The newest checkpoint at or before `tick`, by tick.
+    ///
+    /// Older databases stored a bare `WorldState`; those rows are upgraded the
+    /// same way [`Store::latest_snapshot`] does it.
+    pub fn snapshot_at_or_before(
+        &self,
+        tick: Tick,
+    ) -> Result<Option<(Tick, Snapshot)>, StoreError> {
+        let row: Option<(i64, String)> = self
+            .conn()?
+            .query_row(
+                "SELECT tick, state FROM snapshots WHERE world_id = ?1 AND tick <= ?2 \
+                 ORDER BY tick DESC LIMIT 1",
+                params![WORLD_ID, tick as i64],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+        match row {
+            None => Ok(None),
+            Some((tick, state)) => {
+                let tick = tick as Tick;
+                match serde_json::from_str::<Snapshot>(&state) {
+                    Ok(snapshot) => Ok(Some((tick, snapshot))),
+                    Err(_) => {
+                        let world: WorldState = serde_json::from_str(&state)?;
+                        let last_seq = self.last_seq_at(tick)?;
+                        Ok(Some((tick, Snapshot::at(world, last_seq))))
+                    }
+                }
+            }
+        }
+    }
+
+    /// Every event of one tick, in sequence order.
+    pub fn events_of_tick(&self, tick: Tick) -> Result<Vec<Event>, StoreError> {
+        let conn = self.conn()?;
+        let mut stmt = conn
+            .prepare("SELECT payload FROM events WHERE world_id = ?1 AND tick = ?2 ORDER BY seq")?;
+        let rows = stmt.query_map(params![WORLD_ID, tick as i64], |row| {
+            row.get::<_, String>(0)
+        })?;
+        let mut events = Vec::new();
+        for payload in rows {
+            events.push(serde_json::from_str(&payload?)?);
+        }
+        Ok(events)
+    }
+
+    /// Events from the `(from_tick, from_seq)` cursor through `to_tick`
+    /// inclusive, in `(tick, seq)` order. The cursor itself is included.
+    pub fn events_between(
+        &self,
+        from_tick: Tick,
+        from_seq: u32,
+        to_tick: Tick,
+    ) -> Result<Vec<Event>, StoreError> {
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(
+            "SELECT payload FROM events WHERE world_id = ?1 AND tick <= ?4 \
+             AND (tick > ?2 OR (tick = ?2 AND seq >= ?3)) ORDER BY tick, seq",
+        )?;
+        let rows = stmt.query_map(
+            params![WORLD_ID, from_tick as i64, from_seq as i64, to_tick as i64],
+            |row| row.get::<_, String>(0),
+        )?;
+        let mut events = Vec::new();
+        for payload in rows {
+            events.push(serde_json::from_str(&payload?)?);
+        }
+        Ok(events)
+    }
+
+    /// The single world row plus the last settled tick in its event log.
+    pub fn world_summary(&self) -> Result<WorldSummary, StoreError> {
+        let conn = self.conn()?;
+        let (id, name, last_tick, official) = conn.query_row(
+            "SELECT w.id, w.map_name, \
+             COALESCE((SELECT MAX(tick) FROM events WHERE world_id = w.id), w.tick), w.official \
+             FROM worlds w WHERE w.id = ?1",
+            [WORLD_ID],
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, i64>(3)?,
+                ))
+            },
+        )?;
+        Ok(WorldSummary {
+            id: id as u64,
+            name,
+            last_tick: last_tick as Tick,
+            official: official != 0,
+        })
     }
 
     /// Highest event seq committed at `tick` (0 when none).

@@ -636,6 +636,136 @@ impl ApiError {
     }
 }
 
+// --- public projection (contract §2) ---------------------------------------
+//
+// This is the only world state SSE and replay expose. It must never carry
+// `why`, `intro`, `model`, tokens, the command log or snapshots: only the
+// nickname is free-form.
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Projection {
+    pub world: u64,
+    pub tick: Tick,
+    pub tick_seconds: f64,
+    pub width: i32,
+    pub height: i32,
+    pub counts: ProjectionCounts,
+    pub agents: Vec<ProjectionAgent>,
+    pub objects: Vec<ProjectionObject>,
+    pub queue: Vec<ProjectionQueueEntry>,
+    pub events: Vec<ProjectionEvent>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProjectionCounts {
+    pub inside: usize,
+    pub queued: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProjectionAgent {
+    pub id: AgentId,
+    pub nick: String,
+    pub color: u8,
+    pub session_id: SessionId,
+    pub pos: Pos,
+    pub pose: AgentPose,
+    pub facing: Dir,
+    pub need: Option<Need>,
+    pub use_done: u32,
+    pub use_total: u32,
+    pub deadline_tick: Tick,
+    pub sent_by: Option<SentBy>,
+    pub level: u8,
+    pub score_total: u32,
+    pub defending: Option<Pos>,
+    pub stun_until: Tick,
+    pub immunity_until: Tick,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentPose {
+    Idle,
+    Walking,
+    Using,
+    Working,
+    Demolishing,
+    Attacking,
+    Defending,
+    Stunned,
+    Success,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProjectionObject {
+    pub pos: Pos,
+    pub kind: ObjectKind,
+    pub level: u8,
+    pub open: bool,
+    pub progress: u32,
+    pub progress_total: u32,
+    pub site: Option<ObjectKind>,
+    pub crack: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ObjectKind {
+    Wall,
+    Door,
+    Toilet,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProjectionQueueEntry {
+    pub id: AgentId,
+    pub nick: String,
+    pub color: u8,
+    /// `None` while the queue has no cell assigned (contract amendment E-2).
+    pub pos: Option<Pos>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProjectionEvent {
+    pub tick: Tick,
+    pub seq: u32,
+    pub kind: EventTag,
+    pub text: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EventTag {
+    Success,
+    Attack,
+    Demolish,
+    Defend,
+    Join,
+    Leave,
+    Build,
+    Use,
+    Other,
+}
+
+/// `GET /api/terrain`: one character per cell, rows top-down, `.` buildable and
+/// `:` no-build.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TerrainResponse {
+    pub width: i32,
+    pub height: i32,
+    pub rows: Vec<String>,
+}
+
+/// One row of `GET /api/worlds`; this server keeps a single world.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorldSummary {
+    pub id: u64,
+    pub name: String,
+    pub last_tick: Tick,
+    pub official: bool,
+}
+
 /// Every response carries the same three things (design §10): this command's
 /// result, the events since the previous response, and the agent's own state.
 #[derive(Clone, Debug, Serialize, Deserialize)]

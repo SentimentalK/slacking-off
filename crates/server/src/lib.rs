@@ -14,16 +14,19 @@ use loo_proto::{
     AgentView, ApiError, AttackRequest, AuthMeResponse, Briefing, BuildKind, BuildRequest,
     ConfigResponse, DefendRequest, DemolishRequest, DoorRequest, DowngradeRequest, Envelope,
     ErrorCode, EventView, InstallCommands, JoinRequest, JoinResponse, LeaveResponse, LookResponse,
-    MapResponse, MoveRequest, Need, Placement, PlacementKind, Pos, RegisterRequest,
-    RegisterResponse, RulesResponse, SentBy, SessionId, TargetSpec, Tick, TokenCreateResponse,
-    UpgradeRequest, WaitRequest, WaitResponse, WaitWake,
+    MapResponse, MoveRequest, Need, Placement, PlacementKind, Pos, Projection, RegisterRequest,
+    RegisterResponse, RulesResponse, SentBy, SessionId, TargetSpec, TerrainResponse, Tick,
+    TokenCreateResponse, UpgradeRequest, WaitRequest, WaitResponse, WaitWake, WorldSummary,
 };
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 pub use store::{Store, StoreError, StoredAgent};
 use tokio::sync::{broadcast, Mutex};
+
+use crate::projection::{build as build_projection, AgentPublic};
 
 /// Outbox cap per session so an agent that stops polling cannot grow memory.
 const MAX_OUTBOX: usize = 512;
@@ -32,6 +35,8 @@ pub struct Server {
     cfg: Config,
     inner: Mutex<Inner>,
     tick_tx: broadcast::Sender<Tick>,
+    /// One projection per settled tick, for `/api/watch`. Capacity 32.
+    watch_tx: broadcast::Sender<Arc<Projection>>,
     store: Store,
     /// Contract §1 mode: accounts are required and tokens are hashed in the DB.
     official: bool,
@@ -60,6 +65,11 @@ struct Inner {
     /// Use ticks for urine and feces, copied from the immutable server config so
     /// `agent_view` can report the total without holding a `Config`.
     need_use_ticks: [u32; 2],
+    /// Events of `world.tick`: loaded at open, replaced after a settlement, and
+    /// extended by join events (which land on the current tick).
+    current_events: Vec<loo_core::Event>,
+    /// The public half of each agent's meta; `why`/`intro`/`model` stay private.
+    agent_public: BTreeMap<AgentId, AgentPublic>,
 }
 
 struct AgentMeta {
@@ -154,9 +164,17 @@ impl Server {
 
         let stored_agents = store.agents()?;
         let mut agents = BTreeMap::new();
+        let mut agent_public = BTreeMap::new();
         let mut dev_tokens = HashMap::new();
         for stored in &stored_agents {
-            agents.insert(stored.id, agent_meta(stored)?);
+            let meta = agent_meta(stored)?;
+            agent_public.insert(
+                stored.id,
+                AgentPublic {
+                    sent_by: meta.sent_by,
+                },
+            );
+            agents.insert(stored.id, meta);
             if !stored.token.is_empty() {
                 dev_tokens.insert(stored.token.clone(), stored.id);
             }
@@ -172,7 +190,9 @@ impl Server {
         }
 
         let (tick_tx, _) = broadcast::channel(16);
+        let (watch_tx, _) = broadcast::channel(32);
         let need_use_ticks = [cfg.need.urine_use_ticks, cfg.need.feces_use_ticks];
+        let current_events = store.events_of_tick(world.tick)?;
         Ok(Server {
             cfg,
             inner: Mutex::new(Inner {
@@ -192,8 +212,11 @@ impl Server {
                 last_seq,
                 tick_seed,
                 need_use_ticks,
+                current_events,
+                agent_public,
             }),
             tick_tx,
+            watch_tx,
             store,
             official,
             dev_tokens: std::sync::Mutex::new(dev_tokens),
@@ -309,6 +332,7 @@ impl Server {
             }
         }
 
+        inner.current_events = events;
         inner.world = world;
         inner.sessions = inner
             .world
@@ -318,6 +342,12 @@ impl Server {
             .collect();
 
         let tick = inner.world.tick;
+        let projection = build_projection(
+            &self.cfg,
+            &inner.world,
+            &inner.agent_public,
+            &inner.current_events,
+        );
         let interval = self.cfg.persist.snapshot_interval_ticks;
         if interval > 0 && tick % u64::from(interval) == 0 {
             let snapshot = Snapshot {
@@ -330,6 +360,8 @@ impl Server {
             }
         }
         drop(inner);
+        // No subscribers is not an error.
+        let _ = self.watch_tx.send(Arc::new(projection));
         let _ = self.tick_tx.send(tick);
         tick
     }
@@ -352,6 +384,86 @@ impl Server {
     pub async fn event_cursor(&self) -> (Tick, u32) {
         let inner = self.inner.lock().await;
         (inner.world.tick, inner.last_seq)
+    }
+
+    /// The live projection of the current tick (contract §2).
+    pub async fn current_projection(&self) -> Projection {
+        let (world, agent_public, current_events) = {
+            let inner = self.inner.lock().await;
+            (
+                inner.world.clone(),
+                inner.agent_public.clone(),
+                inner.current_events.clone(),
+            )
+        };
+        build_projection(&self.cfg, &world, &agent_public, &current_events)
+    }
+
+    /// Replays the world to `tick` and projects it with the same builder as the
+    /// live stream, so SSE and replay agree field for field.
+    pub async fn projection_at(&self, tick: Tick) -> Result<Projection, String> {
+        let (current, agent_public) = {
+            let inner = self.inner.lock().await;
+            (inner.world.tick, inner.agent_public.clone())
+        };
+        if tick > current {
+            return Err(format!(
+                "tick {tick} is in the future; the world is at tick {current}"
+            ));
+        }
+
+        let base = match self
+            .store
+            .snapshot_at_or_before(tick)
+            .map_err(|error| error.to_string())?
+        {
+            Some((_, snapshot)) => snapshot,
+            None => {
+                // No checkpoint yet: replay from the map's initial state.
+                let map_text = self.store.map_text().map_err(|error| error.to_string())?;
+                let def = loo_core::map::parse(&map_text)
+                    .map_err(|error| format!("the stored map does not parse: {error}"))?;
+                Snapshot::new(WorldState::new(def))
+            }
+        };
+        let events = self
+            .store
+            .events_between(base.world.tick, base.last_seq.saturating_add(1), tick)
+            .map_err(|error| error.to_string())?;
+        let world =
+            loo_core::restore(&base, &events, &self.cfg).map_err(|error| error.to_string())?;
+        let tick_events = self
+            .store
+            .events_of_tick(tick)
+            .map_err(|error| error.to_string())?;
+        Ok(build_projection(
+            &self.cfg,
+            &world,
+            &agent_public,
+            &tick_events,
+        ))
+    }
+
+    /// `GET /api/terrain`.
+    pub async fn terrain(&self) -> TerrainResponse {
+        let inner = self.inner.lock().await;
+        projection::terrain_rows(&inner.world)
+    }
+
+    /// `GET /api/worlds`: this server's single world.
+    pub async fn worlds(&self) -> Vec<WorldSummary> {
+        match self.store.world_summary() {
+            Ok(summary) => vec![summary],
+            Err(error) => {
+                eprintln!("the world row could not be read: {error}");
+                Vec::new()
+            }
+        }
+    }
+
+    /// A receiver for one projection per settled tick.
+    pub fn watch_receiver(&self) -> broadcast::Receiver<Arc<Projection>> {
+        self.watch_tx.subscribe()
     }
 
     /// Writes a snapshot of the live world now, for a graceful shutdown.
@@ -886,6 +998,15 @@ impl Server {
                 inner.last_seq = events.last().map(|event| event.seq).unwrap_or(start_seq);
                 inner.next_session_id += 1;
                 inner.sessions.insert(agent, session_id);
+                inner.agent_public.insert(
+                    agent,
+                    AgentPublic {
+                        sent_by: Some(req.sent_by),
+                    },
+                );
+                // Join events belong to the current tick, so the live projection
+                // of that tick matches what `projection_at` replays.
+                inner.current_events.extend(events.iter().cloned());
                 // A fresh join starts with a clean slate: no intents or events
                 // from the previous session of this agent.
                 inner.outbox.remove(&agent);
@@ -2225,4 +2346,5 @@ World facts
 
 pub mod auth;
 pub mod http;
+pub mod projection;
 pub mod store;

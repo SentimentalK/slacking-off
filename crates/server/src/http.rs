@@ -6,20 +6,26 @@
 
 use crate::auth::{new_token, sha256_hex};
 use crate::{error_envelope, Server};
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
+use axum::response::sse::{Event as SseEvent, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
+use futures_util::stream::unfold;
 use loo_proto::{
-    ActionQueued, AttackRequest, AuthLoginRequest, AuthMeResponse, AuthRegisterRequest,
+    ActionQueued, ApiError, AttackRequest, AuthLoginRequest, AuthMeResponse, AuthRegisterRequest,
     BuildRequest, ConfigResponse, DefendRequest, DemolishRequest, DoorRequest, DowngradeRequest,
-    Envelope, ErrorCode, JoinRequest, JoinResponse, LeaveResponse, MoveRequest, RegisterRequest,
-    UpgradeRequest, WaitRequest,
+    Envelope, ErrorCode, JoinRequest, JoinResponse, LeaveResponse, MoveRequest, Projection,
+    RegisterRequest, Tick, UpgradeRequest, WaitRequest,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use std::collections::VecDeque;
+use std::convert::Infallible;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
+use tokio::sync::broadcast;
 
 /// Cookie lifetime for both the session and its CSRF mirror (30 days).
 const SESSION_MAX_AGE: u64 = 2_592_000;
@@ -72,6 +78,10 @@ pub fn router_with(server: Arc<Server>, options: HttpOptions) -> Router {
         .route("/api/status", get(status))
         .route("/api/config", get(config))
         .route("/api/rules", get(rules))
+        .route("/api/terrain", get(terrain))
+        .route("/api/worlds", get(worlds))
+        .route("/api/projection", get(projection))
+        .route("/api/watch", get(watch))
         .route("/api/move", post(move_cmd))
         .route("/api/build", post(build_cmd))
         .route("/api/demolish", post(demolish_cmd))
@@ -348,6 +358,178 @@ async fn config(State(app): State<Arc<AppState>>) -> Response {
 
 async fn rules(State(app): State<Arc<AppState>>) -> Response {
     respond(app.server.rules().await)
+}
+
+// --- public projection, terrain and SSE (contract §2) -----------------------
+
+#[derive(Deserialize)]
+struct ProjectionQuery {
+    tick: Option<Tick>,
+}
+
+async fn terrain(State(app): State<Arc<AppState>>) -> Response {
+    Json(app.server.terrain().await).into_response()
+}
+
+async fn worlds(State(app): State<Arc<AppState>>) -> Response {
+    respond(Envelope::ok(app.server.worlds().await, Vec::new(), None))
+}
+
+async fn projection(
+    State(app): State<Arc<AppState>>,
+    Query(query): Query<ProjectionQuery>,
+) -> Response {
+    match query.tick {
+        None => respond(Envelope::ok(
+            app.server.current_projection().await,
+            Vec::new(),
+            None,
+        )),
+        Some(tick) => match app.server.projection_at(tick).await {
+            Ok(projection) => respond(Envelope::ok(projection, Vec::new(), None)),
+            Err(message) => respond(Envelope::<Projection>::failed(
+                ApiError::new(ErrorCode::BadRequest, message),
+                Vec::new(),
+                None,
+            )),
+        },
+    }
+}
+
+/// Replay cap for `Last-Event-ID`; a bigger gap sends only the current tick.
+const MAX_REPLAY_TICKS: Tick = 30;
+const PING_INTERVAL: Duration = Duration::from_secs(15);
+
+struct WatchState {
+    server: Arc<Server>,
+    receiver: broadcast::Receiver<Arc<Projection>>,
+    /// Frames still to send before live updates start.
+    pending: VecDeque<SseEvent>,
+    /// Last tick written to this connection, so replay and live never repeat.
+    last_sent: Option<Tick>,
+    interval: tokio::time::Interval,
+}
+
+async fn watch(State(app): State<Arc<AppState>>, headers: HeaderMap) -> Response {
+    let server = app.server.clone();
+    let live = server.current_projection().await;
+    let current_tick = live.tick;
+    let last_event_id = headers
+        .get("last-event-id")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.trim().parse::<Tick>().ok());
+
+    // Subscribe before replaying so no settled tick slips between the replay
+    // and the live loop; `last_sent` removes any overlap.
+    let receiver = server.watch_receiver();
+
+    let mut pending = VecDeque::new();
+    pending.push_back(SseEvent::default().retry(Duration::from_secs(3)));
+    pending.push_back(
+        SseEvent::default().event("hello").data(
+            serde_json::json!({
+                "world": live.world,
+                "tick": live.tick,
+                "tick_seconds": live.tick_seconds,
+            })
+            .to_string(),
+        ),
+    );
+
+    let mut last_sent = None;
+    match last_event_id {
+        Some(last) if last < current_tick => {
+            if current_tick - last > MAX_REPLAY_TICKS {
+                pending.push_back(tick_frame(&live));
+                last_sent = Some(current_tick);
+            } else {
+                for tick in last + 1..=current_tick {
+                    match server.projection_at(tick).await {
+                        Ok(projection) => {
+                            pending.push_back(tick_frame(&projection));
+                            last_sent = Some(tick);
+                        }
+                        Err(message) => {
+                            eprintln!("replay for tick {tick} failed: {message}");
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        // The client already has this tick; wait for the next settlement.
+        Some(_) => {
+            last_sent = Some(current_tick);
+        }
+        None => {
+            pending.push_back(tick_frame(&live));
+            last_sent = Some(current_tick);
+        }
+    }
+
+    let state = WatchState {
+        server,
+        receiver,
+        pending,
+        last_sent,
+        interval: tokio::time::interval_at(
+            tokio::time::Instant::now() + PING_INTERVAL,
+            PING_INTERVAL,
+        ),
+    };
+
+    let stream = unfold(state, |mut state| async move {
+        loop {
+            if let Some(frame) = state.pending.pop_front() {
+                return Some((Ok::<_, Infallible>(frame), state));
+            }
+            tokio::select! {
+                _ = state.interval.tick() => {
+                    return Some((
+                        Ok(SseEvent::default().comment("ping")),
+                        state,
+                    ));
+                }
+                received = state.receiver.recv() => {
+                    match received {
+                        Ok(projection) => {
+                            if state.last_sent == Some(projection.tick) {
+                                continue;
+                            }
+                            state.last_sent = Some(projection.tick);
+                            return Some((Ok(tick_frame(&projection)), state));
+                        }
+                        Err(broadcast::error::RecvError::Lagged(_)) => {
+                            // Too far behind: jump to the live tick.
+                            let projection = state.server.current_projection().await;
+                            if state.last_sent == Some(projection.tick) {
+                                continue;
+                            }
+                            state.last_sent = Some(projection.tick);
+                            return Some((Ok(tick_frame(&projection)), state));
+                        }
+                        Err(broadcast::error::RecvError::Closed) => return None,
+                    }
+                }
+            }
+        }
+    });
+
+    let mut response = Sse::new(stream).into_response();
+    response
+        .headers_mut()
+        .insert("x-accel-buffering", HeaderValue::from_static("no"));
+    response
+        .headers_mut()
+        .insert(header::CONNECTION, HeaderValue::from_static("keep-alive"));
+    response
+}
+
+fn tick_frame(projection: &Projection) -> SseEvent {
+    SseEvent::default()
+        .id(projection.tick.to_string())
+        .event("tick")
+        .data(serde_json::to_string(projection).expect("the projection always serialises"))
 }
 
 async fn move_cmd(
