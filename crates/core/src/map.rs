@@ -262,10 +262,10 @@ pub fn parse(text: &str) -> Result<MapDef, MapError> {
 
 /// Orders both queue lanes head to tail.
 ///
-/// A map that declares no `q` and no `r` has no queue area at all. Once it
-/// declares a lane, the primary lane must be non-empty and its mouth must be
-/// the single `q` cell orthogonally adjacent to the entrance. The overflow lane
-/// is optional; its mouth is the unique `r` cell closest to the entrance.
+/// Every map must declare a primary lane. The primary lane must be non-empty
+/// and its mouth must be the single `q` cell orthogonally adjacent to the
+/// entrance. The overflow lane is optional; its mouth is the unique `r` cell
+/// closest to the entrance.
 /// Both lanes are ordered by BFS distance from their mouth, so every distance
 /// must belong to exactly one cell — otherwise the order would be ambiguous.
 fn order_queue_lanes(

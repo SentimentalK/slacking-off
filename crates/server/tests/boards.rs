@@ -404,6 +404,8 @@ async fn timeline_keeps_only_marker_kinds_in_tick_order() {
                 agent: 1,
                 nick: "alpha-one".to_string(),
                 at: Some(Pos::new(1, 1)),
+                inside: true,
+                ahead: 0,
                 score_total: 0,
             },
         },
