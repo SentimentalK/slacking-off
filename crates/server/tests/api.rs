@@ -810,7 +810,15 @@ async fn restart_restores_immediate_and_queued_joins_without_a_snapshot() {
         .into_iter()
         .map(|event| (event.tick, event.kind.name().to_string()))
         .collect();
-    assert_eq!(joins, vec![(0, "Joined".into()), (0, "Joined".into())]);
+    assert_eq!(
+        joins,
+        vec![
+            (0, "Joined".into()),
+            (0, "NeedAssigned".into()),
+            (0, "Joined".into()),
+        ],
+        "an immediate join also rolls its need; a queued join does not"
+    );
     drop(server);
     drop(store);
 

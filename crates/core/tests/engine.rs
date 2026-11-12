@@ -1031,7 +1031,7 @@ fn join_events_replay_immediate_and_queued_entries() {
     )
     .expect("first join");
     assert!(matches!(outcome_a, JoinOutcome::Inside { .. }));
-    assert_eq!(a_events.len(), 1);
+    assert_eq!(a_events.len(), 2, "a join also assigns its need");
     match &a_events[0].kind {
         EventKind::Joined {
             session, agent, at, ..
@@ -1042,6 +1042,20 @@ fn join_events_replay_immediate_and_queued_entries() {
         other => panic!("expected Joined, got {other:?}"),
     }
     assert_eq!((a_events[0].tick, a_events[0].seq), (0, 1));
+    assert!(
+        matches!(
+            a_events[1].kind,
+            EventKind::NeedAssigned {
+                session: 10,
+                agent: 1,
+                ..
+            }
+        ),
+        "the need follows the join in the same tick: {:?}",
+        a_events[1].kind
+    );
+    assert_eq!((a_events[1].tick, a_events[1].seq), (0, 2));
+    let last_a_seq = a_events[1].seq;
 
     let (joined, outcome_b, b_events) = join(
         &after_a,
@@ -1051,14 +1065,15 @@ fn join_events_replay_immediate_and_queued_entries() {
             session: 20,
         },
         &cfg,
-        a_events[0].seq,
+        last_a_seq,
         0,
     )
     .expect("second join");
     assert!(matches!(outcome_b, JoinOutcome::Waiting { ahead: 0 }));
     assert_eq!(joined.entry_queue.len(), 1);
     assert_eq!(joined.agents[&2].pos, None);
-    assert_eq!((b_events[0].tick, b_events[0].seq), (0, 2));
+    assert_eq!(b_events.len(), 1, "a queued join has no need yet");
+    assert_eq!((b_events[0].tick, b_events[0].seq), (0, 3));
     assert!(matches!(
         b_events[0].kind,
         EventKind::Joined { at: None, .. }
@@ -1092,8 +1107,8 @@ fn join_events_replay_immediate_and_queued_entries() {
 
     // A snapshot taken after the first join continues with seq 2 of tick 0.
     let partial = restore(
-        &Snapshot::at(after_a.clone(), a_events[0].seq),
-        &all[1..],
+        &Snapshot::at(after_a.clone(), last_a_seq),
+        &all[a_events.len()..],
         &cfg,
     )
     .expect("mid-tick join continuation restores");

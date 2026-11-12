@@ -39,9 +39,11 @@ pub use config::Config;
 pub use event::{ActionOutcome, Blocker, Event, EventKind, ObjectCause};
 pub use map::{Map, MapDef, MapError, Terrain};
 pub use replay::{diff_worlds, replay, restore, ReplayError, Snapshot, WorldDiff};
-pub use rules::{validate_build, validate_demolish, validate_door};
+pub use rules::{
+    session_score, validate_build, validate_demolish, validate_door, validate_use, weighted_score,
+};
 pub use state::{Action, Agent, Object, Session, SessionStatus, SiteKind, WorldState};
 pub use step::{
-    join, step, Intent, IntentKind, JoinCommand, JoinOutcome, JoinReject, JoinRejectKind,
+    join, leave, step, Intent, IntentKind, JoinCommand, JoinOutcome, JoinReject, JoinRejectKind,
 };
 pub use view::{briefing, is_usable, look, map_memory};

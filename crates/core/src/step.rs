@@ -5,10 +5,10 @@
 
 use crate::config::Config;
 use crate::event::{ActionOutcome, Blocker, Event, EventKind, EventLog, ObjectCause};
-use crate::rng::shuffle;
-use crate::rules::{validate_build, validate_demolish, validate_door};
+use crate::rng::{shuffle, Rng};
+use crate::rules::{session_score, validate_build, validate_demolish, validate_door, validate_use};
 use crate::state::{Action, Agent, Object, Session, SessionStatus, SiteKind, WorldState};
-use loo_proto::{AgentId, Dir, Nick, Pos, SessionId};
+use loo_proto::{AgentId, Dir, Need, Nick, Pos, SessionId, SessionOutcome};
 use serde::{Deserialize, Serialize};
 
 /// A join request as the server understands it: one persistent agent id, one
@@ -123,6 +123,9 @@ pub fn join(
             nick: cmd.nick.to_string(),
             at: Some(at),
         });
+        if let Some(kind) = assign_need(&mut next, cmd.session, cfg, seed) {
+            log.push(kind);
+        }
         return Ok((next, JoinOutcome::Inside { at }, log.into_vec()));
     }
 
@@ -178,7 +181,7 @@ pub fn step(
     let mut log = EventLog::new(next.tick, seed);
     log.push(EventKind::TickSettled);
 
-    admit_from_queue(&mut next, &mut log, cfg);
+    admit_from_queue(&mut next, &mut log, cfg, seed);
 
     let mut order: Vec<AgentId> = next
         .agents
@@ -187,12 +190,16 @@ pub fn step(
         .map(|(id, _)| *id)
         .collect();
     shuffle(&mut order, seed);
-    for agent in order {
-        apply_intents(&mut next, &mut log, agent, intents);
-        advance_action(&mut next, &mut log, agent, cfg);
+    for agent in &order {
+        apply_intents(&mut next, &mut log, *agent, intents, cfg);
+        advance_action(&mut next, &mut log, *agent, cfg);
     }
 
+    progress_uses(&mut next, &mut log, &order, cfg);
+    expire_sessions(&mut next, &mut log);
+    warn_deadlines(&mut next, &mut log, cfg);
     auto_open_doors(&mut next, &mut log);
+    finish_lingering(&mut next, &mut log);
 
     mark_all_seen(&mut next, cfg);
 
@@ -221,7 +228,7 @@ pub(crate) fn mark_all_seen(world: &mut WorldState, cfg: &Config) {
     }
 }
 
-fn admit_from_queue(world: &mut WorldState, log: &mut EventLog, cfg: &Config) {
+fn admit_from_queue(world: &mut WorldState, log: &mut EventLog, cfg: &Config, seed: u64) {
     loop {
         if world.inside_count() >= cfg.max_on_field {
             return;
@@ -250,16 +257,63 @@ fn admit_from_queue(world: &mut WorldState, log: &mut EventLog, cfg: &Config) {
             nick,
             at: entrance,
         });
+        if let Some(kind) = assign_need(world, session_id, cfg, seed) {
+            log.push(kind);
+        }
     }
+}
+
+/// Gives a session its need and deadline, unless it already has one. The RNG is
+/// seeded per session so the same join tick and seed always pick the same need.
+fn assign_need(
+    world: &mut WorldState,
+    session: SessionId,
+    cfg: &Config,
+    seed: u64,
+) -> Option<EventKind> {
+    let agent = {
+        let entry = world.sessions.get(&session)?;
+        if entry.need.is_some() {
+            return None;
+        }
+        entry.agent
+    };
+    let nick = world.agents.get(&agent)?.nick.to_string();
+    let mut rng = Rng::new(seed ^ session.wrapping_mul(0x9E37_79B9_7F4A_7C15));
+    let need = if rng.next_u64() & 1 == 0 {
+        Need::Urine
+    } else {
+        Need::Feces
+    };
+    let span = cfg
+        .need
+        .deadline_ticks_max
+        .saturating_sub(cfg.need.deadline_ticks_min)
+        + 1;
+    let deadline = world.tick + u64::from(cfg.need.deadline_ticks_min) + rng.below(u64::from(span));
+    let entry = world.sessions.get_mut(&session)?;
+    entry.need = Some(need);
+    entry.deadline = deadline;
+    Some(EventKind::NeedAssigned {
+        session,
+        agent,
+        nick,
+        need,
+        deadline,
+    })
 }
 
 /// Turns the tick's intents for one agent into its final action. A cancel with
 /// no running action is a no-op; cancel with one ends it as `Cancelled`.
+///
+/// A `use` that cannot start ends immediately as `ActionFinished { Failed }`
+/// and puts the agent back to no action, so it never enters the use phase.
 fn apply_intents(
     world: &mut WorldState,
     log: &mut EventLog,
     agent_id: AgentId,
     intents: &[Intent],
+    cfg: &Config,
 ) {
     let Some(session) = world.session_of(agent_id).map(|s| s.id) else {
         return;
@@ -271,44 +325,200 @@ fn apply_intents(
         return;
     };
     for intent in intents.iter().filter(|intent| intent.agent == agent_id) {
-        if matches!(intent.kind, IntentKind::Cancel) {
-            let Some(action) = world.agents.get(&agent_id).and_then(|a| a.action.clone()) else {
-                continue;
-            };
-            end_action(
-                world,
-                log,
-                agent_id,
-                session,
-                nick.clone(),
-                pos,
-                None,
-                ActionOutcome::Cancelled,
-                &action,
-            );
-            continue;
+        match &intent.kind {
+            IntentKind::Cancel => {
+                let Some(action) = world.agents.get(&agent_id).and_then(|a| a.action.clone())
+                else {
+                    continue;
+                };
+                if matches!(action, Action::Use { .. }) {
+                    interrupt_use(
+                        world,
+                        log,
+                        agent_id,
+                        session,
+                        nick.clone(),
+                        Some(pos),
+                        "cancelled".to_string(),
+                        cfg,
+                    );
+                } else {
+                    end_action(
+                        world,
+                        log,
+                        agent_id,
+                        session,
+                        nick.clone(),
+                        pos,
+                        None,
+                        ActionOutcome::Cancelled,
+                        &action,
+                    );
+                }
+            }
+            IntentKind::Use { .. } => {
+                start_use(world, log, agent_id, session, nick.clone(), pos, cfg);
+            }
+            _ => {
+                let new_action = action_for(&intent.kind);
+                let old = world.agents.get(&agent_id).and_then(|a| a.action.clone());
+                if matches!(old, Some(Action::Use { .. })) {
+                    interrupt_use(
+                        world,
+                        log,
+                        agent_id,
+                        session,
+                        nick.clone(),
+                        Some(pos),
+                        format!("replaced by {}", new_action.label()),
+                        cfg,
+                    );
+                }
+                match old {
+                    Some(from) => log.push(EventKind::ActionReplaced {
+                        session,
+                        agent: agent_id,
+                        nick: nick.clone(),
+                        from,
+                        to: new_action.clone(),
+                    }),
+                    None => log.push(EventKind::ActionStarted {
+                        session,
+                        agent: agent_id,
+                        nick: nick.clone(),
+                        action: new_action.clone(),
+                    }),
+                }
+                if let Some(agent) = world.agents.get_mut(&agent_id) {
+                    agent.action = Some(new_action);
+                }
+            }
         }
-        let new_action = action_for(&intent.kind);
-        let old = world.agents.get(&agent_id).and_then(|a| a.action.clone());
-        match old {
-            Some(from) => log.push(EventKind::ActionReplaced {
-                session,
-                agent: agent_id,
-                nick: nick.clone(),
-                from,
-                to: new_action.clone(),
-            }),
-            None => log.push(EventKind::ActionStarted {
-                session,
-                agent: agent_id,
-                nick: nick.clone(),
-                action: new_action.clone(),
-            }),
-        }
+    }
+}
+
+/// Replaces whatever the agent was doing with a use, or rejects it on the spot.
+/// Re-using while already using only retargets the toilet and keeps progress.
+fn start_use(
+    world: &mut WorldState,
+    log: &mut EventLog,
+    agent_id: AgentId,
+    session: SessionId,
+    nick: String,
+    pos: Pos,
+    cfg: &Config,
+) {
+    let new_action = Action::Use {
+        target: pos,
+        label: "use the toilet".to_string(),
+    };
+    let old = world.agents.get(&agent_id).and_then(|a| a.action.clone());
+    if let Some(from @ Action::Use { .. }) = old {
+        log.push(EventKind::ActionReplaced {
+            session,
+            agent: agent_id,
+            nick,
+            from,
+            to: new_action.clone(),
+        });
         if let Some(agent) = world.agents.get_mut(&agent_id) {
             agent.action = Some(new_action);
         }
+        return;
     }
+    match validate_use(world, agent_id, cfg) {
+        Ok(target) => {
+            match &old {
+                Some(from) => log.push(EventKind::ActionReplaced {
+                    session,
+                    agent: agent_id,
+                    nick: nick.clone(),
+                    from: from.clone(),
+                    to: new_action.clone(),
+                }),
+                None => log.push(EventKind::ActionStarted {
+                    session,
+                    agent: agent_id,
+                    nick: nick.clone(),
+                    action: new_action.clone(),
+                }),
+            }
+            if let Some(agent) = world.agents.get_mut(&agent_id) {
+                agent.action = Some(new_action);
+            }
+            let resumed = world
+                .sessions
+                .get_mut(&session)
+                .and_then(|entry| entry.recovery_deadline.take());
+            if resumed.is_some() {
+                log.push(EventKind::UseResumed {
+                    session,
+                    agent: agent_id,
+                    nick: nick.clone(),
+                    pos: target,
+                });
+            }
+            log.push(EventKind::UseStarted {
+                session,
+                agent: agent_id,
+                nick,
+                pos: target,
+            });
+        }
+        Err(reason) => {
+            if let Some(agent) = world.agents.get_mut(&agent_id) {
+                agent.action = None;
+            }
+            log.push(EventKind::ActionFinished {
+                session,
+                agent: agent_id,
+                nick,
+                at: pos,
+                dir: None,
+                action: new_action,
+                outcome: ActionOutcome::Failed { reason },
+            });
+        }
+    }
+}
+
+/// Stops a running use without losing its progress and opens a recovery window.
+#[allow(clippy::too_many_arguments)]
+fn interrupt_use(
+    world: &mut WorldState,
+    log: &mut EventLog,
+    agent_id: AgentId,
+    session: SessionId,
+    nick: String,
+    pos: Option<Pos>,
+    reason: String,
+    cfg: &Config,
+) {
+    let Some(deadline) = world.sessions.get(&session).map(|entry| entry.deadline) else {
+        return;
+    };
+    let recovery_deadline = recovery_deadline(world.tick, deadline, cfg);
+    if let Some(agent) = world.agents.get_mut(&agent_id) {
+        agent.action = None;
+    }
+    if let Some(entry) = world.sessions.get_mut(&session) {
+        entry.recovery_deadline = Some(recovery_deadline);
+    }
+    log.push(EventKind::UseInterrupted {
+        session,
+        agent: agent_id,
+        nick,
+        pos,
+        reason,
+        recovery_deadline,
+    });
+}
+
+/// The window an interrupted session has to start using again: the configured
+/// recovery length, never past the session's own deadline.
+fn recovery_deadline(tick: u64, deadline: u64, cfg: &Config) -> u64 {
+    tick.saturating_add(u64::from(cfg.need.interrupt_recovery_ticks))
+        .min(deadline)
 }
 
 fn action_for(kind: &IntentKind) -> Action {
@@ -337,7 +547,7 @@ fn action_for(kind: &IntentKind) -> Action {
         },
         IntentKind::Use { target } => Action::Use {
             target: *target,
-            label: format!("use the toilet at {target}"),
+            label: "use the toilet".to_string(),
         },
         IntentKind::Cancel => unreachable!("cancel never creates an action"),
     }
@@ -373,7 +583,7 @@ fn advance_action(world: &mut WorldState, log: &mut EventLog, agent_id: AgentId,
             demolish_tick(world, log, agent_id, session, nick, pos, &action, cfg)
         }
         Action::Door { .. } => door_tick(world, log, agent_id, session, nick, pos, &action),
-        // `Use` is defined but settled by the need worker; the action stays.
+        // `Use` advances in `progress_uses`, after every action has settled.
         Action::Use { .. } => {}
     }
 }
@@ -835,4 +1045,277 @@ fn end_action(
         action: action.clone(),
         outcome,
     });
+}
+
+/// One tick of use for every agent still holding a `use` action, in the tick's
+/// settlement order. The rules are re-checked against the current world: a
+/// toilet that lost a wall, gained an open door or went back under construction
+/// interrupts the use instead of advancing it.
+fn progress_uses(world: &mut WorldState, log: &mut EventLog, order: &[AgentId], cfg: &Config) {
+    for agent_id in order {
+        let Some(agent) = world.agents.get(agent_id) else {
+            continue;
+        };
+        if !matches!(agent.action, Some(Action::Use { .. })) {
+            continue;
+        }
+        let Some(pos) = agent.pos else {
+            continue;
+        };
+        let nick = agent.nick.to_string();
+        let Some(session_id) = world.session_of(*agent_id).map(|entry| entry.id) else {
+            continue;
+        };
+        let tick = world.tick;
+        let use_ticks = match world.sessions.get(&session_id).and_then(|entry| entry.need) {
+            Some(Need::Urine) => cfg.need.urine_use_ticks,
+            Some(Need::Feces) => cfg.need.feces_use_ticks,
+            None => continue,
+        };
+        match validate_use(world, *agent_id, cfg) {
+            Ok(_) => {
+                let level = match world.object_at(pos) {
+                    Some(Object::Toilet { level, .. }) => level,
+                    _ => continue,
+                };
+                let ticks_done = {
+                    let Some(entry) = world.sessions.get_mut(&session_id) else {
+                        continue;
+                    };
+                    entry.use_ticks_done += 1;
+                    entry.use_levels.push(level);
+                    entry.use_ticks_done
+                };
+                log.push(EventKind::UseProgressed {
+                    session: session_id,
+                    agent: *agent_id,
+                    nick: nick.clone(),
+                    pos,
+                    level,
+                    ticks_done,
+                    use_ticks,
+                });
+                if ticks_done < use_ticks {
+                    continue;
+                }
+                let score = match world.sessions.get(&session_id) {
+                    Some(entry) => session_score(entry, cfg, tick),
+                    None => continue,
+                };
+                let linger_until = tick + u64::from(cfg.need.linger_ticks);
+                if let Some(entry) = world.sessions.get_mut(&session_id) {
+                    entry.score = score;
+                    entry.outcome = Some(SessionOutcome::Success);
+                    entry.linger_until = Some(linger_until);
+                }
+                if let Some(agent) = world.agents.get_mut(agent_id) {
+                    agent.action = None;
+                }
+                log.push(EventKind::UseSucceeded {
+                    session: session_id,
+                    agent: *agent_id,
+                    nick,
+                    pos,
+                    score,
+                    success_tick: tick,
+                    linger_until,
+                });
+            }
+            Err(reason) => {
+                let Some(deadline) = world.sessions.get(&session_id).map(|entry| entry.deadline)
+                else {
+                    continue;
+                };
+                let recovery = recovery_deadline(tick, deadline, cfg);
+                if let Some(entry) = world.sessions.get_mut(&session_id) {
+                    entry.recovery_deadline = Some(recovery);
+                }
+                if let Some(agent) = world.agents.get_mut(agent_id) {
+                    agent.action = None;
+                }
+                log.push(EventKind::UseInterrupted {
+                    session: session_id,
+                    agent: *agent_id,
+                    nick,
+                    pos: Some(pos),
+                    reason,
+                    recovery_deadline: recovery,
+                });
+            }
+        }
+    }
+}
+
+/// Deadline first, then the recovery window. A session that misses either ends
+/// on the spot and leaves the world.
+fn expire_sessions(world: &mut WorldState, log: &mut EventLog) {
+    let tick = world.tick;
+    let candidates: Vec<SessionId> = world
+        .sessions
+        .values()
+        .filter(|entry| entry.status == SessionStatus::Inside && entry.outcome.is_none())
+        .map(|entry| entry.id)
+        .collect();
+    for session_id in candidates {
+        let Some(entry) = world.sessions.get(&session_id) else {
+            continue;
+        };
+        let agent_id = entry.agent;
+        let deadline_hit = entry.need.is_some() && tick >= entry.deadline;
+        let using = matches!(
+            world
+                .agents
+                .get(&agent_id)
+                .and_then(|agent| agent.action.as_ref()),
+            Some(Action::Use { .. })
+        );
+        let recovery_hit = !using && entry.recovery_deadline.is_some_and(|at| tick >= at);
+        let outcome = if deadline_hit {
+            SessionOutcome::FailedDeadline
+        } else if recovery_hit {
+            SessionOutcome::FailedRecovery
+        } else {
+            continue;
+        };
+        let score = entry.score;
+        let pos = world.agents.get(&agent_id).and_then(|agent| agent.pos);
+        let nick = world
+            .agents
+            .get(&agent_id)
+            .map(|agent| agent.nick.to_string())
+            .unwrap_or_default();
+        log.push(EventKind::UseFailed {
+            session: session_id,
+            agent: agent_id,
+            nick: nick.clone(),
+            pos,
+            outcome,
+        });
+        log.push(EventKind::SessionEnded {
+            session: session_id,
+            agent: agent_id,
+            nick,
+            pos,
+            outcome,
+            score,
+        });
+        remove_session(world, session_id);
+    }
+}
+
+/// One warning per session, in its last `deadline_warning_ticks` ticks.
+fn warn_deadlines(world: &mut WorldState, log: &mut EventLog, cfg: &Config) {
+    let tick = world.tick;
+    let ids: Vec<SessionId> = world.sessions.keys().copied().collect();
+    for session_id in ids {
+        let Some(entry) = world.sessions.get(&session_id) else {
+            continue;
+        };
+        if entry.need.is_none() || entry.outcome.is_some() || entry.warned_deadline {
+            continue;
+        }
+        let deadline = entry.deadline;
+        let agent_id = entry.agent;
+        let remaining = deadline.saturating_sub(tick);
+        if remaining == 0 || remaining > u64::from(cfg.need.deadline_warning_ticks) {
+            continue;
+        }
+        let nick = world
+            .agents
+            .get(&agent_id)
+            .map(|agent| agent.nick.to_string())
+            .unwrap_or_default();
+        if let Some(entry) = world.sessions.get_mut(&session_id) {
+            entry.warned_deadline = true;
+        }
+        log.push(EventKind::DeadlineWarning {
+            session: session_id,
+            agent: agent_id,
+            nick,
+            remaining: remaining as u32,
+        });
+    }
+}
+
+/// A successful session stays a while, then leaves with its score.
+fn finish_lingering(world: &mut WorldState, log: &mut EventLog) {
+    let tick = world.tick;
+    let candidates: Vec<SessionId> = world
+        .sessions
+        .values()
+        .filter(|entry| {
+            entry.outcome == Some(SessionOutcome::Success)
+                && entry.linger_until.is_some_and(|until| until <= tick)
+        })
+        .map(|entry| entry.id)
+        .collect();
+    for session_id in candidates {
+        let Some(entry) = world.sessions.get(&session_id) else {
+            continue;
+        };
+        let agent_id = entry.agent;
+        let score = entry.score;
+        let pos = world.agents.get(&agent_id).and_then(|agent| agent.pos);
+        let nick = world
+            .agents
+            .get(&agent_id)
+            .map(|agent| agent.nick.to_string())
+            .unwrap_or_default();
+        log.push(EventKind::SessionEnded {
+            session: session_id,
+            agent: agent_id,
+            nick,
+            pos,
+            outcome: SessionOutcome::Success,
+            score,
+        });
+        remove_session(world, session_id);
+    }
+}
+
+fn remove_session(world: &mut WorldState, session_id: SessionId) {
+    if let Some(agent_id) = world.sessions.remove(&session_id).map(|entry| entry.agent) {
+        world.agents.remove(&agent_id);
+    }
+    world.entry_queue.retain(|queued| *queued != session_id);
+}
+
+/// Design §4.8: a session ends early on request (`loo leave`), keeping whatever
+/// score it had. A session that already succeeded still ends as a success.
+pub fn leave(
+    world: &WorldState,
+    agent: AgentId,
+    start_seq: u32,
+    seed: u64,
+    _cfg: &Config,
+) -> Result<(WorldState, SessionOutcome, u32, Vec<Event>), String> {
+    let Some(entry) = world.session_of(agent) else {
+        return Err("you are not in the world".to_string());
+    };
+    let session_id = entry.id;
+    let outcome = if entry.outcome == Some(SessionOutcome::Success) {
+        SessionOutcome::Success
+    } else {
+        SessionOutcome::Left
+    };
+    let score = entry.score;
+    let nick = world
+        .agents
+        .get(&agent)
+        .map(|agent| agent.nick.to_string())
+        .unwrap_or_default();
+    let pos = world.agents.get(&agent).and_then(|agent| agent.pos);
+
+    let mut next = world.clone();
+    let mut log = EventLog::starting_at(next.tick, seed, start_seq + 1);
+    log.push(EventKind::SessionEnded {
+        session: session_id,
+        agent,
+        nick,
+        pos,
+        outcome,
+        score,
+    });
+    remove_session(&mut next, session_id);
+    Ok((next, outcome, score, log.into_vec()))
 }

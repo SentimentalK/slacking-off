@@ -5,8 +5,25 @@
 
 use crate::config::Config;
 use crate::state::{Action, Object, SiteKind};
-use loo_proto::{AgentId, Dir, Pos, SessionId, Tick};
+use loo_proto::{AgentId, Dir, Need, Pos, SessionId, SessionOutcome, Tick};
 use serde::{Deserialize, Serialize};
+
+fn need_name(need: Need) -> &'static str {
+    match need {
+        Need::Urine => "urine",
+        Need::Feces => "feces",
+    }
+}
+
+fn outcome_name(outcome: SessionOutcome) -> &'static str {
+    match outcome {
+        SessionOutcome::Success => "success",
+        SessionOutcome::FailedDeadline => "failed_deadline",
+        SessionOutcome::FailedRecovery => "failed_recovery",
+        SessionOutcome::Left => "left",
+        SessionOutcome::Abandoned => "abandoned",
+    }
+}
 
 fn kind_name(kind: SiteKind) -> &'static str {
     match kind {
@@ -108,6 +125,83 @@ pub enum EventKind {
         object: Option<Object>,
         cause: ObjectCause,
     },
+    /// A session got its need and deadline, at join or when it entered from the
+    /// queue.
+    NeedAssigned {
+        session: SessionId,
+        agent: AgentId,
+        nick: String,
+        need: Need,
+        deadline: Tick,
+    },
+    /// The agent started using the toilet under its feet.
+    UseStarted {
+        session: SessionId,
+        agent: AgentId,
+        nick: String,
+        pos: Pos,
+    },
+    /// One tick of use progress; `ticks_done` counts up to `use_ticks`.
+    UseProgressed {
+        session: SessionId,
+        agent: AgentId,
+        nick: String,
+        pos: Pos,
+        level: u8,
+        ticks_done: u32,
+        use_ticks: u32,
+    },
+    /// The use stopped before completion: the world changed, another action
+    /// replaced it, or the agent cancelled. Progress is kept for a resume.
+    UseInterrupted {
+        session: SessionId,
+        agent: AgentId,
+        nick: String,
+        pos: Option<Pos>,
+        reason: String,
+        recovery_deadline: Tick,
+    },
+    /// A use started again inside the recovery window.
+    UseResumed {
+        session: SessionId,
+        agent: AgentId,
+        nick: String,
+        pos: Pos,
+    },
+    /// The need was met; the session lingers until `linger_until`.
+    UseSucceeded {
+        session: SessionId,
+        agent: AgentId,
+        nick: String,
+        pos: Pos,
+        score: u32,
+        success_tick: Tick,
+        linger_until: Tick,
+    },
+    /// The session failed its deadline or its recovery window.
+    UseFailed {
+        session: SessionId,
+        agent: AgentId,
+        nick: String,
+        pos: Option<Pos>,
+        outcome: SessionOutcome,
+    },
+    /// The session left the world, one way or another.
+    SessionEnded {
+        session: SessionId,
+        agent: AgentId,
+        nick: String,
+        pos: Option<Pos>,
+        outcome: SessionOutcome,
+        score: u32,
+    },
+    /// The session is close to its deadline; sent once.
+    DeadlineWarning {
+        session: SessionId,
+        agent: AgentId,
+        nick: String,
+        remaining: u32,
+    },
     /// Marks the settlement of one tick. Always the first event of its tick and
     /// never delivered to an agent; `Event::seed` is the tick's shuffle seed.
     TickSettled,
@@ -135,6 +229,15 @@ impl EventKind {
             EventKind::ActionReplaced { .. } => "ActionReplaced",
             EventKind::ActionFinished { .. } => "ActionFinished",
             EventKind::ObjectChanged { .. } => "ObjectChanged",
+            EventKind::NeedAssigned { .. } => "NeedAssigned",
+            EventKind::UseStarted { .. } => "UseStarted",
+            EventKind::UseProgressed { .. } => "UseProgressed",
+            EventKind::UseInterrupted { .. } => "UseInterrupted",
+            EventKind::UseResumed { .. } => "UseResumed",
+            EventKind::UseSucceeded { .. } => "UseSucceeded",
+            EventKind::UseFailed { .. } => "UseFailed",
+            EventKind::SessionEnded { .. } => "SessionEnded",
+            EventKind::DeadlineWarning { .. } => "DeadlineWarning",
             EventKind::TickSettled => "TickSettled",
         }
     }
@@ -178,7 +281,16 @@ impl Event {
             | EventKind::AgentSwapped { agent, .. }
             | EventKind::ActionStarted { agent, .. }
             | EventKind::ActionReplaced { agent, .. }
-            | EventKind::ActionFinished { agent, .. } => Some(*agent),
+            | EventKind::ActionFinished { agent, .. }
+            | EventKind::NeedAssigned { agent, .. }
+            | EventKind::UseStarted { agent, .. }
+            | EventKind::UseProgressed { agent, .. }
+            | EventKind::UseInterrupted { agent, .. }
+            | EventKind::UseResumed { agent, .. }
+            | EventKind::UseSucceeded { agent, .. }
+            | EventKind::UseFailed { agent, .. }
+            | EventKind::SessionEnded { agent, .. }
+            | EventKind::DeadlineWarning { agent, .. } => Some(*agent),
             EventKind::ObjectChanged { agent, .. } => *agent,
             EventKind::TickSettled => None,
         }
@@ -190,8 +302,17 @@ impl Event {
             EventKind::EnteredWorld { at, .. } | EventKind::ActionFinished { at, .. } => Some(*at),
             EventKind::AgentMoved { to, .. } | EventKind::AgentSwapped { to, .. } => Some(*to),
             EventKind::ObjectChanged { pos, .. } => Some(*pos),
+            EventKind::UseStarted { pos, .. }
+            | EventKind::UseProgressed { pos, .. }
+            | EventKind::UseResumed { pos, .. }
+            | EventKind::UseSucceeded { pos, .. } => Some(*pos),
+            EventKind::UseInterrupted { pos, .. }
+            | EventKind::UseFailed { pos, .. }
+            | EventKind::SessionEnded { pos, .. } => *pos,
             EventKind::ActionStarted { .. }
             | EventKind::ActionReplaced { .. }
+            | EventKind::NeedAssigned { .. }
+            | EventKind::DeadlineWarning { .. }
             | EventKind::TickSettled => None,
         }
     }
@@ -303,6 +424,68 @@ impl Event {
                     "the door at {pos} closed with nobody on its toilet and opened automatically"
                 ),
             },
+            EventKind::NeedAssigned {
+                nick,
+                need,
+                deadline,
+                ..
+            } => format!(
+                "{nick} needs the toilet ({}) before tick {deadline}",
+                need_name(*need)
+            ),
+            EventKind::UseStarted { nick, pos, .. } => {
+                format!("{nick} started using the toilet at {pos}")
+            }
+            EventKind::UseProgressed {
+                nick,
+                pos,
+                level,
+                ticks_done,
+                use_ticks,
+                ..
+            } => format!(
+                "{nick} is using the level {level} toilet at {pos}: {ticks_done}/{use_ticks}"
+            ),
+            EventKind::UseInterrupted {
+                nick,
+                pos,
+                reason,
+                recovery_deadline,
+                ..
+            } => match pos {
+                Some(pos) => format!(
+                    "{nick}'s use at {pos} was interrupted: {reason}; recovery by tick {recovery_deadline}"
+                ),
+                None => format!(
+                    "{nick}'s use was interrupted: {reason}; recovery by tick {recovery_deadline}"
+                ),
+            },
+            EventKind::UseResumed { nick, pos, .. } => {
+                format!("{nick} resumed using the toilet at {pos}")
+            }
+            EventKind::UseSucceeded {
+                nick,
+                pos,
+                score,
+                ..
+            } => format!("{nick} finished at {pos} and scored {score}"),
+            EventKind::UseFailed { nick, outcome, .. } => {
+                format!("{nick} failed: {}", outcome_name(*outcome))
+            }
+            EventKind::SessionEnded {
+                nick,
+                outcome,
+                score,
+                ..
+            } => match outcome {
+                SessionOutcome::Success => {
+                    format!("{nick} left the world: success, score {score}")
+                }
+                other => format!("{nick} left the world: {}", outcome_name(*other)),
+            },
+            EventKind::DeadlineWarning {
+                nick, remaining, ..
+            } => format!("{nick} has {remaining} ticks left before the deadline"),
             EventKind::TickSettled => format!("tick {} settled", self.tick),
         }
     }

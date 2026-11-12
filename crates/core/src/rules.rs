@@ -6,8 +6,8 @@
 
 use crate::config::Config;
 use crate::map::Terrain;
-use crate::state::{Object, SiteKind, WorldState};
-use loo_proto::{AgentId, Dir, Pos};
+use crate::state::{Object, Session, SiteKind, WorldState};
+use loo_proto::{AgentId, Dir, Need, Pos, SessionOutcome, Tick};
 
 const OUT_OF_REACH: &str =
     "target is out of reach; you can only act on your cell or the four neighbours";
@@ -97,4 +97,106 @@ pub fn validate_door(
         ));
     }
     Ok(())
+}
+
+/// Every reason the cell at `pos` is not a usable toilet, north first for the
+/// enclosure. `validate_use` reports these and `view::is_usable` asks whether
+/// the list is empty, so the two can never drift apart.
+pub(crate) fn toilet_problems(world: &WorldState, pos: Pos) -> Vec<String> {
+    let mut problems = Vec::new();
+    let Some(Object::Toilet { level, progress }) = world.object_at(pos) else {
+        problems.push("you must stand on a toilet to use it".to_string());
+        return problems;
+    };
+    if progress != 0 {
+        problems.push(format!(
+            "the toilet is under construction (progress {progress}); it is not usable"
+        ));
+    }
+    if !(1..=5).contains(&level) {
+        problems.push("the toilet is not at a complete level".to_string());
+    }
+    let gaps: Vec<String> = Dir::ALL
+        .iter()
+        .filter_map(|dir| {
+            let cell = pos.step(*dir);
+            if !world.map.in_bounds(cell) {
+                return Some(format!("the {} side is the map edge", dir.word()));
+            }
+            match world.object_at(cell) {
+                Some(Object::Wall) | Some(Object::Door { open: false }) => None,
+                Some(Object::Door { open: true }) => {
+                    Some(format!("the {} door is open", dir.word()))
+                }
+                _ => Some(format!(
+                    "the {} side is not enclosed by a wall or a closed door",
+                    dir.word()
+                )),
+            }
+        })
+        .collect();
+    if !gaps.is_empty() {
+        problems.push(format!("the toilet is not usable: {}", gaps.join("; ")));
+    }
+    problems
+}
+
+/// A `use` needs the agent to stand on a finished, enclosed toilet and not to
+/// have succeeded already. Returns the toilet cell on success.
+pub fn validate_use(world: &WorldState, agent: AgentId, _cfg: &Config) -> Result<Pos, String> {
+    let Some(me) = world.agents.get(&agent) else {
+        return Err("you are not in the world".to_string());
+    };
+    let Some(pos) = me.pos else {
+        return Err("you are not in the world".to_string());
+    };
+    let Some(session) = world.session_of(agent) else {
+        return Err("you are not in the world".to_string());
+    };
+    if session.outcome == Some(SessionOutcome::Success) {
+        return Err("you already succeeded in this session".to_string());
+    }
+    let problems = toilet_problems(world, pos);
+    if problems.is_empty() {
+        Ok(pos)
+    } else {
+        Err(problems.join("; "))
+    }
+}
+
+/// Design §4.8: each used tick counts with its toilet's multiplier, averaged
+/// over the whole use and rounded half-up. An empty or invalid list scores 0.
+pub fn weighted_score(base: u32, levels: &[u8], cfg: &Config) -> u32 {
+    let ticks = levels.len() as u64;
+    if ticks == 0 {
+        return 0;
+    }
+    let mut sum: u64 = 0;
+    for level in levels {
+        let Some(multiplier) = level
+            .checked_sub(1)
+            .and_then(|index| cfg.toilet.multiplier.get(index as usize))
+        else {
+            return 0;
+        };
+        sum += u64::from(*multiplier);
+    }
+    let weighted = (u64::from(base) * sum + ticks / 2) / ticks;
+    weighted.min(u64::from(u32::MAX)) as u32
+}
+
+/// The base score for the need, weighted by the toilets actually used, plus the
+/// configured bonus for every tick left before the deadline.
+pub fn session_score(session: &Session, cfg: &Config, success_tick: Tick) -> u32 {
+    let base = match session.need {
+        Some(Need::Urine) => cfg.need.base_score_urine,
+        Some(Need::Feces) => cfg.need.base_score_feces,
+        None => 0,
+    };
+    let weighted = u64::from(weighted_score(base, &session.use_levels, cfg));
+    let time_bonus = session
+        .deadline
+        .saturating_sub(success_tick)
+        .saturating_mul(u64::from(cfg.need.time_bonus_per_tick));
+    (weighted + time_bonus).min(u64::from(u32::MAX)) as u32
 }

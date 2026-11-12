@@ -10,7 +10,7 @@ use crate::event::{Event, EventKind};
 use crate::map::Terrain;
 use crate::state::{Action, Agent, Object, Session, SessionStatus, WorldState};
 use crate::step::{mark_all_seen, step, Intent};
-use loo_proto::{AgentId, Nick, Pos, SessionId, Tick};
+use loo_proto::{AgentId, Nick, Pos, SessionId, SessionOutcome, Tick};
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::fmt;
@@ -315,6 +315,107 @@ fn apply_event(world: &mut WorldState, event: &Event) -> Result<(), ReplayError>
         }
         EventKind::ObjectChanged { pos, object, .. } => {
             world.set_object(*pos, *object);
+        }
+        EventKind::NeedAssigned {
+            session,
+            need,
+            deadline,
+            ..
+        } => {
+            let Some(entry) = world.sessions.get_mut(session) else {
+                return Err(fail(event, format!("session {session} does not exist")));
+            };
+            entry.need = Some(*need);
+            entry.deadline = *deadline;
+        }
+        // The action is already set by `ActionStarted`/`ActionReplaced`.
+        EventKind::UseStarted { agent, .. } => {
+            if !world.agents.contains_key(agent) {
+                return Err(fail(event, format!("agent {agent} does not exist")));
+            }
+        }
+        EventKind::UseProgressed {
+            session,
+            level,
+            ticks_done,
+            ..
+        } => {
+            let Some(entry) = world.sessions.get_mut(session) else {
+                return Err(fail(event, format!("session {session} does not exist")));
+            };
+            entry.use_ticks_done = *ticks_done;
+            if entry.use_levels.len() < *ticks_done as usize {
+                entry.use_levels.push(*level);
+            }
+        }
+        EventKind::UseInterrupted {
+            session,
+            agent,
+            recovery_deadline,
+            ..
+        } => {
+            let Some(entry) = world.sessions.get_mut(session) else {
+                return Err(fail(event, format!("session {session} does not exist")));
+            };
+            entry.recovery_deadline = Some(*recovery_deadline);
+            let Some(entry) = world.agents.get_mut(agent) else {
+                return Err(fail(event, format!("agent {agent} does not exist")));
+            };
+            entry.action = None;
+        }
+        EventKind::UseResumed { session, .. } => {
+            let Some(entry) = world.sessions.get_mut(session) else {
+                return Err(fail(event, format!("session {session} does not exist")));
+            };
+            entry.recovery_deadline = None;
+        }
+        EventKind::UseSucceeded {
+            session,
+            agent,
+            score,
+            linger_until,
+            ..
+        } => {
+            let Some(entry) = world.sessions.get_mut(session) else {
+                return Err(fail(event, format!("session {session} does not exist")));
+            };
+            entry.score = *score;
+            entry.outcome = Some(SessionOutcome::Success);
+            entry.linger_until = Some(*linger_until);
+            let Some(entry) = world.agents.get_mut(agent) else {
+                return Err(fail(event, format!("agent {agent} does not exist")));
+            };
+            entry.action = None;
+        }
+        EventKind::UseFailed {
+            session, outcome, ..
+        } => {
+            let Some(entry) = world.sessions.get_mut(session) else {
+                return Err(fail(event, format!("session {session} does not exist")));
+            };
+            entry.outcome = Some(*outcome);
+        }
+        EventKind::SessionEnded { session, agent, .. } => {
+            if let Some(entry) = world.sessions.get(session) {
+                if entry.agent != *agent {
+                    return Err(fail(
+                        event,
+                        format!(
+                            "session {session} belongs to agent {}, not {agent}",
+                            entry.agent
+                        ),
+                    ));
+                }
+            }
+            world.sessions.remove(session);
+            world.agents.remove(agent);
+            world.entry_queue.retain(|queued| queued != session);
+        }
+        EventKind::DeadlineWarning { session, .. } => {
+            let Some(entry) = world.sessions.get_mut(session) else {
+                return Err(fail(event, format!("session {session} does not exist")));
+            };
+            entry.warned_deadline = true;
         }
     }
     Ok(())

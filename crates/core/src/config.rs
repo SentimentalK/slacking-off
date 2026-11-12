@@ -135,6 +135,8 @@ pub struct NeedConfig {
     pub deadline_ticks_max: u32,
     pub interrupt_recovery_ticks: u32,
     pub linger_ticks: u32,
+    /// How many ticks before the deadline the session gets one warning.
+    pub deadline_warning_ticks: u32,
 }
 
 impl Default for NeedConfig {
@@ -149,6 +151,7 @@ impl Default for NeedConfig {
             deadline_ticks_max: 240,
             interrupt_recovery_ticks: 12,
             linger_ticks: 36,
+            deadline_warning_ticks: 10,
         }
     }
 }
@@ -276,6 +279,14 @@ mod tests {
         assert_eq!(
             (cfg.need.deadline_ticks_min, cfg.need.deadline_ticks_max),
             (120, 240)
+        );
+        assert_eq!(
+            (
+                cfg.need.interrupt_recovery_ticks,
+                cfg.need.linger_ticks,
+                cfg.need.deadline_warning_ticks
+            ),
+            (12, 36, 10)
         );
         assert_eq!(cfg.session.queue_capacity, 50);
         assert_eq!(

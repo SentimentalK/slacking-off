@@ -3,23 +3,14 @@
 use crate::config::Config;
 use crate::map::Terrain;
 use crate::state::{Object, WorldState};
-use loo_proto::{AgentId, Briefing, Dir, Grid, Legend, LookResponse, MapResponse, Pos, ToiletInfo};
+use loo_proto::{AgentId, Briefing, Grid, Legend, LookResponse, MapResponse, Pos, ToiletInfo};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// Design §4.4: a toilet is usable when it sits at a complete level and all four
 /// orthogonal neighbours are finished walls or closed doors.
 pub fn is_usable(world: &WorldState, pos: Pos) -> bool {
-    match world.object_at(pos) {
-        Some(Object::Toilet { level, progress }) if (1..=5).contains(&level) && progress == 0 => {
-            Dir::ALL.iter().all(|dir| {
-                matches!(
-                    world.object_at(pos.step(*dir)),
-                    Some(Object::Wall) | Some(Object::Door { open: false })
-                )
-            })
-        }
-        _ => false,
-    }
+    matches!(world.object_at(pos), Some(Object::Toilet { .. }))
+        && crate::rules::toilet_problems(world, pos).is_empty()
 }
 
 pub fn briefing(world: &WorldState, cfg: &Config) -> Briefing {
