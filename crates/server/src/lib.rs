@@ -10,11 +10,12 @@ use loo_core::{
     Snapshot, WorldState,
 };
 use loo_proto::{
-    ActionQueued, ActionState, AgentId, AgentView, ApiError, Briefing, BuildKind, BuildRequest,
-    ConfigResponse, DemolishRequest, DoorRequest, Envelope, ErrorCode, EventView, JoinRequest,
-    JoinResponse, LeaveResponse, LookResponse, MapResponse, MoveRequest, Need, Placement,
-    PlacementKind, Pos, RegisterRequest, RegisterResponse, RulesResponse, SentBy, SessionId,
-    TargetSpec, Tick, WaitRequest, WaitResponse, WaitWake,
+    ActionQueued, ActionState, AgentId, AgentView, ApiError, AttackRequest, Briefing, BuildKind,
+    BuildRequest, ConfigResponse, DefendRequest, DemolishRequest, DoorRequest, DowngradeRequest,
+    Envelope, ErrorCode, EventView, JoinRequest, JoinResponse, LeaveResponse, LookResponse,
+    MapResponse, MoveRequest, Need, Placement, PlacementKind, Pos, RegisterRequest,
+    RegisterResponse, RulesResponse, SentBy, SessionId, TargetSpec, Tick, UpgradeRequest,
+    WaitRequest, WaitResponse, WaitWake,
 };
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
@@ -67,6 +68,8 @@ struct AgentMeta {
     token: String,
     sent_by: Option<SentBy>,
     why: String,
+    /// Cumulative score carried across sessions, persisted in `agents`.
+    score_total: u32,
 }
 
 impl Server {
@@ -222,6 +225,13 @@ impl Server {
         }
 
         inner.pending.clear();
+        for event in &events {
+            if let loo_core::EventKind::UseSucceeded { agent, score, .. } = &event.kind {
+                if let Some(meta) = inner.agents.get_mut(agent) {
+                    meta.score_total = meta.score_total.saturating_add(*score);
+                }
+            }
+        }
         inner.last_seq = events
             .last()
             .map(|event| event.seq)
@@ -322,6 +332,7 @@ impl Server {
         if let Some(model) = &req.model {
             if model.trim().is_empty() || model.chars().count() > 64 {
                 let env = failed_env(
+                    &self.cfg,
                     &mut inner,
                     None,
                     ApiError::new(ErrorCode::BadRequest, "model must be 1-64 characters"),
@@ -333,6 +344,7 @@ impl Server {
         if let Some(intro) = &req.intro {
             if intro.chars().count() > 200 {
                 let env = failed_env(
+                    &self.cfg,
                     &mut inner,
                     None,
                     ApiError::new(
@@ -350,6 +362,7 @@ impl Server {
             Some(name) => {
                 if inner.agents.values().any(|m| m.nick == *name) {
                     let env = failed_env(
+                        &self.cfg,
                         &mut inner,
                         None,
                         ApiError::new(
@@ -379,6 +392,7 @@ impl Server {
                 token: token.clone(),
                 sent_by: None,
                 why: String::new(),
+                score_total: 0,
             },
         );
         if let Err(error) = self
@@ -388,7 +402,7 @@ impl Server {
             eprintln!("agent {agent_id} was not persisted: {error}");
         }
         let tick = inner.world.tick;
-        let state = agent_view(&inner, agent_id);
+        let state = agent_view(&self.cfg, &inner, agent_id);
         let env = Envelope::ok(
             RegisterResponse {
                 agent_id,
@@ -416,7 +430,7 @@ impl Server {
         let started = Instant::now();
         let mut inner = self.inner.lock().await;
         let Some(agent) = inner.tokens.get(token).copied() else {
-            let env = failed_env(&mut inner, None, not_authenticated());
+            let env = failed_env(&self.cfg, &mut inner, None, not_authenticated());
             drop(inner);
             return self.finish("join", None, 0, env, started, "not authenticated", None);
         };
@@ -425,6 +439,7 @@ impl Server {
         let why = req.why.trim().to_string();
         if why.is_empty() || why.chars().count() > 200 {
             let env = failed_env(
+                &self.cfg,
                 &mut inner,
                 Some(agent),
                 ApiError::new(
@@ -444,7 +459,7 @@ impl Server {
             );
         }
         if let Some(existing) = inner.sessions.get(&agent).copied() {
-            let env = failed_env(
+            let env = failed_env(&self.cfg,
                 &mut inner,
                 Some(agent),
                 ApiError::rule(format!(
@@ -464,7 +479,7 @@ impl Server {
         }
 
         let Some(meta) = inner.agents.get(&agent) else {
-            let env = failed_env(&mut inner, None, not_authenticated());
+            let env = failed_env(&self.cfg, &mut inner, None, not_authenticated());
             drop(inner);
             return self.finish("join", None, 0, env, started, "no agent", None);
         };
@@ -473,6 +488,7 @@ impl Server {
             agent,
             nick: meta.nick.clone(),
             session: session_id,
+            score_total: meta.score_total,
         };
 
         let start_seq = inner.last_seq;
@@ -482,6 +498,7 @@ impl Server {
                 if let Err(error) = self.store.append_join_events(world.tick, &events) {
                     eprintln!("join events for agent {agent} were not persisted: {error}");
                     let env = failed_env::<JoinResponse>(
+                        &self.cfg,
                         &mut inner,
                         Some(agent),
                         ApiError::new(
@@ -531,7 +548,12 @@ impl Server {
                     JoinRejectKind::QueueFull => ErrorCode::QueueFull,
                     JoinRejectKind::AlreadyJoined => ErrorCode::RuleRejected,
                 };
-                let env = failed_env(&mut inner, Some(agent), ApiError::new(code, reject.message));
+                let env = failed_env(
+                    &self.cfg,
+                    &mut inner,
+                    Some(agent),
+                    ApiError::new(code, reject.message),
+                );
                 drop(inner);
                 return self.finish(
                     "join",
@@ -550,6 +572,7 @@ impl Server {
             Placement::Waiting { ahead } => format!("session {session_id} waiting, {ahead} ahead"),
         };
         let env = ok_env(
+            &self.cfg,
             &mut inner,
             agent,
             JoinResponse {
@@ -565,16 +588,16 @@ impl Server {
         let started = Instant::now();
         let mut inner = self.inner.lock().await;
         let Some(agent) = inner.tokens.get(token).copied() else {
-            let env = failed_env(&mut inner, None, not_authenticated());
+            let env = failed_env(&self.cfg, &mut inner, None, not_authenticated());
             drop(inner);
             return self.finish("look", None, 0, env, started, "not authenticated", None);
         };
         let tick = inner.world.tick;
         let env = match loo_core::look(&inner.world, agent, &self.cfg) {
-            Some(view) => ok_env(&mut inner, agent, view),
+            Some(view) => ok_env(&self.cfg, &mut inner, agent, view),
             None => {
                 let err = session_required(&inner, agent);
-                failed_env(&mut inner, Some(agent), err)
+                failed_env(&self.cfg, &mut inner, Some(agent), err)
             }
         };
         let summary = if env.ok { "view" } else { "rejected" };
@@ -586,16 +609,16 @@ impl Server {
         let started = Instant::now();
         let mut inner = self.inner.lock().await;
         let Some(agent) = inner.tokens.get(token).copied() else {
-            let env = failed_env(&mut inner, None, not_authenticated());
+            let env = failed_env(&self.cfg, &mut inner, None, not_authenticated());
             drop(inner);
             return self.finish("map", None, 0, env, started, "not authenticated", None);
         };
         let tick = inner.world.tick;
         let env = match loo_core::map_memory(&inner.world, agent) {
-            Some(view) => ok_env(&mut inner, agent, view),
+            Some(view) => ok_env(&self.cfg, &mut inner, agent, view),
             None => {
                 let err = session_required(&inner, agent);
-                failed_env(&mut inner, Some(agent), err)
+                failed_env(&self.cfg, &mut inner, Some(agent), err)
             }
         };
         let summary = if env.ok { "map memory" } else { "rejected" };
@@ -607,12 +630,12 @@ impl Server {
         let started = Instant::now();
         let mut inner = self.inner.lock().await;
         let Some(agent) = inner.tokens.get(token).copied() else {
-            let env = failed_env(&mut inner, None, not_authenticated());
+            let env = failed_env(&self.cfg, &mut inner, None, not_authenticated());
             drop(inner);
             return self.finish("status", None, 0, env, started, "not authenticated", None);
         };
         let tick = inner.world.tick;
-        let env = ok_env(&mut inner, agent, ());
+        let env = ok_env(&self.cfg, &mut inner, agent, ());
         drop(inner);
         self.finish("status", Some(agent), tick, env, started, "state", None)
     }
@@ -655,7 +678,7 @@ impl Server {
         let started = Instant::now();
         let mut inner = self.inner.lock().await;
         let Some(agent) = inner.tokens.get(token).copied() else {
-            let env = failed_env(&mut inner, None, not_authenticated());
+            let env = failed_env(&self.cfg, &mut inner, None, not_authenticated());
             drop(inner);
             return self.finish("move", None, 0, env, started, "not authenticated", None);
         };
@@ -665,6 +688,7 @@ impl Server {
             Ok(dirs) => dirs,
             Err(message) => {
                 let env = failed_env(
+                    &self.cfg,
                     &mut inner,
                     Some(agent),
                     ApiError::new(ErrorCode::BadRequest, message),
@@ -675,6 +699,7 @@ impl Server {
         };
         if dirs.is_empty() {
             let env = failed_env(
+                &self.cfg,
                 &mut inner,
                 Some(agent),
                 ApiError::new(ErrorCode::BadRequest, "empty path"),
@@ -685,6 +710,7 @@ impl Server {
         let max_steps = (inner.world.map.width() + inner.world.map.height()) as usize;
         if dirs.len() > max_steps {
             let env = failed_env(
+                &self.cfg,
                 &mut inner,
                 Some(agent),
                 ApiError::new(
@@ -705,7 +731,7 @@ impl Server {
         }
         if !inner.world.is_inside(agent) {
             let err = session_required(&inner, agent);
-            let env = failed_env(&mut inner, Some(agent), err);
+            let env = failed_env(&self.cfg, &mut inner, Some(agent), err);
             drop(inner);
             return self.finish("move", Some(agent), tick, env, started, "not inside", None);
         }
@@ -723,6 +749,7 @@ impl Server {
         queue_intent(&mut inner, agent, kind);
         let effective_tick = tick + 1;
         let env = ok_env(
+            &self.cfg,
             &mut inner,
             agent,
             ActionQueued {
@@ -746,7 +773,7 @@ impl Server {
         let started = Instant::now();
         let mut inner = self.inner.lock().await;
         let Some(agent) = inner.tokens.get(token).copied() else {
-            let env = failed_env(&mut inner, None, not_authenticated());
+            let env = failed_env(&self.cfg, &mut inner, None, not_authenticated());
             drop(inner);
             return self.finish("build", None, 0, env, started, "not authenticated", None);
         };
@@ -754,7 +781,7 @@ impl Server {
         let pos = match require_inside(&inner, agent) {
             Ok(pos) => pos,
             Err(error) => {
-                let env = failed_env(&mut inner, Some(agent), error);
+                let env = failed_env(&self.cfg, &mut inner, Some(agent), error);
                 drop(inner);
                 return self.finish("build", Some(agent), tick, env, started, "not inside", None);
             }
@@ -763,7 +790,7 @@ impl Server {
         let kind = site_kind(req.kind);
         if let Err(message) = loo_core::validate_build(&inner.world, agent, kind, target, &self.cfg)
         {
-            let env = failed_env(&mut inner, Some(agent), ApiError::rule(message));
+            let env = failed_env(&self.cfg, &mut inner, Some(agent), ApiError::rule(message));
             drop(inner);
             return self.finish(
                 "build",
@@ -781,6 +808,7 @@ impl Server {
         queue_intent(&mut inner, agent, intent);
         let effective_tick = tick + 1;
         let env = ok_env(
+            &self.cfg,
             &mut inner,
             agent,
             ActionQueued {
@@ -807,7 +835,7 @@ impl Server {
         let started = Instant::now();
         let mut inner = self.inner.lock().await;
         let Some(agent) = inner.tokens.get(token).copied() else {
-            let env = failed_env(&mut inner, None, not_authenticated());
+            let env = failed_env(&self.cfg, &mut inner, None, not_authenticated());
             drop(inner);
             return self.finish("demolish", None, 0, env, started, "not authenticated", None);
         };
@@ -815,7 +843,7 @@ impl Server {
         let pos = match require_inside(&inner, agent) {
             Ok(pos) => pos,
             Err(error) => {
-                let env = failed_env(&mut inner, Some(agent), error);
+                let env = failed_env(&self.cfg, &mut inner, Some(agent), error);
                 drop(inner);
                 return self.finish(
                     "demolish",
@@ -830,7 +858,7 @@ impl Server {
         };
         let target = absolute_target(pos, req.target);
         if let Err(message) = loo_core::validate_demolish(&inner.world, agent, target) {
-            let env = failed_env(&mut inner, Some(agent), ApiError::rule(message));
+            let env = failed_env(&self.cfg, &mut inner, Some(agent), ApiError::rule(message));
             drop(inner);
             return self.finish(
                 "demolish",
@@ -848,6 +876,7 @@ impl Server {
         queue_intent(&mut inner, agent, intent);
         let effective_tick = tick + 1;
         let env = ok_env(
+            &self.cfg,
             &mut inner,
             agent,
             ActionQueued {
@@ -874,7 +903,7 @@ impl Server {
         let started = Instant::now();
         let mut inner = self.inner.lock().await;
         let Some(agent) = inner.tokens.get(token).copied() else {
-            let env = failed_env(&mut inner, None, not_authenticated());
+            let env = failed_env(&self.cfg, &mut inner, None, not_authenticated());
             drop(inner);
             return self.finish("door", None, 0, env, started, "not authenticated", None);
         };
@@ -882,14 +911,14 @@ impl Server {
         let pos = match require_inside(&inner, agent) {
             Ok(pos) => pos,
             Err(error) => {
-                let env = failed_env(&mut inner, Some(agent), error);
+                let env = failed_env(&self.cfg, &mut inner, Some(agent), error);
                 drop(inner);
                 return self.finish("door", Some(agent), tick, env, started, "not inside", None);
             }
         };
         let target = pos.step(req.target);
         if let Err(message) = loo_core::validate_door(&inner.world, agent, target, req.open) {
-            let env = failed_env(&mut inner, Some(agent), ApiError::rule(message));
+            let env = failed_env(&self.cfg, &mut inner, Some(agent), ApiError::rule(message));
             drop(inner);
             return self.finish(
                 "door",
@@ -910,6 +939,7 @@ impl Server {
         queue_intent(&mut inner, agent, intent);
         let effective_tick = tick + 1;
         let env = ok_env(
+            &self.cfg,
             &mut inner,
             agent,
             ActionQueued {
@@ -932,24 +962,308 @@ impl Server {
         )
     }
 
+    pub async fn attack_cmd(&self, token: &str, req: AttackRequest) -> Envelope<ActionQueued> {
+        let started = Instant::now();
+        let mut inner = self.inner.lock().await;
+        let Some(agent) = inner.tokens.get(token).copied() else {
+            let env = failed_env(&self.cfg, &mut inner, None, not_authenticated());
+            drop(inner);
+            return self.finish("attack", None, 0, env, started, "not authenticated", None);
+        };
+        let tick = inner.world.tick;
+        let pos = match require_inside(&inner, agent) {
+            Ok(pos) => pos,
+            Err(error) => {
+                let env = failed_env(&self.cfg, &mut inner, Some(agent), error);
+                drop(inner);
+                return self.finish(
+                    "attack",
+                    Some(agent),
+                    tick,
+                    env,
+                    started,
+                    "not inside",
+                    None,
+                );
+            }
+        };
+        let target = pos.step(req.dir);
+        if let Err(message) = loo_core::validate_attack(&inner.world, agent, target, &self.cfg) {
+            let env = failed_env(&self.cfg, &mut inner, Some(agent), ApiError::rule(message));
+            drop(inner);
+            return self.finish(
+                "attack",
+                Some(agent),
+                tick,
+                env,
+                started,
+                format!("rejected attack at {target}"),
+                None,
+            );
+        }
+        let label = format!("attack the agent at {target}");
+        let intent = IntentKind::Attack { target };
+        let intent_json = serde_json::to_value(&intent).ok();
+        queue_intent(&mut inner, agent, intent);
+        let effective_tick = tick + 1;
+        let env = ok_env(
+            &self.cfg,
+            &mut inner,
+            agent,
+            ActionQueued {
+                action: ActionState {
+                    description: label.clone(),
+                    remaining: 0,
+                },
+                effective_tick,
+            },
+        );
+        drop(inner);
+        self.finish(
+            "attack",
+            Some(agent),
+            tick,
+            env,
+            started,
+            format!("queued {label} for tick {effective_tick}"),
+            intent_json.as_ref(),
+        )
+    }
+
+    pub async fn defend_cmd(&self, token: &str, req: DefendRequest) -> Envelope<ActionQueued> {
+        let started = Instant::now();
+        let mut inner = self.inner.lock().await;
+        let Some(agent) = inner.tokens.get(token).copied() else {
+            let env = failed_env(&self.cfg, &mut inner, None, not_authenticated());
+            drop(inner);
+            return self.finish("defend", None, 0, env, started, "not authenticated", None);
+        };
+        let tick = inner.world.tick;
+        let pos = match require_inside(&inner, agent) {
+            Ok(pos) => pos,
+            Err(error) => {
+                let env = failed_env(&self.cfg, &mut inner, Some(agent), error);
+                drop(inner);
+                return self.finish(
+                    "defend",
+                    Some(agent),
+                    tick,
+                    env,
+                    started,
+                    "not inside",
+                    None,
+                );
+            }
+        };
+        let target = pos.step(req.dir);
+        if let Err(message) = loo_core::validate_defend(&inner.world, agent, target) {
+            let env = failed_env(&self.cfg, &mut inner, Some(agent), ApiError::rule(message));
+            drop(inner);
+            return self.finish(
+                "defend",
+                Some(agent),
+                tick,
+                env,
+                started,
+                format!("rejected defend at {target}"),
+                None,
+            );
+        }
+        let label = format!("defend {target} this tick");
+        let intent = IntentKind::Defend { target };
+        let intent_json = serde_json::to_value(&intent).ok();
+        queue_intent(&mut inner, agent, intent);
+        let effective_tick = tick + 1;
+        let env = ok_env(
+            &self.cfg,
+            &mut inner,
+            agent,
+            ActionQueued {
+                action: ActionState {
+                    description: label.clone(),
+                    remaining: 0,
+                },
+                effective_tick,
+            },
+        );
+        drop(inner);
+        self.finish(
+            "defend",
+            Some(agent),
+            tick,
+            env,
+            started,
+            format!("queued {label} for tick {effective_tick}"),
+            intent_json.as_ref(),
+        )
+    }
+
+    pub async fn upgrade_cmd(&self, token: &str, req: UpgradeRequest) -> Envelope<ActionQueued> {
+        let started = Instant::now();
+        let mut inner = self.inner.lock().await;
+        let Some(agent) = inner.tokens.get(token).copied() else {
+            let env = failed_env(&self.cfg, &mut inner, None, not_authenticated());
+            drop(inner);
+            return self.finish("upgrade", None, 0, env, started, "not authenticated", None);
+        };
+        let tick = inner.world.tick;
+        let pos = match require_inside(&inner, agent) {
+            Ok(pos) => pos,
+            Err(error) => {
+                let env = failed_env(&self.cfg, &mut inner, Some(agent), error);
+                drop(inner);
+                return self.finish(
+                    "upgrade",
+                    Some(agent),
+                    tick,
+                    env,
+                    started,
+                    "not inside",
+                    None,
+                );
+            }
+        };
+        let target = absolute_target(pos, req.target);
+        if let Err(message) = loo_core::validate_upgrade(&inner.world, agent, target, &self.cfg) {
+            let env = failed_env(&self.cfg, &mut inner, Some(agent), ApiError::rule(message));
+            drop(inner);
+            return self.finish(
+                "upgrade",
+                Some(agent),
+                tick,
+                env,
+                started,
+                format!("rejected upgrade at {target}"),
+                None,
+            );
+        }
+        let label = format!("upgrade the toilet at {target}");
+        let intent = IntentKind::Upgrade { target };
+        let intent_json = serde_json::to_value(&intent).ok();
+        queue_intent(&mut inner, agent, intent);
+        let effective_tick = tick + 1;
+        let env = ok_env(
+            &self.cfg,
+            &mut inner,
+            agent,
+            ActionQueued {
+                action: ActionState {
+                    description: label.clone(),
+                    remaining: 0,
+                },
+                effective_tick,
+            },
+        );
+        drop(inner);
+        self.finish(
+            "upgrade",
+            Some(agent),
+            tick,
+            env,
+            started,
+            format!("queued {label} for tick {effective_tick}"),
+            intent_json.as_ref(),
+        )
+    }
+
+    pub async fn downgrade_cmd(
+        &self,
+        token: &str,
+        req: DowngradeRequest,
+    ) -> Envelope<ActionQueued> {
+        let started = Instant::now();
+        let mut inner = self.inner.lock().await;
+        let Some(agent) = inner.tokens.get(token).copied() else {
+            let env = failed_env(&self.cfg, &mut inner, None, not_authenticated());
+            drop(inner);
+            return self.finish(
+                "downgrade",
+                None,
+                0,
+                env,
+                started,
+                "not authenticated",
+                None,
+            );
+        };
+        let tick = inner.world.tick;
+        let pos = match require_inside(&inner, agent) {
+            Ok(pos) => pos,
+            Err(error) => {
+                let env = failed_env(&self.cfg, &mut inner, Some(agent), error);
+                drop(inner);
+                return self.finish(
+                    "downgrade",
+                    Some(agent),
+                    tick,
+                    env,
+                    started,
+                    "not inside",
+                    None,
+                );
+            }
+        };
+        let target = absolute_target(pos, req.target);
+        if let Err(message) = loo_core::validate_downgrade(&inner.world, agent, target) {
+            let env = failed_env(&self.cfg, &mut inner, Some(agent), ApiError::rule(message));
+            drop(inner);
+            return self.finish(
+                "downgrade",
+                Some(agent),
+                tick,
+                env,
+                started,
+                format!("rejected downgrade at {target}"),
+                None,
+            );
+        }
+        let label = format!("downgrade the toilet at {target}");
+        let intent = IntentKind::Downgrade { target };
+        let intent_json = serde_json::to_value(&intent).ok();
+        queue_intent(&mut inner, agent, intent);
+        let effective_tick = tick + 1;
+        let env = ok_env(
+            &self.cfg,
+            &mut inner,
+            agent,
+            ActionQueued {
+                action: ActionState {
+                    description: label.clone(),
+                    remaining: 0,
+                },
+                effective_tick,
+            },
+        );
+        drop(inner);
+        self.finish(
+            "downgrade",
+            Some(agent),
+            tick,
+            env,
+            started,
+            format!("queued {label} for tick {effective_tick}"),
+            intent_json.as_ref(),
+        )
+    }
+
     pub async fn use_cmd(&self, token: &str) -> Envelope<ActionQueued> {
         let started = Instant::now();
         let mut inner = self.inner.lock().await;
         let Some(agent) = inner.tokens.get(token).copied() else {
-            let env = failed_env(&mut inner, None, not_authenticated());
+            let env = failed_env(&self.cfg, &mut inner, None, not_authenticated());
             drop(inner);
             return self.finish("use", None, 0, env, started, "not authenticated", None);
         };
         let tick = inner.world.tick;
         if let Err(error) = require_inside(&inner, agent) {
-            let env = failed_env(&mut inner, Some(agent), error);
+            let env = failed_env(&self.cfg, &mut inner, Some(agent), error);
             drop(inner);
             return self.finish("use", Some(agent), tick, env, started, "not inside", None);
         }
         let target = match loo_core::validate_use(&inner.world, agent, &self.cfg) {
             Ok(target) => target,
             Err(message) => {
-                let env = failed_env(&mut inner, Some(agent), ApiError::rule(message));
+                let env = failed_env(&self.cfg, &mut inner, Some(agent), ApiError::rule(message));
                 drop(inner);
                 return self.finish("use", Some(agent), tick, env, started, "rejected use", None);
             }
@@ -960,6 +1274,7 @@ impl Server {
         queue_intent(&mut inner, agent, intent);
         let effective_tick = tick + 1;
         let env = ok_env(
+            &self.cfg,
             &mut inner,
             agent,
             ActionQueued {
@@ -986,7 +1301,7 @@ impl Server {
         let started = Instant::now();
         let mut inner = self.inner.lock().await;
         let Some(agent) = inner.tokens.get(token).copied() else {
-            let env = failed_env(&mut inner, None, not_authenticated());
+            let env = failed_env(&self.cfg, &mut inner, None, not_authenticated());
             drop(inner);
             return self.finish("cancel", None, 0, env, started, "not authenticated", None);
         };
@@ -996,6 +1311,7 @@ impl Server {
         queue_intent(&mut inner, agent, intent);
         let effective_tick = tick + 1;
         let env = ok_env(
+            &self.cfg,
             &mut inner,
             agent,
             ActionQueued {
@@ -1022,7 +1338,7 @@ impl Server {
         let started = Instant::now();
         let mut inner = self.inner.lock().await;
         let Some(agent) = inner.tokens.get(token).copied() else {
-            let env = failed_env(&mut inner, None, not_authenticated());
+            let env = failed_env(&self.cfg, &mut inner, None, not_authenticated());
             drop(inner);
             return self.finish("leave", None, 0, env, started, "not authenticated", None);
         };
@@ -1036,7 +1352,7 @@ impl Server {
             &self.cfg,
         ) {
             Err(message) => {
-                let env = failed_env(&mut inner, Some(agent), ApiError::rule(message));
+                let env = failed_env(&self.cfg, &mut inner, Some(agent), ApiError::rule(message));
                 drop(inner);
                 self.finish(
                     "leave",
@@ -1052,6 +1368,7 @@ impl Server {
                 if let Err(error) = self.store.append_join_events(world.tick, &events) {
                     eprintln!("leave events for agent {agent} were not persisted: {error}");
                     let env = failed_env::<LeaveResponse>(
+                        &self.cfg,
                         &mut inner,
                         Some(agent),
                         ApiError::new(
@@ -1087,7 +1404,12 @@ impl Server {
                         }
                     }
                 }
-                let env = ok_env(&mut inner, agent, LeaveResponse { outcome, score });
+                let env = ok_env(
+                    &self.cfg,
+                    &mut inner,
+                    agent,
+                    LeaveResponse { outcome, score },
+                );
                 drop(inner);
                 self.finish(
                     "leave",
@@ -1112,7 +1434,7 @@ impl Server {
         let agent = { self.inner.lock().await.tokens.get(token).copied() };
         let Some(agent) = agent else {
             let mut inner = self.inner.lock().await;
-            let env = failed_env(&mut inner, None, not_authenticated());
+            let env = failed_env(&self.cfg, &mut inner, None, not_authenticated());
             drop(inner);
             return self.finish("wait", None, 0, env, started, "not authenticated", None);
         };
@@ -1122,7 +1444,7 @@ impl Server {
         loop {
             {
                 let mut inner = self.inner.lock().await;
-                let state = agent_view(&inner, agent);
+                let state = agent_view(&self.cfg, &inner, agent);
                 let has_events = inner
                     .outbox
                     .get(&agent)
@@ -1162,7 +1484,7 @@ impl Server {
         }
 
         let mut inner = self.inner.lock().await;
-        let state = agent_view(&inner, agent);
+        let state = agent_view(&self.cfg, &inner, agent);
         // A session that already ended has no state session left, but its
         // closing events must still be delivered.
         let events = take_events(&mut inner, agent);
@@ -1286,7 +1608,7 @@ fn session_required(inner: &Inner, agent: AgentId) -> ApiError {
     }
 }
 
-fn agent_view(inner: &Inner, agent: AgentId) -> Option<AgentView> {
+fn agent_view(cfg: &Config, inner: &Inner, agent: AgentId) -> Option<AgentView> {
     let meta = inner.agents.get(&agent)?;
     let world_agent = inner.world.agents.get(&agent);
     let session = inner
@@ -1317,6 +1639,13 @@ fn agent_view(inner: &Inner, agent: AgentId) -> Option<AgentView> {
         Some(Need::Feces) => inner.need_use_ticks[1],
         None => 0,
     };
+    // An agent outside the world (never joined or already left) still has its
+    // cumulative score; the level follows from it exactly as core computes it.
+    let score_total = world_agent.map_or(meta.score_total, |agent| agent.score_total);
+    let level = world_agent.map_or_else(
+        || loo_core::agent_level(meta.score_total, cfg),
+        |agent| agent.level,
+    );
     Some(AgentView {
         agent_id: agent,
         nick: meta.nick.to_string(),
@@ -1333,6 +1662,13 @@ fn agent_view(inner: &Inner, agent: AgentId) -> Option<AgentView> {
         recovery_deadline: session.and_then(|s| s.recovery_deadline),
         score: session.map(|s| s.score).unwrap_or(0),
         outcome: session.and_then(|s| s.outcome),
+        score_total,
+        level,
+        stun_until: world_agent.map_or(0, |agent| agent.stun_until),
+        immunity_until: world_agent.map_or(0, |agent| agent.immunity_until),
+        attack_cooldown_until: world_agent.map_or(0, |agent| agent.attack_cooldown_until),
+        defend_cooldown_until: world_agent.map_or(0, |agent| agent.defend_cooldown_until),
+        defending: world_agent.and_then(|agent| agent.defending),
     })
 }
 
@@ -1361,17 +1697,23 @@ fn agent_meta(stored: &StoredAgent) -> Result<AgentMeta, StoreError> {
         token: stored.token.clone(),
         sent_by,
         why: stored.why.clone(),
+        score_total: stored.score_total,
     })
 }
 
-fn ok_env<T>(inner: &mut Inner, agent: AgentId, result: T) -> Envelope<T> {
-    let state = agent_view(inner, agent);
+fn ok_env<T>(cfg: &Config, inner: &mut Inner, agent: AgentId, result: T) -> Envelope<T> {
+    let state = agent_view(cfg, inner, agent);
     let events = take_events(inner, agent);
     Envelope::ok(result, events, state)
 }
 
-fn failed_env<T>(inner: &mut Inner, agent: Option<AgentId>, error: ApiError) -> Envelope<T> {
-    let state = agent.and_then(|agent| agent_view(inner, agent));
+fn failed_env<T>(
+    cfg: &Config,
+    inner: &mut Inner,
+    agent: Option<AgentId>,
+    error: ApiError,
+) -> Envelope<T> {
+    let state = agent.and_then(|agent| agent_view(cfg, inner, agent));
     let events = agent
         .map(|agent| take_events(inner, agent))
         .unwrap_or_default();
@@ -1407,6 +1749,20 @@ fn next_nonce() -> u64 {
 
 /// Design §10: neutral list of every action and its consequence. No advice.
 fn rules_text(cfg: &Config, map_width: i32, map_height: i32) -> String {
+    let upgrade_work = cfg
+        .build
+        .upgrade_work
+        .iter()
+        .map(|work| work.to_string())
+        .collect::<Vec<_>>()
+        .join("/");
+    let levels = cfg
+        .agent
+        .level_thresholds
+        .iter()
+        .map(|threshold| threshold.to_string())
+        .collect::<Vec<_>>()
+        .join("/");
     format!(
         "\
 Company Time — AI toilet world (step 2 dev server)
@@ -1428,10 +1784,18 @@ Commands
       Your position, session, queue position, running action, need, use progress and score.
   loo move <N|E|S|W> [steps]   |   loo move <path, e.g. NNEE>
       Queue a move. One cell per tick. It stops at the first wall, closed door, other agent or map edge, and tells you where and why.
+  loo attack <N|E|S|W>
+      Commit an attack on the unstunned agent in that adjacent cell. The windup is {windup} ticks; the hit resolves on the landing tick, and a target that stepped away is missed. A hit removes {penalty} ticks from the target's deadline, stuns it for {stun} ticks and then leaves it immune for {immunity} ticks. The attack cooldown is {attack_cooldown} ticks from the commit. A defended cell blocks the hit and stuns the attacker.
+  loo defend <N|E|S|W>
+      Shield one adjacent cell for one tick. Attacks and every demolition aimed at that cell are blocked; the attacker is stunned for {stun} ticks. A defending tick cannot build, move or attack; a use is paused, not interrupted. The defend cooldown is {defend_cooldown} ticks. Your own cell cannot be defended.
   loo build wall|door|toilet <dir|here>
       Queue work on a cell: your own cell (here) or one step away. A wall needs {wall_work} work points, a door {door_work}, a level 1 toilet {toilet_work}; each work tick adds 1 point, so several agents build faster. A new door starts closed.
+  loo upgrade <dir|here>
+      Work a toilet up one level. Each worker adds 1 work point per tick; levels 1 to 4 need {upgrade_work} points. Your agent level must be at least the target level; agent levels are cumulative score {levels} for levels 1 to 5. At most 5 agents work one toilet, and a toilet with non-zero progress is not usable.
   loo demolish <dir|here>
       Queue demolition of the object on a cell. A wall or door loses {wall_door_demolish} work per tick until it is gone (a wall has {wall_work} work, a door {door_work}); an unfinished site goes in {site_demolish} tick. A toilet is downgraded continuously at {toilet_demolish} per tick; while its progress is not 0 it cannot be used.
+  loo downgrade <dir|here>
+      Work a toilet down one level. Each worker removes 2 work points per tick. A level 1 toilet with no progress left cannot be downgraded; use demolish to remove it.
   loo door open|close <N|E|S|W>
       Queue a door state change. Only an agent standing on a toilet cell next to the door may do it. At the end of a tick a closed door with nobody on an adjacent toilet cell opens by itself.
   loo use
@@ -1467,6 +1831,12 @@ World facts
         site_demolish = cfg.build.site_demolish_per_tick,
         toilet_demolish = cfg.build.toilet_demolish_per_tick,
         recovery = cfg.need.interrupt_recovery_ticks,
+        windup = cfg.combat.windup_ticks,
+        penalty = cfg.combat.penalty_ticks,
+        stun = cfg.combat.stun_ticks,
+        immunity = cfg.combat.immunity_ticks,
+        attack_cooldown = cfg.combat.attack_cooldown_ticks,
+        defend_cooldown = cfg.combat.defend_cooldown_ticks,
         wait_default = cfg.wait.default_seconds,
         wait_max = cfg.wait.max_seconds,
     )

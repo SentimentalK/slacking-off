@@ -5,7 +5,7 @@
 //! tick's events and the world's tick counter are written in one transaction, so
 //! a crash never leaves a tick half-recorded.
 
-use loo_core::{Event, IntentKind, Snapshot, WorldState};
+use loo_core::{Event, EventKind, IntentKind, Snapshot, WorldState};
 use loo_proto::{AgentId, Tick};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::Value;
@@ -65,7 +65,8 @@ CREATE TABLE IF NOT EXISTS agents(
     token TEXT NOT NULL UNIQUE,
     sent_by TEXT,
     why TEXT NOT NULL,
-    created_at_ms INTEGER NOT NULL
+    created_at_ms INTEGER NOT NULL,
+    score_total INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS events_by_tick ON events(world_id, tick, seq);
 ";
@@ -81,6 +82,8 @@ pub struct StoredAgent {
     /// `self` or `human`, recorded when the agent joins.
     pub sent_by: Option<String>,
     pub why: String,
+    /// Cumulative score over every session, persisted with each scored tick.
+    pub score_total: u32,
 }
 
 #[derive(Debug)]
@@ -172,6 +175,7 @@ impl Store {
         conn.query_row("PRAGMA journal_mode=WAL", [], |_| Ok(()))?;
         conn.execute_batch("PRAGMA synchronous=NORMAL;")?;
         conn.execute_batch(SCHEMA)?;
+        migrate_agents_score(&conn)?;
 
         let existing: Option<i64> = conn
             .query_row(
@@ -265,6 +269,19 @@ impl Store {
                     serde_json::to_string(event)?,
                     ts_ms
                 ])?;
+            }
+        }
+        {
+            // Scores and their events commit together; `SessionEnded` and
+            // `UseFailed` never carry a score.
+            let mut update = tx.prepare(
+                "UPDATE agents SET score_total = score_total + ?1 \
+                 WHERE id = ?2 AND world_id = ?3",
+            )?;
+            for event in events {
+                if let EventKind::UseSucceeded { agent, score, .. } = &event.kind {
+                    update.execute(params![*score as i64, *agent as i64, WORLD_ID])?;
+                }
             }
         }
         tx.execute(
@@ -382,8 +399,8 @@ impl Store {
         token: &str,
     ) -> Result<(), StoreError> {
         self.conn()?.execute(
-            "INSERT INTO agents(id, world_id, nick, model, intro, token, sent_by, why, created_at_ms) \
-             VALUES(?1, ?2, ?3, ?4, ?5, ?6, NULL, '', ?7)",
+            "INSERT INTO agents(id, world_id, nick, model, intro, token, sent_by, why, created_at_ms, score_total) \
+             VALUES(?1, ?2, ?3, ?4, ?5, ?6, NULL, '', ?7, 0)",
             params![
                 id as i64,
                 WORLD_ID,
@@ -410,10 +427,20 @@ impl Store {
         Ok(())
     }
 
+    /// Overwrites the persisted cumulative score of one agent. The server keeps
+    /// using its in-memory meta at join time, so tests reopen afterwards.
+    pub fn set_agent_score(&self, id: AgentId, score: u32) -> Result<(), StoreError> {
+        self.conn()?.execute(
+            "UPDATE agents SET score_total = ?1 WHERE id = ?2 AND world_id = ?3",
+            params![score as i64, id as i64, WORLD_ID],
+        )?;
+        Ok(())
+    }
+
     pub fn agents(&self) -> Result<Vec<StoredAgent>, StoreError> {
         let conn = self.conn()?;
         let mut stmt = conn.prepare(
-            "SELECT id, nick, model, intro, token, sent_by, why FROM agents \
+            "SELECT id, nick, model, intro, token, sent_by, why, score_total FROM agents \
              WHERE world_id = ?1 ORDER BY id",
         )?;
         let rows = stmt.query_map([WORLD_ID], |row| {
@@ -425,6 +452,7 @@ impl Store {
                 token: row.get(4)?,
                 sent_by: row.get(5)?,
                 why: row.get(6)?,
+                score_total: row.get::<_, i64>(7)? as u32,
             })
         })?;
         let mut agents = Vec::new();
@@ -481,6 +509,31 @@ impl Store {
         }
         Ok(by_agent.into_iter().collect())
     }
+}
+
+/// Adds `agents.score_total` to databases written before the column existed.
+/// `CREATE TABLE IF NOT EXISTS` never changes an existing table, so old rows
+/// keep every value and the new column starts at its default 0.
+fn migrate_agents_score(conn: &Connection) -> Result<(), StoreError> {
+    let has_score_total = {
+        let mut stmt = conn.prepare("PRAGMA table_info(agents)")?;
+        let mut rows = stmt.query([])?;
+        let mut found = false;
+        while let Some(row) = rows.next()? {
+            if row.get::<_, String>(1)? == "score_total" {
+                found = true;
+                break;
+            }
+        }
+        found
+    };
+    if !has_score_total {
+        conn.execute(
+            "ALTER TABLE agents ADD COLUMN score_total INTEGER NOT NULL DEFAULT 0",
+            [],
+        )?;
+    }
+    Ok(())
 }
 
 fn now_ms() -> u64 {

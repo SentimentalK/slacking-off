@@ -400,6 +400,30 @@ pub struct DoorRequest {
     pub open: bool,
 }
 
+/// Attack the adjacent cell in `dir` (design §5).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AttackRequest {
+    pub dir: Dir,
+}
+
+/// Shield the adjacent cell in `dir` for one tick (design §5).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct DefendRequest {
+    pub dir: Dir,
+}
+
+/// Work a toilet one level up (design §4.7).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct UpgradeRequest {
+    pub target: TargetSpec,
+}
+
+/// Work a toilet one level down (design §4.7).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct DowngradeRequest {
+    pub target: TargetSpec,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct LeaveResponse {
     pub outcome: SessionOutcome,
@@ -477,6 +501,20 @@ pub struct AgentView {
     pub recovery_deadline: Option<Tick>,
     pub score: u32,
     pub outcome: Option<SessionOutcome>,
+    /// Cumulative score across every session of this agent (design §4.8).
+    pub score_total: u32,
+    /// Agent level derived from `score_total`.
+    pub level: u8,
+    /// Tick until which the agent cannot act (`tick < stun_until`).
+    pub stun_until: Tick,
+    /// Tick until which an attack on the agent misses.
+    pub immunity_until: Tick,
+    /// Tick from which the next attack may start.
+    pub attack_cooldown_until: Tick,
+    /// Tick from which the next defence may start.
+    pub defend_cooldown_until: Tick,
+    /// The adjacent cell shielded for the current tick, if any.
+    pub defending: Option<Pos>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

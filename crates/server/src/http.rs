@@ -8,8 +8,9 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use loo_proto::{
-    ActionQueued, ApiError, BuildRequest, ConfigResponse, DemolishRequest, DoorRequest, Envelope,
-    ErrorCode, JoinRequest, JoinResponse, LeaveResponse, MoveRequest, RegisterRequest, WaitRequest,
+    ActionQueued, ApiError, AttackRequest, BuildRequest, ConfigResponse, DefendRequest,
+    DemolishRequest, DoorRequest, DowngradeRequest, Envelope, ErrorCode, JoinRequest, JoinResponse,
+    LeaveResponse, MoveRequest, RegisterRequest, UpgradeRequest, WaitRequest,
 };
 use serde::Serialize;
 use std::sync::Arc;
@@ -28,6 +29,10 @@ pub fn router(server: Arc<Server>) -> Router {
         .route("/api/build", post(build_cmd))
         .route("/api/demolish", post(demolish_cmd))
         .route("/api/door", post(door_cmd))
+        .route("/api/attack", post(attack_cmd))
+        .route("/api/defend", post(defend_cmd))
+        .route("/api/upgrade", post(upgrade_cmd))
+        .route("/api/downgrade", post(downgrade_cmd))
         .route("/api/use", post(use_cmd))
         .route("/api/cancel", post(cancel_cmd))
         .route("/api/leave", post(leave_cmd))
@@ -135,6 +140,50 @@ async fn door_cmd(
         return respond::<ActionQueued>(bad_request("body must be {target, open}"));
     };
     respond(server.door_cmd(&token(&headers), req).await)
+}
+
+async fn attack_cmd(
+    State(server): State<Arc<Server>>,
+    headers: HeaderMap,
+    body: Option<Json<AttackRequest>>,
+) -> Response {
+    let Some(Json(req)) = body else {
+        return respond::<ActionQueued>(bad_request("body must be {dir}"));
+    };
+    respond(server.attack_cmd(&token(&headers), req).await)
+}
+
+async fn defend_cmd(
+    State(server): State<Arc<Server>>,
+    headers: HeaderMap,
+    body: Option<Json<DefendRequest>>,
+) -> Response {
+    let Some(Json(req)) = body else {
+        return respond::<ActionQueued>(bad_request("body must be {dir}"));
+    };
+    respond(server.defend_cmd(&token(&headers), req).await)
+}
+
+async fn upgrade_cmd(
+    State(server): State<Arc<Server>>,
+    headers: HeaderMap,
+    body: Option<Json<UpgradeRequest>>,
+) -> Response {
+    let Some(Json(req)) = body else {
+        return respond::<ActionQueued>(bad_request("body must be {target}"));
+    };
+    respond(server.upgrade_cmd(&token(&headers), req).await)
+}
+
+async fn downgrade_cmd(
+    State(server): State<Arc<Server>>,
+    headers: HeaderMap,
+    body: Option<Json<DowngradeRequest>>,
+) -> Response {
+    let Some(Json(req)) = body else {
+        return respond::<ActionQueued>(bad_request("body must be {target}"));
+    };
+    respond(server.downgrade_cmd(&token(&headers), req).await)
 }
 
 async fn use_cmd(State(server): State<Arc<Server>>, headers: HeaderMap) -> Response {
