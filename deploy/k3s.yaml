@@ -1,0 +1,142 @@
+# loo-server: single-replica K3s deployment.
+#
+# No `namespace:` is set anywhere, so the objects land in the namespace of the
+# current kubectl context (`kubectl apply -n <ns>` also works).
+#
+#   kubectl apply --dry-run=client -f deploy/k3s.yaml   # offline validation
+#   kubectl apply -f deploy/k3s.yaml                    # real cluster
+#
+# The image is built locally as `loo-server:f-arm64`; push it to the registry
+# your nodes can pull from and change `spec.template.spec.containers[0].image`.
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: loo-server-data
+  labels:
+    app.kubernetes.io/name: loo-server
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: loo-server
+  labels:
+    app.kubernetes.io/name: loo-server
+spec:
+  replicas: 1
+  # world.db is a single-writer SQLite file on a ReadWriteOnce volume: never
+  # roll two pods at once.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: loo-server
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: loo-server
+    spec:
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+      containers:
+        - name: loo-server
+          image: loo-server:f-arm64
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 18080
+              protocol: TCP
+          env:
+            - name: TMPDIR
+              value: /tmp
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 3
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: loo-server-data
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: loo-server
+  labels:
+    app.kubernetes.io/name: loo-server
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: loo-server
+  ports:
+    - name: http
+      port: 18080
+      targetPort: http
+      protocol: TCP
+#
+# Optional Ingress. Uncomment, set the host and the ingress class your K3s
+# cluster provides (Traefik on stock K3s), then validate again with
+# `kubectl apply --dry-run=client -f deploy/k3s.yaml`.
+#
+# ---
+# apiVersion: networking.k8s.io/v1
+# kind: Ingress
+# metadata:
+#   name: loo-server
+#   labels:
+#     app.kubernetes.io/name: loo-server
+# spec:
+#   ingressClassName: traefik
+#   rules:
+#     - host: loo.example.com
+#       http:
+#         paths:
+#           - path: /
+#             pathType: Prefix
+#             backend:
+#               service:
+#                 name: loo-server
+#                 port:
+#                   name: http
