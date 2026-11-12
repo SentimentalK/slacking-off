@@ -187,12 +187,14 @@ pub fn parse(text: &str) -> Result<MapDef, MapError> {
                     Terrain::Buildable,
                     Some(Object::Toilet {
                         level: ch.to_digit(10).unwrap_or(1) as u8,
+                        progress: 0,
                     }),
                 ),
                 'x' => (
                     Terrain::Buildable,
                     Some(Object::Site {
                         kind: SiteKind::Wall,
+                        work: 1,
                     }),
                 ),
                 other => {
@@ -244,7 +246,10 @@ grid
         assert_eq!(def.objects[0], Some(Object::Wall));
         assert_eq!(
             def.objects[def.map.index(Pos::new(2, 1)).unwrap()],
-            Some(Object::Toilet { level: 1 })
+            Some(Object::Toilet {
+                level: 1,
+                progress: 0
+            })
         );
         assert_eq!(
             def.objects[def.map.index(Pos::new(1, 2)).unwrap()],

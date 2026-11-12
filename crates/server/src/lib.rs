@@ -856,7 +856,7 @@ fn agent_view(inner: &Inner, agent: AgentId) -> Option<AgentView> {
     let action = world_agent
         .and_then(|a| a.action.as_ref())
         .map(|action| ActionState {
-            description: action.label.clone(),
+            description: action.label().to_string(),
             remaining: action.remaining(),
         });
     Some(AgentView {

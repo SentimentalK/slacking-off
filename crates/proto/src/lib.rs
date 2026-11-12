@@ -12,6 +12,25 @@ pub type Tick = u64;
 pub type AgentId = u64;
 pub type SessionId = u64;
 
+/// What an agent has to get rid of during a session (design §4.8).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Need {
+    Urine,
+    Feces,
+}
+
+/// How a session ended (design §4.8).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionOutcome {
+    Success,
+    FailedDeadline,
+    FailedRecovery,
+    Left,
+    Abandoned,
+}
+
 /// A grid cell coordinate. `x` grows east, `y` grows south.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct Pos {

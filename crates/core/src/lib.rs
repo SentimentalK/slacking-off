@@ -30,14 +30,16 @@ pub mod event;
 pub mod map;
 pub mod replay;
 pub mod rng;
+pub mod rules;
 pub mod state;
 pub mod step;
 pub mod view;
 
 pub use config::Config;
-pub use event::{ActionOutcome, Blocker, Event, EventKind};
+pub use event::{ActionOutcome, Blocker, Event, EventKind, ObjectCause};
 pub use map::{Map, MapDef, MapError, Terrain};
 pub use replay::{diff_worlds, replay, restore, ReplayError, Snapshot, WorldDiff};
+pub use rules::{validate_build, validate_demolish, validate_door};
 pub use state::{Action, Agent, Object, Session, SessionStatus, SiteKind, WorldState};
 pub use step::{
     join, step, Intent, IntentKind, JoinCommand, JoinOutcome, JoinReject, JoinRejectKind,

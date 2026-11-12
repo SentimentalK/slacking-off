@@ -8,7 +8,7 @@
 use crate::config::Config;
 use crate::event::{Event, EventKind};
 use crate::map::Terrain;
-use crate::state::{Agent, Object, Session, SessionStatus, WorldState};
+use crate::state::{Action, Agent, Object, Session, SessionStatus, WorldState};
 use crate::step::{mark_all_seen, step, Intent};
 use loo_proto::{AgentId, Nick, Pos, SessionId, Tick};
 use serde::{Deserialize, Serialize};
@@ -202,16 +202,16 @@ fn apply_event(world: &mut WorldState, event: &Event) -> Result<(), ReplayError>
             );
             world.sessions.insert(
                 *session,
-                Session {
-                    id: *session,
-                    agent: *agent,
-                    status: if at.is_some() {
+                Session::fresh(
+                    *session,
+                    *agent,
+                    if at.is_some() {
                         SessionStatus::Inside
                     } else {
                         SessionStatus::Waiting
                     },
-                    seen: Default::default(),
-                },
+                    Default::default(),
+                ),
             );
             if at.is_none() {
                 world.entry_queue.push_back(*session);
@@ -313,6 +313,9 @@ fn apply_event(world: &mut WorldState, event: &Event) -> Result<(), ReplayError>
             }
             entry.action = None;
         }
+        EventKind::ObjectChanged { pos, object, .. } => {
+            world.set_object(*pos, *object);
+        }
     }
     Ok(())
 }
@@ -322,7 +325,10 @@ fn consume_step(agent: &mut Agent) -> Result<(), String> {
     let Some(action) = agent.action.as_mut() else {
         return Err(format!("agent {} moved without a running action", agent.id));
     };
-    if action.dirs.pop_front().is_none() {
+    let Action::Move { dirs, .. } = action else {
+        return Err(format!("agent {} moved during a non-move action", agent.id));
+    };
+    if dirs.pop_front().is_none() {
         return Err(format!(
             "agent {} moved but its action had no steps left",
             agent.id

@@ -504,7 +504,7 @@ fn blockers_stop_at_the_correct_cell() {
     );
 
     // A closed door.
-    let world = join_agent(&build("grid\n.E.+\n"), &cfg, 1, "dev-1");
+    let world = join_agent(&build("grid\n.E1+\n"), &cfg, 1, "dev-1");
     let (next, events) = run_ticks(&world, &[move_intent(1, &[Dir::E, Dir::E])], 2, 3, &cfg);
     assert_eq!(pos_of(&next, 1), Pos::new(2, 0), "stopped before the door");
     assert!(matches!(
@@ -571,7 +571,8 @@ fn blockers_stop_at_the_correct_cell() {
     assert_eq!(
         world.object_at(Pos::new(3, 0)),
         Some(Object::Site {
-            kind: SiteKind::Wall
+            kind: SiteKind::Wall,
+            work: 1
         }),
         "`x` is a wall site"
     );
@@ -603,6 +604,7 @@ fn blockers_stop_at_the_correct_cell() {
         Pos::new(3, 0),
         Some(Object::Site {
             kind: SiteKind::Toilet,
+            work: 1,
         }),
     );
     let open = join_agent(&open, &cfg, 1, "dev-1");
@@ -743,8 +745,8 @@ fn action_replaced_is_announced_and_new_action_wins() {
     });
     match &replaced.kind {
         EventKind::ActionReplaced { from, to, .. } => {
-            assert_eq!(from.label, "east three");
-            assert_eq!(to.label, "south two");
+            assert_eq!(from.label(), "east three");
+            assert_eq!(to.label(), "south two");
             assert_eq!(from.remaining(), 2, "the east path still had two steps");
             assert_eq!(to.remaining(), 2);
         }
@@ -779,7 +781,7 @@ fn stunned_agent_is_swapped_and_a_second_contender_is_blocked() {
     place(&mut world, 2, Pos::new(1, 0));
     place(&mut world, 3, Pos::new(3, 0));
     world.agents.get_mut(&2).expect("stunned agent").stun_until = 10;
-    world.agents.get_mut(&2).expect("stunned agent").action = Some(loo_core::Action {
+    world.agents.get_mut(&2).expect("stunned agent").action = Some(loo_core::Action::Move {
         dirs: [Dir::E].into(),
         total: 1,
         label: "stunned walk".to_string(),

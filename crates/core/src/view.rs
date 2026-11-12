@@ -10,12 +10,14 @@ use std::collections::{BTreeMap, BTreeSet};
 /// orthogonal neighbours are finished walls or closed doors.
 pub fn is_usable(world: &WorldState, pos: Pos) -> bool {
     match world.object_at(pos) {
-        Some(Object::Toilet { level }) if (1..=5).contains(&level) => Dir::ALL.iter().all(|dir| {
-            matches!(
-                world.object_at(pos.step(*dir)),
-                Some(Object::Wall) | Some(Object::Door { open: false })
-            )
-        }),
+        Some(Object::Toilet { level, progress }) if (1..=5).contains(&level) && progress == 0 => {
+            Dir::ALL.iter().all(|dir| {
+                matches!(
+                    world.object_at(pos.step(*dir)),
+                    Some(Object::Wall) | Some(Object::Door { open: false })
+                )
+            })
+        }
         _ => false,
     }
 }
@@ -25,7 +27,7 @@ pub fn briefing(world: &WorldState, cfg: &Config) -> Briefing {
     for y in 0..world.map.height() {
         for x in 0..world.map.width() {
             let pos = Pos::new(x, y);
-            if let Some(Object::Toilet { level }) = world.object_at(pos) {
+            if let Some(Object::Toilet { level, .. }) = world.object_at(pos) {
                 toilets.push(ToiletInfo {
                     pos,
                     level,
@@ -121,7 +123,7 @@ pub fn map_memory(world: &WorldState, agent: AgentId) -> Option<MapResponse> {
             let cell = Pos::new(x, y);
             match session.seen.get(&cell) {
                 Some(&tick) => {
-                    let ch = cell_glyph(world, cell);
+                    let ch = session.seen_glyph.get(&cell).copied().unwrap_or('?');
                     used.insert(ch);
                     row.push(ch);
                     ticks.push(tick);
@@ -181,12 +183,13 @@ fn symbol_rank(ch: char) -> u8 {
         '#' => 0,
         '+' => 1,
         '\'' => 2,
-        '1'..='5' => 3,
-        '@' => 4,
-        'a'..='z' => 5,
-        '.' => 6,
-        ':' => 7,
-        _ => 8,
+        '1'..='9' => 3,
+        'x' => 4,
+        '@' => 5,
+        'a'..='z' => 6,
+        '.' => 7,
+        ':' => 8,
+        _ => 9,
     }
 }
 
@@ -207,7 +210,8 @@ fn symbol_meaning(ch: char, letters: &BTreeMap<AgentId, char>) -> String {
         '#' => "wall".to_string(),
         '+' => "closed door".to_string(),
         '\'' => "open door".to_string(),
-        '1'..='5' => format!("toilet level {}", ch.to_digit(10).unwrap_or(0)),
+        '1'..='9' => format!("toilet level {}", ch.to_digit(10).unwrap_or(0)),
+        'x' => "unfinished or half-demolished site".to_string(),
         '@' => "you".to_string(),
         'a'..='z' => match letters.iter().find(|(_, letter)| **letter == ch) {
             Some((id, _)) => format!("another agent #{id}"),

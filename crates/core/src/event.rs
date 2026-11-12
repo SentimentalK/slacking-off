@@ -4,9 +4,26 @@
 //! the tick's shuffle seed, so a replay can be verified.
 
 use crate::config::Config;
-use crate::state::Action;
+use crate::state::{Action, Object, SiteKind};
 use loo_proto::{AgentId, Dir, Pos, SessionId, Tick};
 use serde::{Deserialize, Serialize};
+
+fn kind_name(kind: SiteKind) -> &'static str {
+    match kind {
+        SiteKind::Wall => "wall",
+        SiteKind::Door => "door",
+        SiteKind::Toilet => "toilet",
+    }
+}
+
+fn object_kind_name(object: Object) -> &'static str {
+    match object {
+        Object::Wall => "wall",
+        Object::Door { .. } => "door",
+        Object::Toilet { .. } => "toilet",
+        Object::Site { kind, .. } => kind_name(kind),
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Event {
@@ -77,11 +94,33 @@ pub enum EventKind {
         nick: String,
         at: Pos,
         dir: Option<Dir>,
+        /// The action that ended, so the text can name it.
+        action: Action,
         outcome: ActionOutcome,
+    },
+    /// A cell's object was built, damaged, removed or a door changed state.
+    /// `object` is `None` when the object was removed.
+    ObjectChanged {
+        session: Option<SessionId>,
+        agent: Option<AgentId>,
+        nick: Option<String>,
+        pos: Pos,
+        object: Option<Object>,
+        cause: ObjectCause,
     },
     /// Marks the settlement of one tick. Always the first event of its tick and
     /// never delivered to an agent; `Event::seed` is the tick's shuffle seed.
     TickSettled,
+}
+
+/// Why an object changed (design §4.6/§4.7).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ObjectCause {
+    Build { kind: SiteKind },
+    Demolish,
+    DoorOpened,
+    DoorClosed,
+    AutoOpened,
 }
 
 impl EventKind {
@@ -95,6 +134,7 @@ impl EventKind {
             EventKind::ActionStarted { .. } => "ActionStarted",
             EventKind::ActionReplaced { .. } => "ActionReplaced",
             EventKind::ActionFinished { .. } => "ActionFinished",
+            EventKind::ObjectChanged { .. } => "ObjectChanged",
             EventKind::TickSettled => "TickSettled",
         }
     }
@@ -104,6 +144,8 @@ impl EventKind {
 pub enum ActionOutcome {
     Completed,
     Blocked { by: Blocker },
+    Cancelled,
+    Failed { reason: String },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -137,6 +179,7 @@ impl Event {
             | EventKind::ActionStarted { agent, .. }
             | EventKind::ActionReplaced { agent, .. }
             | EventKind::ActionFinished { agent, .. } => Some(*agent),
+            EventKind::ObjectChanged { agent, .. } => *agent,
             EventKind::TickSettled => None,
         }
     }
@@ -146,6 +189,7 @@ impl Event {
             EventKind::Joined { at, .. } => *at,
             EventKind::EnteredWorld { at, .. } | EventKind::ActionFinished { at, .. } => Some(*at),
             EventKind::AgentMoved { to, .. } | EventKind::AgentSwapped { to, .. } => Some(*to),
+            EventKind::ObjectChanged { pos, .. } => Some(*pos),
             EventKind::ActionStarted { .. }
             | EventKind::ActionReplaced { .. }
             | EventKind::TickSettled => None,
@@ -178,29 +222,86 @@ impl Event {
                 "{nick} moved {from} -> {to}; {other_nick} was pushed {other_from} -> {other_to}"
             ),
             EventKind::ActionStarted { nick, action, .. } => {
-                format!("{nick} started {}", action.label)
+                format!("{nick} started {}", action.label())
             }
             EventKind::ActionReplaced { nick, from, to, .. } => format!(
                 "{nick}'s action {} was replaced by {}",
-                from.label, to.label
+                from.label(),
+                to.label()
             ),
             EventKind::ActionFinished {
                 nick,
                 at,
                 dir,
+                action,
                 outcome,
                 ..
             } => match outcome {
-                ActionOutcome::Completed => format!("{nick}'s move finished at {at}"),
+                ActionOutcome::Completed => match action {
+                    Action::Move { .. } => format!("{nick}'s move finished at {at}"),
+                    other => format!("{nick} finished {} at {at}", other.label()),
+                },
                 ActionOutcome::Blocked { by } => {
                     let toward = dir
                         .map(|d| format!("towards the {}", d.word()))
                         .unwrap_or_else(|| "ahead".to_string());
+                    let what = match action {
+                        Action::Move { .. } => "move".to_string(),
+                        other => other.label().to_string(),
+                    };
                     format!(
-                        "{nick}'s move stopped at {at}: {toward} is blocked by {}",
+                        "{nick}'s {what} stopped at {at}: {toward} is blocked by {}",
                         by.describe()
                     )
                 }
+                ActionOutcome::Cancelled => {
+                    format!("{nick}'s {} was cancelled at {at}", action.label())
+                }
+                ActionOutcome::Failed { reason } => {
+                    format!("{nick}'s {} failed at {at}: {reason}", action.label())
+                }
+            },
+            EventKind::ObjectChanged {
+                nick,
+                pos,
+                object,
+                cause,
+                ..
+            } => match cause {
+                ObjectCause::Build { kind } => match object {
+                    Some(Object::Site { .. }) => format!(
+                        "{} worked on a {} at {pos}",
+                        nick.as_deref().unwrap_or("someone"),
+                        kind_name(*kind)
+                    ),
+                    _ => format!(
+                        "{} finished a {} at {pos}",
+                        nick.as_deref().unwrap_or("someone"),
+                        kind_name(*kind)
+                    ),
+                },
+                ObjectCause::Demolish => match object {
+                    Some(object) => format!(
+                        "{} damaged a {} at {pos}",
+                        nick.as_deref().unwrap_or("someone"),
+                        object_kind_name(*object)
+                    ),
+                    None => format!(
+                        "{} demolished the object at {pos}",
+                        nick.as_deref().unwrap_or("someone")
+                    ),
+                },
+                ObjectCause::DoorOpened => format!(
+                    "{} opened the door at {pos}",
+                    nick.as_deref().unwrap_or("someone")
+                ),
+                ObjectCause::DoorClosed => format!(
+                    "{} closed the door at {pos}",
+                    nick.as_deref().unwrap_or("someone")
+                ),
+                ObjectCause::AutoOpened => format!(
+                    "the door at {pos} closed with nobody on its toilet and opened automatically"
+                ),
             },
             EventKind::TickSettled => format!("tick {} settled", self.tick),
         }
