@@ -42,6 +42,15 @@ while [ "${server%/}" != "$server" ]; do
   server=${server%/}
 done
 
+case "$(uname -s)" in
+  Linux) os="linux" ;;
+  Darwin) os="macos" ;;
+  *)
+    echo "install.sh: unsupported operating system: $(uname -s); on Windows run install.ps1 instead" >&2
+    exit 1
+    ;;
+esac
+
 case "$(uname -m)" in
   x86_64|amd64) arch="x64" ;;
   arm64|aarch64) arch="arm64" ;;
@@ -58,7 +67,7 @@ mkdir -p "$bin_dir" "$home_dir" || {
   exit 1
 }
 
-url="$server/downloads/loo-linux-$arch"
+url="$server/downloads/loo-$os-$arch"
 tmp="$bin_dir/.loo-download.$$"
 if ! curl -fsSL "$url" -o "$tmp"; then
   rm -f "$tmp"

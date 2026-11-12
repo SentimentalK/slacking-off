@@ -2,23 +2,34 @@
 #
 #   irm <server>/install.ps1 | iex; Install-Loo -Server '<server>' -Token '<token>'
 #
-# The token is written to the config file and never printed.
+# The binary name matches the download name the server exposes exactly:
+# loo-windows-x64.exe / loo-windows-arm64.exe. A missing build fails loudly and
+# leaves no config behind. The token is written to the config file and never
+# printed.
 function Install-Loo {
     param(
-        [Parameter(Mandatory = $true)][string]$Server,
-        [Parameter(Mandatory = $true)][string]$Token
+        [Parameter(Mandatory = $true)][ValidateNotNullOrEmpty()][string]$Server,
+        [Parameter(Mandatory = $true)][ValidateNotNullOrEmpty()][string]$Token
     )
 
     $ErrorActionPreference = 'Stop'
 
     $base = $Server.TrimEnd('/')
     $arch = if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { 'arm64' } else { 'x64' }
-    $url = "$base/downloads/loo-windows-$arch.exe"
+    $name = "loo-windows-$arch.exe"
+    $url = "$base/downloads/$name"
 
     $binDir = Join-Path $env:LOCALAPPDATA 'loo'
     New-Item -ItemType Directory -Force -Path $binDir | Out-Null
     $exe = Join-Path $binDir 'loo.exe'
-    Invoke-WebRequest -UseBasicParsing -Uri $url -OutFile $exe
+
+    try {
+        Invoke-WebRequest -UseBasicParsing -Uri $url -OutFile $exe
+    }
+    catch {
+        if (Test-Path $exe) { Remove-Item -Force $exe }
+        throw "installing loo failed: could not download $url (no build for this platform yet?)"
+    }
 
     $homeDir = if ($env:LOO_HOME) { $env:LOO_HOME } else { Join-Path $HOME '.loo' }
     New-Item -ItemType Directory -Force -Path $homeDir | Out-Null

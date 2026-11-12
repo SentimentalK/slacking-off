@@ -160,12 +160,31 @@ async fn auth_register(
     let Some(Json(body)) = body else {
         return respond::<AuthMeResponse>(bad_request("body must be {username, password}"));
     };
+    // Validate before touching the store: a malformed field is the caller's
+    // 400, while a rejected insert after this point is a taken username (409).
+    for check in [
+        crate::auth::validate_username(&body.username),
+        crate::auth::validate_password(&body.password),
+    ] {
+        if let Err(message) = check {
+            return respond_status(
+                StatusCode::BAD_REQUEST,
+                error_envelope::<AuthMeResponse>(ErrorCode::BadRequest, message),
+            );
+        }
+    }
     let env = app
         .server
         .register_account(&body.username, &body.password)
         .await;
     if !env.ok {
-        return respond_status(StatusCode::CONFLICT, env);
+        let status = match env.error.as_ref().map(|error| error.code) {
+            Some(ErrorCode::Internal) => StatusCode::INTERNAL_SERVER_ERROR,
+            // The fields already passed validation, so this is the unique
+            // username index refusing a duplicate.
+            _ => StatusCode::CONFLICT,
+        };
+        return respond_status(status, env);
     }
     let cookies = match begin_session(&app, &body.username) {
         Ok(cookies) => cookies,
@@ -295,12 +314,17 @@ async fn install_ps1() -> impl IntoResponse {
     )
 }
 
-/// Contract §1: six download names, mapped onto the two binaries the build
-/// produces.
-fn platform_file(name: &str) -> Option<&'static str> {
+/// Contract §1: six download names, each backed by a file of the same name.
+/// A missing file is a 404 with `暂无构建`; there is no fallback to another
+/// platform's binary.
+fn platform_file(name: &str) -> Option<&str> {
     match name {
-        "loo-linux-x64" | "loo-linux-arm64" | "loo-macos-x64" | "loo-macos-arm64" => Some("loo"),
-        "loo-windows-x64.exe" | "loo-windows-arm64.exe" => Some("loo.exe"),
+        "loo-linux-x64"
+        | "loo-linux-arm64"
+        | "loo-macos-x64"
+        | "loo-macos-arm64"
+        | "loo-windows-x64.exe"
+        | "loo-windows-arm64.exe" => Some(name),
         _ => None,
     }
 }

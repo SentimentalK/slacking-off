@@ -3,7 +3,13 @@
 #
 # Registers an account, installs the CLI through the served installer, registers
 # an agent, joins the world, attaches again, revokes the token and proves the CLI
-# now fails with exit code 2. Every successful step prints `PASS: ...`.
+# now fails with exit code 2. It also checks that download names map to their own
+# platform files and that the macOS install path fails cleanly. Every successful
+# step prints `PASS: ...`.
+#
+# NOTE for Master: build outputs are published under their real platform names
+# here. E-4's demo scripts must use the same convention (copy the release binary
+# to <downloads_dir>/loo-<os>-<arch>), otherwise its install steps will 404.
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
@@ -13,23 +19,30 @@ PORT=18085
 BASE="http://127.0.0.1:$PORT"
 E2E="$ROOT/.conductor/e1-e2e"
 DATA="$E2E/data"
+DOWNLOADS="$E2E/downloads"
 LOO_HOME_DIR="$E2E/home"
 BIN_DIR="$E2E/bin"
 JAR="$E2E/cookies.txt"
 LOG="$E2E/server.log"
 
 rm -rf "$E2E"
-mkdir -p "$DATA" "$LOO_HOME_DIR" "$BIN_DIR"
+mkdir -p "$DATA" "$DOWNLOADS" "$LOO_HOME_DIR" "$BIN_DIR"
 
 echo "PASS: temporary directory $E2E"
 
 cargo build --release -p loo-cli -p loo-server
 
+# The server maps every download name to a file of the same name (contract §1),
+# so the build is published under the platform name it is meant for.
+cp "$ROOT/target/release/loo" "$DOWNLOADS/loo-linux-x64"
+chmod 755 "$DOWNLOADS/loo-linux-x64"
+echo "PASS: published target/release/loo as downloads/loo-linux-x64"
+
 "$ROOT/target/release/loo-server" \
   --official \
   --addr "127.0.0.1:$PORT" \
   --tick-seconds 0.2 \
-  --downloads-dir target/release \
+  --downloads-dir "$DOWNLOADS" \
   --data-dir "$DATA" \
   --map maps/default.txt \
   >"$LOG" 2>&1 &
@@ -55,12 +68,51 @@ if [ "$ready" -ne 1 ]; then
 fi
 echo "PASS: official server is up on $BASE"
 
+# Only loo-linux-x64 is published; other platform names must 404 with the
+# documented body instead of falling back to the Linux binary.
+for name in loo-linux-arm64 loo-macos-x64 loo-macos-arm64 loo-windows-x64.exe; do
+  STATUS=$(curl -s -o "$E2E/download-$name.body" -w '%{http_code}' "$BASE/downloads/$name")
+  if [ "$STATUS" != "404" ]; then
+    echo "FAIL: /downloads/$name returned $STATUS, expected 404" >&2
+    exit 1
+  fi
+  if [ "$(cat "$E2E/download-$name.body")" != "暂无构建" ]; then
+    echo "FAIL: /downloads/$name body is not 暂无构建" >&2
+    cat "$E2E/download-$name.body" >&2
+    exit 1
+  fi
+done
+STATUS=$(curl -s -o /dev/null -w '%{http_code}' "$BASE/downloads/loo-linux-x64")
+if [ "$STATUS" != "200" ]; then
+  echo "FAIL: /downloads/loo-linux-x64 returned $STATUS, expected 200" >&2
+  exit 1
+fi
+echo "PASS: download names map to their own platform files with no fallback"
+
 curl -fsS -c "$JAR" \
   -H 'Content-Type: application/json' \
   -d '{"username":"e2e-user","password":"password-123"}' \
   "$BASE/api/auth/register" >"$E2E/register.json"
 jq -e '.ok == true and .result.username == "e2e-user"' "$E2E/register.json" >/dev/null
 echo "PASS: account registered with a session cookie"
+
+STATUS=$(curl -s -o /dev/null -w '%{http_code}' \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"AB","password":"password-123"}' \
+  "$BASE/api/auth/register")
+if [ "$STATUS" != "400" ]; then
+  echo "FAIL: invalid username returned $STATUS, expected 400" >&2
+  exit 1
+fi
+STATUS=$(curl -s -o /dev/null -w '%{http_code}' \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"e2e-user","password":"password-123"}' \
+  "$BASE/api/auth/register")
+if [ "$STATUS" != "409" ]; then
+  echo "FAIL: duplicate username returned $STATUS, expected 409" >&2
+  exit 1
+fi
+echo "PASS: registration answers 400 for a bad username and 409 for a duplicate"
 
 CSRF=$(awk '$6 == "loo_csrf" { print $7 }' "$JAR")
 if [ -z "$CSRF" ]; then
@@ -93,6 +145,47 @@ fi
 jq -e --arg token "$TOKEN" '.token == $token and (.server | startswith("http://127.0.0.1"))' \
   "$LOO_HOME_DIR/config.json" >/dev/null
 echo "PASS: install.sh downloaded the release binary and wrote the config"
+
+# A uname shim makes install.sh believe it runs on macOS. Nothing is published
+# for that platform, so it must fail without writing a config or a binary.
+SHIM="$E2E/shim"
+DARWIN_HOME="$E2E/darwin-home"
+DARWIN_BIN="$E2E/darwin-bin"
+mkdir -p "$SHIM"
+cat >"$SHIM/uname" <<'SHIM_EOF'
+#!/bin/sh
+case "$1" in
+  -s) echo Darwin ;;
+  -m) echo x86_64 ;;
+  *) echo Darwin ;;
+esac
+SHIM_EOF
+chmod +x "$SHIM/uname"
+
+set +e
+PATH="$SHIM:$PATH" LOO_HOME="$DARWIN_HOME" LOO_BIN_DIR="$DARWIN_BIN" \
+  sh -c "$SH_COMMAND" >"$E2E/darwin-install.log" 2>"$E2E/darwin-install.err"
+DARWIN_CODE=$?
+set -e
+if [ "$DARWIN_CODE" -eq 0 ]; then
+  echo "FAIL: install.sh succeeded on a simulated macOS host" >&2
+  cat "$E2E/darwin-install.log" >&2
+  exit 1
+fi
+if ! grep -q "loo-macos-x64" "$E2E/darwin-install.err"; then
+  echo "FAIL: the macOS install did not request loo-macos-x64" >&2
+  cat "$E2E/darwin-install.err" >&2
+  exit 1
+fi
+if [ -f "$DARWIN_HOME/config.json" ]; then
+  echo "FAIL: the failed macOS install wrote a config" >&2
+  exit 1
+fi
+if [ -e "$DARWIN_BIN/loo" ]; then
+  echo "FAIL: the failed macOS install left a binary" >&2
+  exit 1
+fi
+echo "PASS: macOS install requests loo-macos-x64 and fails without config or binary"
 
 export LOO_HOME="$LOO_HOME_DIR"
 LOO="$BIN_DIR/loo"
