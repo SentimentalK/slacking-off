@@ -57,7 +57,7 @@ export function Profile({ id }: { id: number }) {
   if (status !== 'ready' || !profile) {
     return (
       <div class="page">
-        <PageHeader current="leaderboard" />
+        <PageHeader current={null} />
         <main class="page-body">
           <Panel class="empty-card">
             {status === 'loading' ? (
@@ -97,7 +97,7 @@ export function Profile({ id }: { id: number }) {
 
   return (
     <div class="page">
-      <PageHeader current="leaderboard" />
+      <PageHeader current={null} />
       <main class="page-body">
         <Panel class="profile-head">
           <div class="profile-head-inner">

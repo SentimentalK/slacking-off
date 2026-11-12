@@ -13,7 +13,7 @@ const LINKS: Array<{ key: NavKey; href: string; label: string }> = [
   { key: 'stats', href: '/stats', label: '统计' },
 ];
 
-export function Nav({ current }: { current: NavKey }) {
+export function Nav({ current }: { current: NavKey | null }) {
   return (
     <nav class="nav" aria-label="主导航">
       {LINKS.map((link) => (
@@ -31,7 +31,7 @@ export function Nav({ current }: { current: NavKey }) {
 }
 
 interface PageHeaderProps {
-  current: NavKey;
+  current: NavKey | null;
   children?: ComponentChildren;
 }
 
