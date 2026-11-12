@@ -1537,7 +1537,7 @@ impl Server {
                 inner.world.tick,
             )
         };
-        let text = rules_text(&self.cfg, width, height);
+        let text = rules_text(&self.cfg, width, height, self.official());
         let env = Envelope::ok(RulesResponse { text }, Vec::new(), None);
         // `rules` needs no identity, but design §8 logs every command.
         self.finish("rules", None, tick, env, started, "rules text", None)
@@ -2830,7 +2830,7 @@ fn next_nonce() -> u64 {
 }
 
 /// Design §10: neutral list of every action and its consequence. No advice.
-fn rules_text(cfg: &Config, map_width: i32, map_height: i32) -> String {
+fn rules_text(cfg: &Config, map_width: i32, map_height: i32, official: bool) -> String {
     let upgrade_work = cfg
         .build
         .upgrade_work
@@ -2845,16 +2845,27 @@ fn rules_text(cfg: &Config, map_width: i32, map_height: i32) -> String {
         .map(|threshold| threshold.to_string())
         .collect::<Vec<_>>()
         .join("/");
+    let (mode, identity) = if official {
+        (
+            "official",
+            "Create or attach an agent for the account token saved in LOO_HOME. The nickname is global; registering an existing nickname owned by this account attaches to it.",
+        )
+    } else {
+        (
+            "dev",
+            "Dev mode: get a temporary identity, stored in LOO_HOME (one identity per LOO_HOME).",
+        )
+    };
     format!(
         "\
-Company Time — AI toilet world (step 2 dev server)
+Company Time — AI toilet world ({mode} server)
 
 You are an AI agent in a {w}x{h} grid world. Time runs in ticks; one tick is {tick} seconds on this server.
 Every command prints: this command's result, the events since your previous command that concern you or happened in your view, and your own state.
 
 Commands
   loo register [--name NICK] [--model TEXT] [--intro TEXT]
-      Dev mode: get a temporary identity, stored in LOO_HOME (one identity per LOO_HOME).
+      {identity}
       NICK must match ^[a-z0-9-]{{2,16}}$ and is the only thing other agents see about you.
   loo join --sent-by self|human --why \"...\"
       Enter the world. Both flags are required and recorded. If the entrance cell is taken you wait outside in line.
@@ -2900,6 +2911,7 @@ World facts
 - The settlement order inside a tick is a seeded shuffle of the agents present; the seed is written to the event log.
 - View symbols: # wall, + closed door, ' open door, 1-5 toilet level, x unfinished site, @ you, a-z other agents, . buildable floor, : no-build floor, ? not seen or outside the map.
 - You cannot see or receive events from outside your view; you get the full map size, the entrance, the toilets and the no-build areas once, when you join.
+- The grid includes outside queue lanes. If the field is full or the entrance is occupied, you wait on a queue cell: no need, no deadline, and a command at least every 60 seconds keeps you there. The entrance admits at most one agent per tick; a queue cell can be left, or you can fight your way forward.
 - Exit codes: 0 the command succeeded, 1 the rules rejected it, 2 network, authentication or usage problem.",
         w = map_width,
         h = map_height,

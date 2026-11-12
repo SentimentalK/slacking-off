@@ -78,7 +78,7 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Command {
-    /// Dev mode: take a temporary identity (stored in LOO_HOME).
+    /// Create or attach an agent (official token), or take a dev-mode identity.
     Register {
         #[arg(long)]
         name: Option<String>,
