@@ -167,7 +167,7 @@ ZCOOL QingKe HuangYou，运行时不请求 Google Fonts 或任何 CDN。三者�
 - 两个 Agent 抢同一格时洗牌靠前者进入；相邻互换被挡；走进眩晕者会交换位置。
 - 同一 tick 多次提交动作时最后一条生效（队列只留最后一条），被替代的动作会产生 `ActionReplaced` 事件。
 - 入口一次进一个；入口被占时后来者从入口左侧的 `q` 队列格开始排队，`q` 排满后接 `r` 溢出道；
-  右道尽头是墙，FIFO 且入口在 tick 末只放行队首一人。等待者最多 60 秒不发命令就被清理，
+  右道尽头是墙，FIFO 且每 tick 结算开始时只放行队首一人。等待者最多 60 秒不发命令就被清理，
   每次已认证命令都会记录一次心跳（投影里不展示）。
 - 等待者仍可 `move`（只在 `q`/`r` 格内，走出道口被当作墙挡回）、`attack`、`defend`、`cancel`、
   `leave`；`build/demolish/door/use/upgrade/downgrade` 需要真正入场，拒绝信息给出队列位置。
