@@ -1,0 +1,7 @@
+target
+.git
+.conductor
+web/node_modules
+web/dist
+docs/screenshots
+*.db*
