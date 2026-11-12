@@ -9,9 +9,10 @@ mod render;
 
 use clap::{Parser, Subcommand, ValueEnum};
 use loo_proto::{
-    ActionQueued, BuildKind, BuildRequest, ConfigResponse, DemolishRequest, Dir, DoorRequest,
-    Envelope, JoinRequest, JoinResponse, LeaveResponse, LookResponse, MapResponse, MoveRequest,
-    MoveSpec, Nick, RegisterResponse, RulesResponse, SentBy, TargetSpec, WaitRequest, WaitResponse,
+    ActionQueued, AttackRequest, BuildKind, BuildRequest, ConfigResponse, DefendRequest,
+    DemolishRequest, Dir, DoorRequest, DowngradeRequest, Envelope, JoinRequest, JoinResponse,
+    LeaveResponse, LookResponse, MapResponse, MoveRequest, MoveSpec, Nick, RegisterResponse,
+    RulesResponse, SentBy, TargetSpec, UpgradeRequest, WaitRequest, WaitResponse,
 };
 use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
@@ -107,6 +108,16 @@ enum Command {
         #[arg(value_name = "DIR|PATH", num_args = 1..=2, required = true)]
         args: Vec<String>,
     },
+    /// Attack the adjacent agent in a direction.
+    Attack {
+        #[arg(value_enum, ignore_case = true)]
+        dir: DirArg,
+    },
+    /// Defend the adjacent cell in a direction for this tick.
+    Defend {
+        #[arg(value_enum, ignore_case = true)]
+        dir: DirArg,
+    },
     /// Queue building a wall, door or toilet.
     Build {
         #[arg(value_enum)]
@@ -125,6 +136,16 @@ enum Command {
         action: DoorActionArg,
         #[arg(value_enum, ignore_case = true)]
         dir: DirArg,
+    },
+    /// Queue upgrading a toilet one level.
+    Upgrade {
+        #[arg(value_enum, ignore_case = true)]
+        target: TargetArg,
+    },
+    /// Queue downgrading a toilet one level.
+    Downgrade {
+        #[arg(value_enum, ignore_case = true)]
+        target: TargetArg,
     },
     /// Start using the toilet under your feet.
     Use,
@@ -273,6 +294,16 @@ fn dispatch(cli: Cli) -> u8 {
             let raw = http.post("/api/move", to_value(MoveRequest { spec }), SHORT_TIMEOUT);
             print_env::<ActionQueued>(raw, "move", json)
         }
+        Command::Attack { dir } => {
+            let request = AttackRequest { dir: dir.into() };
+            let raw = http.post("/api/attack", to_value(request), SHORT_TIMEOUT);
+            print_env::<ActionQueued>(raw, "attack", json)
+        }
+        Command::Defend { dir } => {
+            let request = DefendRequest { dir: dir.into() };
+            let raw = http.post("/api/defend", to_value(request), SHORT_TIMEOUT);
+            print_env::<ActionQueued>(raw, "defend", json)
+        }
         Command::Build { kind, target } => {
             let request = BuildRequest {
                 kind: kind.into(),
@@ -295,6 +326,20 @@ fn dispatch(cli: Cli) -> u8 {
             };
             let raw = http.post("/api/door", to_value(request), SHORT_TIMEOUT);
             print_env::<ActionQueued>(raw, "door", json)
+        }
+        Command::Upgrade { target } => {
+            let request = UpgradeRequest {
+                target: target.into(),
+            };
+            let raw = http.post("/api/upgrade", to_value(request), SHORT_TIMEOUT);
+            print_env::<ActionQueued>(raw, "upgrade", json)
+        }
+        Command::Downgrade { target } => {
+            let request = DowngradeRequest {
+                target: target.into(),
+            };
+            let raw = http.post("/api/downgrade", to_value(request), SHORT_TIMEOUT);
+            print_env::<ActionQueued>(raw, "downgrade", json)
         }
         Command::Use => print_env::<ActionQueued>(
             http.post("/api/use", Value::Null, SHORT_TIMEOUT),
@@ -584,11 +629,43 @@ mod tests {
     }
 
     #[test]
+    fn combat_and_upgrade_commands_parse_their_arguments() {
+        match command(&["loo", "attack", "n"]) {
+            Command::Attack { dir } => assert_eq!(Dir::from(dir), Dir::N),
+            other => panic!("expected attack, got {other:?}"),
+        }
+        match command(&["loo", "defend", "W"]) {
+            Command::Defend { dir } => assert_eq!(Dir::from(dir), Dir::W),
+            other => panic!("expected defend, got {other:?}"),
+        }
+        match command(&["loo", "upgrade", "here"]) {
+            Command::Upgrade { target } => assert_eq!(target, TargetArg::Here),
+            other => panic!("expected upgrade, got {other:?}"),
+        }
+        match command(&["loo", "upgrade", "s"]) {
+            Command::Upgrade { target } => {
+                assert_eq!(TargetSpec::from(target), TargetSpec::Dir(Dir::S));
+            }
+            other => panic!("expected upgrade, got {other:?}"),
+        }
+        match command(&["loo", "downgrade", "e"]) {
+            Command::Downgrade { target } => {
+                assert_eq!(TargetSpec::from(target), TargetSpec::Dir(Dir::E));
+            }
+            other => panic!("expected downgrade, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn invalid_object_command_arguments_exit_two() {
         assert!(Cli::try_parse_from(["loo", "build", "ladder", "here"]).is_err());
         assert!(Cli::try_parse_from(["loo", "build", "wall"]).is_err());
         assert!(Cli::try_parse_from(["loo", "door", "open"]).is_err());
         assert!(Cli::try_parse_from(["loo", "door", "slam", "n"]).is_err());
         assert!(Cli::try_parse_from(["loo", "demolish", "up"]).is_err());
+        assert!(Cli::try_parse_from(["loo", "attack", "here"]).is_err());
+        assert!(Cli::try_parse_from(["loo", "defend"]).is_err());
+        assert!(Cli::try_parse_from(["loo", "upgrade"]).is_err());
+        assert!(Cli::try_parse_from(["loo", "downgrade", "up"]).is_err());
     }
 }

@@ -199,6 +199,31 @@ pub fn state_line(state: &AgentView) -> String {
             .unwrap_or_default();
         parts.push(format!("score {}{}", state.score, outcome));
     }
+    if state.stun_until > state.tick {
+        parts.push(format!("stunned for {}", state.stun_until - state.tick));
+    }
+    if state.immunity_until > state.tick {
+        parts.push(format!("immune for {}", state.immunity_until - state.tick));
+    }
+    if let Some(pos) = state.defending {
+        parts.push(format!("defending {pos}"));
+    }
+    if state.attack_cooldown_until > state.tick {
+        parts.push(format!(
+            "attack cooldown {}",
+            state.attack_cooldown_until - state.tick
+        ));
+    }
+    if state.defend_cooldown_until > state.tick {
+        parts.push(format!(
+            "defend cooldown {}",
+            state.defend_cooldown_until - state.tick
+        ));
+    }
+    parts.push(format!(
+        "score_total {} · level {}",
+        state.score_total, state.level
+    ));
     match &state.action {
         Some(action) if action.remaining > 0 => parts.push(format!(
             "action: {} ({} step(s) left)",
@@ -291,6 +316,13 @@ mod tests {
                 recovery_deadline: None,
                 score: 0,
                 outcome: None,
+                score_total: 0,
+                level: 1,
+                stun_until: 0,
+                immunity_until: 0,
+                attack_cooldown_until: 0,
+                defend_cooldown_until: 0,
+                defending: None,
             }),
         );
         let text = render("look", &env);
@@ -298,7 +330,8 @@ mod tests {
         assert!(text.contains("  #@.\n  ?:+\n"), "{text}");
         assert!(text.contains("legend: # wall"));
         assert!(text.contains("[t3] dev-1 moved (0,0) -> (1,0)"));
-        assert!(text.contains("you: dev-1 (#1) · session 1 · at (1,0) · idle"));
+        assert!(text
+            .contains("you: dev-1 (#1) · session 1 · at (1,0) · score_total 0 · level 1 · idle"));
         assert!(!text.contains('\u{1b}'), "no colour codes");
     }
 
@@ -323,6 +356,13 @@ mod tests {
                 recovery_deadline: None,
                 score: 0,
                 outcome: None,
+                score_total: 0,
+                level: 1,
+                stun_until: 0,
+                immunity_until: 0,
+                attack_cooldown_until: 0,
+                defend_cooldown_until: 0,
+                defending: None,
             }),
         );
         let text = render("move", &env);
@@ -353,13 +393,20 @@ mod tests {
                 recovery_deadline: None,
                 score: 0,
                 outcome: None,
+                score_total: 0,
+                level: 1,
+                stun_until: 0,
+                immunity_until: 0,
+                attack_cooldown_until: 0,
+                defend_cooldown_until: 0,
+                defending: None,
             }),
         );
         assert_eq!(
             render("status", &env),
             "ok status tick=4\n\
              events: none\n\
-             you: dev-1 (#1) · session 1 · at (1,0) · idle\n"
+             you: dev-1 (#1) · session 1 · at (1,0) · score_total 0 · level 1 · idle\n"
         );
     }
 
@@ -450,6 +497,13 @@ mod tests {
             recovery_deadline: None,
             score: 0,
             outcome: None,
+            score_total: 0,
+            level: 1,
+            stun_until: 0,
+            immunity_until: 0,
+            attack_cooldown_until: 0,
+            defend_cooldown_until: 0,
+            defending: None,
         }
     }
 
@@ -457,7 +511,7 @@ mod tests {
     fn state_line_renders_need_use_and_deadline() {
         assert_eq!(
             state_line(&state_with_fields()),
-            "dev-1 (#1) · session 1 · at (1,0) · need: feces · use 3/8 · deadline in 112 · idle"
+            "dev-1 (#1) · session 1 · at (1,0) · need: feces · use 3/8 · deadline in 112 · score_total 0 · level 1 · idle"
         );
     }
 
@@ -469,8 +523,41 @@ mod tests {
         state.outcome = Some(loo_proto::SessionOutcome::Success);
         assert_eq!(
             state_line(&state),
-            "dev-1 (#1) · session 1 · at (1,0) · need: feces · use 3/8 · deadline in 112 · recovery in 5 · score 1550 · outcome success · idle"
+            "dev-1 (#1) · session 1 · at (1,0) · need: feces · use 3/8 · deadline in 112 · recovery in 5 · score 1550 · outcome success · score_total 0 · level 1 · idle"
         );
+    }
+
+    #[test]
+    fn state_line_renders_cumulative_score_and_combat() {
+        let mut state = state_with_fields();
+        state.score_total = 3500;
+        state.level = 3;
+        state.stun_until = 103;
+        state.immunity_until = 106;
+        state.defending = Some(loo_proto::Pos::new(2, 1));
+        state.attack_cooldown_until = 105;
+        state.defend_cooldown_until = 104;
+
+        let line = state_line(&state);
+        assert!(line.contains("score_total 3500 · level 3"), "{line}");
+        assert!(line.contains("stunned for 3"), "{line}");
+        assert!(line.contains("immune for 6"), "{line}");
+        assert!(line.contains("defending (2,1)"), "{line}");
+        assert!(line.contains("attack cooldown 5"), "{line}");
+        assert!(line.contains("defend cooldown 4"), "{line}");
+        assert!(
+            line.ends_with("score_total 3500 · level 3 · idle"),
+            "combat fields precede the action and cumulative score stays last: {line}"
+        );
+    }
+
+    #[test]
+    fn combat_fields_hide_when_inactive_and_score_always_shows() {
+        let line = state_line(&state_with_fields());
+        assert!(line.contains("score_total 0 · level 1"), "{line}");
+        for hidden in ["stunned", "immune", "defending", "cooldown"] {
+            assert!(!line.contains(hidden), "{hidden} must stay hidden: {line}");
+        }
     }
 
     #[test]
