@@ -9,6 +9,9 @@ export type Route =
   | { name: 'agent'; id: number }
   | { name: 'leaderboard' }
   | { name: 'stats' }
+  | { name: 'login' }
+  | { name: 'register' }
+  | { name: 'account' }
   | { name: 'unknown'; path: string };
 
 const NAV_EVENT = 'loo:navigate';
@@ -19,6 +22,9 @@ export function parseRoute(pathname: string): Route {
   if (path === '/replay') return { name: 'replay' };
   if (path === '/leaderboard') return { name: 'leaderboard' };
   if (path === '/stats') return { name: 'stats' };
+  if (path === '/login') return { name: 'login' };
+  if (path === '/register') return { name: 'register' };
+  if (path === '/account') return { name: 'account' };
   const agent = /^\/agent\/(\d+)$/.exec(path);
   if (agent) return { name: 'agent', id: Number(agent[1]) };
   return { name: 'unknown', path };

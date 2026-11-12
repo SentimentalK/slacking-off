@@ -6,13 +6,15 @@
 
 use crate::auth::{new_token, sha256_hex};
 use crate::{error_envelope, Server};
+use axum::body::Body;
 use axum::extract::{Path, Query, State};
-use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
+use axum::http::{header, HeaderMap, HeaderValue, Method, StatusCode, Uri};
 use axum::response::sse::{Event as SseEvent, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use futures_util::stream::unfold;
+use include_dir::{include_dir, Dir};
 use loo_proto::{
     ActionQueued, ApiError, AttackRequest, AuthLoginRequest, AuthMeResponse, AuthRegisterRequest,
     BuildRequest, ConfigResponse, DefendRequest, DemolishRequest, DoorRequest, DowngradeRequest,
@@ -22,7 +24,7 @@ use loo_proto::{
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::convert::Infallible;
-use std::path::PathBuf;
+use std::path::{Path as FsPath, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::broadcast;
@@ -31,6 +33,14 @@ use tokio::sync::broadcast;
 const SESSION_MAX_AGE: u64 = 2_592_000;
 const SESSION_COOKIE: &str = "loo_session";
 const CSRF_COOKIE: &str = "loo_csrf";
+
+/// The SPA is compiled into the server; the binary never reads `web/dist` at
+/// runtime. `build.rs` guarantees the directory exists before this expands.
+static WEB_DIST: Dir<'static> = include_dir!("$CARGO_MANIFEST_DIR/../../web/dist");
+
+/// `build.rs` changes this whenever any `web/dist` file changes; referencing it
+/// makes Cargo recompile the crate so `include_dir!` picks up the new files.
+const _: &str = env!("LOO_WEB_DIST_STAMP");
 
 /// Runtime options the HTTP layer needs; `downloads_dir` backs `/downloads/*`.
 #[derive(Clone, Debug)]
@@ -98,11 +108,80 @@ pub fn router_with(server: Arc<Server>, options: HttpOptions) -> Router {
         .route("/api/cancel", post(cancel_cmd))
         .route("/api/leave", post(leave_cmd))
         .route("/api/wait", post(wait))
+        .fallback(static_site)
         .with_state(state)
 }
 
 async fn healthz() -> impl IntoResponse {
     Json(serde_json::json!({ "ok": true }))
+}
+
+// --- embedded web app ------------------------------------------------------
+
+/// `/api/*` and the installer/download prefixes stay API-shaped even when no
+/// route matched: JSON 404, never the SPA. Everything else falls back to
+/// `index.html` so a deep link such as `/agent/7` survives a reload.
+async fn static_site(uri: Uri, method: Method) -> Response {
+    let path = uri.path();
+    let api_like = path == "/api"
+        || path.starts_with("/api/")
+        || path.starts_with("/install")
+        || path == "/downloads"
+        || path.starts_with("/downloads/");
+    if api_like || (method != Method::GET && method != Method::HEAD) {
+        return respond_status(
+            StatusCode::NOT_FOUND,
+            error_envelope::<()>(ErrorCode::BadRequest, "no such route"),
+        );
+    }
+
+    let relative = path.trim_start_matches('/');
+    if !relative.is_empty() {
+        if let Some(file) = WEB_DIST.get_file(relative) {
+            return serve_embedded(file);
+        }
+    }
+    match WEB_DIST.get_file("index.html") {
+        Some(file) => serve_embedded(file),
+        None => respond_status(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            error_envelope::<()>(ErrorCode::Internal, "the embedded web app is missing"),
+        ),
+    }
+}
+
+fn serve_embedded(file: &'static include_dir::File<'static>) -> Response {
+    // Vite hashes every asset filename, so those never change under the same
+    // URL; index.html must be revalidated to pick up the next build.
+    let immutable = file.path().to_string_lossy().starts_with("assets/");
+    let cache = if immutable {
+        "public, max-age=31536000, immutable"
+    } else {
+        "no-cache"
+    };
+    let mut response = Response::new(Body::from(file.contents()));
+    let headers = response.headers_mut();
+    headers.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static(content_type(file.path())),
+    );
+    headers.insert(header::CACHE_CONTROL, HeaderValue::from_static(cache));
+    response
+}
+
+fn content_type(path: &FsPath) -> &'static str {
+    match path.extension().and_then(|extension| extension.to_str()) {
+        Some("html") => "text/html; charset=utf-8",
+        Some("js") | Some("mjs") => "text/javascript; charset=utf-8",
+        Some("css") => "text/css; charset=utf-8",
+        Some("svg") => "image/svg+xml",
+        Some("woff2") => "font/woff2",
+        Some("woff") => "font/woff",
+        Some("png") => "image/png",
+        Some("ico") => "image/x-icon",
+        Some("json") => "application/json",
+        _ => "application/octet-stream",
+    }
 }
 
 // --- dev registration -------------------------------------------------------

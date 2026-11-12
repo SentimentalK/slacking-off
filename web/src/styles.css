@@ -1314,3 +1314,298 @@ a.brand {
     padding-right: 4px;
   }
 }
+
+/* --- auth pages (/login, /register) ------------------------------------- */
+
+.auth-page {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  padding: 24px;
+  background: var(--bg);
+  color: var(--fg);
+}
+
+.auth-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  width: 100%;
+  max-width: 420px;
+}
+
+.auth-card {
+  padding: 28px;
+}
+
+.auth-brand {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.auth-title {
+  margin: 0;
+  font-family: var(--font-title);
+  font-size: 40px;
+  font-weight: 400;
+  line-height: 1;
+  color: var(--gold);
+}
+
+.auth-sub,
+.auth-rules,
+.auth-switch {
+  color: var(--muted);
+}
+
+.auth-sub {
+  margin: 10px 0 20px;
+}
+
+.auth-rules {
+  margin: 0 0 16px;
+  padding: 10px 12px;
+  border: var(--border);
+  background: var(--chip);
+  font-size: 13px;
+}
+
+.auth-form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.form-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.input {
+  min-height: 44px;
+  padding: 0 10px;
+  background: var(--chip);
+  color: var(--fg);
+  border: var(--border);
+  border-radius: 0;
+  font: inherit;
+}
+
+.input:focus-visible {
+  outline: 2px solid var(--gold);
+  outline-offset: 1px;
+}
+
+.form-error {
+  margin: 10px 0 0;
+  color: var(--danger);
+}
+
+.auth-form .form-error {
+  margin: 0;
+}
+
+.auth-submit {
+  width: 100%;
+  margin-top: 4px;
+}
+
+.auth-switch {
+  margin: 18px 0 0;
+}
+
+.auth-back {
+  margin: 0;
+  text-align: center;
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.auth-back a {
+  text-decoration: none;
+}
+
+/* --- account ------------------------------------------------------------- */
+
+.account-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.account-head-spacer {
+  flex: 1 1 auto;
+}
+
+.account-username {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 24px;
+  font-weight: 400;
+  color: var(--gold);
+  overflow-wrap: anywhere;
+}
+
+.account-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr);
+  gap: 20px;
+}
+
+.account-grid .panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+.token-line {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.token-status {
+  padding: 1px 8px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  border: 1px solid currentColor;
+}
+
+.token-status[data-active='true'] {
+  color: var(--success);
+}
+
+.token-status[data-active='false'] {
+  color: var(--danger);
+}
+
+.token-meta,
+.hint-line,
+.platform-note {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.hint-line {
+  margin: 0;
+}
+
+.token-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.button-secondary {
+  background: var(--chip);
+  color: var(--fg);
+  border: var(--border);
+  box-shadow: 0 4px 0 var(--page);
+}
+
+.install-block {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border: var(--border);
+  background: var(--chip);
+}
+
+.install-note {
+  margin: 0;
+  color: var(--gold);
+  font-size: 13px;
+}
+
+.code-block {
+  margin: 0;
+  padding: 10px 12px;
+  background: var(--page);
+  color: var(--fg);
+  border: var(--border);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.install-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.platform-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.platform-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--panel-border);
+}
+
+.platform-row:last-child {
+  border-bottom: 0;
+}
+
+.platform-name {
+  flex: 1 1 auto;
+  font-family: var(--font-mono);
+  font-size: 13px;
+}
+
+.platform-note {
+  white-space: nowrap;
+}
+
+.platform-row a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 32px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.account-empty {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.account-agents .mono {
+  white-space: nowrap;
+}
+
+@media (max-width: 900px) {
+  .auth-page {
+    padding: 16px;
+  }
+
+  .auth-card {
+    padding: 20px;
+  }
+
+  .account-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .install-actions {
+    justify-content: stretch;
+  }
+
+  .install-actions .button {
+    width: 100%;
+  }
+}

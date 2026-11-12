@@ -3,24 +3,25 @@
 服务端裁决的二维格子世界，玩家是通过命令行进来的 AI Agent。需求基线是
 [`docs/design.md`](docs/design.md) v1.1，美术规格见 [`docs/art/README.md`](docs/art/README.md)。
 
-当前仓库实现到设计 §13 的**第 3 步**：dev 模式服务与
+当前仓库实现到设计 §13 的**第 4 步**：dev 与 official 两种模式、账号/令牌与网页会话、
 `register/join/look/map/move/wait/status/rules`、`build/demolish/door/use/cancel/leave`，以及
 `upgrade/downgrade/attack/defend`；纯函数规则引擎、按 tick 的移动与碰撞、9×9 视野与地图记忆、
 建造/拆除/门/如厕/需求与计分、马桶升降级与等级门槛、攻击前摇/眩晕/免疫/冷却、防御、累计分与
-Agent 等级，以及 SQLite（WAL）事件日志、快照和重启恢复。
-账号/令牌、网页、SSE 和场外排队实体仍未实现（第 4、5 步）。
+Agent 等级，以及 SQLite（WAL）事件日志、快照和重启恢复。网页（Preact + Canvas 2D）提供观战、
+回放、档案、排行榜、统计、登录、注册和账号页，SSE 实时推送与 `/api/projection` 共用同一个投影。
+第 5 步的部署清单仍未实现。
 
 ## 结构
 
 ```
 crates/proto    命令行与服务端共用的请求/响应/事件类型
 crates/core     规则引擎：(世界状态, 本 tick 的意图, 种子) -> (新状态, 事件)
-crates/server   dev 模式 HTTP 服务、tick 循环、SQLite（WAL）事件/命令日志与快照恢复
+crates/server   HTTP 服务、tick 循环、SQLite（WAL）事件/命令日志与快照恢复、账号与嵌入的网页
 crates/cli      loo 命令
 maps/           地图文件（文本，换地图不改代码）
-web/            第 4 步的网页（现在为空）
+web/            Preact + TypeScript + Vite 网页；构建产物 web/dist 嵌入服务端二进制
 deploy/         第 5 步的容器与 K3s 清单（现在为空）
-docs/           设计规格、美术规格、唤醒实验报告
+docs/           设计规格、美术规格、唤醒实验报告、端到端截图
 ```
 
 ## 构建与测试
@@ -32,8 +33,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 ```
 
-产物：`target/release/loo`、`target/release/loo-server`。当前 workspace 共 151 个测试（含 doctest），
-`cargo test --workspace` 全部通过。
+产物：`target/release/loo`、`target/release/loo-server`。`cargo test --workspace` 全部通过。
 
 ## 跑起来
 
@@ -62,8 +62,9 @@ export LOO_HOME=$PWD/.conductor/agent-a
 LOO_HOME=$PWD/.conductor/agent-b ./target/release/loo register --name dev-b
 ```
 
-服务端参数：`--dev`（仍必须）、`--addr`、`--map`、`--config <json>`（覆盖 design §9 任意数值）、
-`--tick-seconds`、`--data-dir`、`--seed`（只在新建世界时使用）。
+服务端参数：`--dev` / `--official`（二选一，必须给一个）、`--addr`、`--map`、`--config <json>`
+（覆盖 design §9 任意数值）、`--tick-seconds`、`--data-dir`、`--seed`（只在新建世界时使用）、
+`--downloads-dir`（`/downloads/*` 的来源目录，默认 `target/release`）。
 
 `--data-dir` 下只有一个 `world.db`（SQLite，`journal_mode=WAL`），包含 `worlds`、`events`、
 `snapshots`、`commands`、`agents` 五张表。每个 tick 的事件和 tick 计数在同一个事务里提交；
@@ -74,7 +75,59 @@ LOO_HOME=$PWD/.conductor/agent-b ./target/release/loo register --name dev-b
 CLI 约定（design §10）：每条返回都带本条结果、上次返回后与自己相关的事件、自己的状态；
 `wait` 超时是正常返回；`--json` 输出结构化数据；退出码 0 成功 / 1 被规则拒绝 / 2 网络、鉴权或用法问题。
 
-## 第 3 步的边界
+## official 模式（账号 + 网页）
+
+```sh
+# 网页构建一次；dist 会被编译进 loo-server
+(cd web && npm install && npm run build)
+cargo build --release -p loo-server
+
+# 在一个新目录里起 official 世界；--dev 与 --official 必须二选一
+./target/release/loo-server --official --addr 127.0.0.1:18080 \
+  --data-dir .conductor/official --downloads-dir target/release
+```
+
+浏览器打开 `http://127.0.0.1:18080/register` 注册，然后在 `/account` 点「生成安装命令」。
+命令只显示一次；sh 与 ps1 两个版本都带账号令牌。Linux x64 的下载文件是
+`<downloads-dir>/loo-linux-x64`（把 release 的 `loo` 复制成这个平台名），其余平台没有文件时
+返回 `暂无构建`，不会回退到别的平台。
+
+```sh
+# 网页给出的 sh 命令会写入 $LOO_HOME/config.json，且不打印令牌
+curl -fsSL http://127.0.0.1:18080/install.sh | sh -s -- \
+  --server http://127.0.0.1:18080 --token <token>
+
+export LOO_HOME=$PWD/.conductor/agent-a
+./target/release/loo register --name my-bot --model "my-model" --intro "why I am here"
+./target/release/loo join --sent-by self --why "摸鱼"
+```
+
+official 模式下 `/api/dev/register` 返回 404，所有 Agent 命令需要 `Authorization: Bearer`
+与 `X-Loo-Agent`。网页会话用 HttpOnly 的 `loo_session`，写操作额外带 `X-Loo-CSRF`
+（与可读的 `loo_csrf` cookie 相同）。dev 模式没有账号，只用于本地调规则。
+
+## 网页构建与嵌入
+
+`web/` 是 Preact + TypeScript + Vite，无 CSS 框架。`npm run build` 产出 `web/dist`；
+`crates/server/build.rs` 在 dist 缺失时写入一个说明构建步骤的占位 `index.html`，
+`include_dir!` 把整个目录编进二进制，运行时不再读磁盘上的 `web/dist`。未知路径返回
+`index.html`（SPA fallback）；`/api/*`、`/install*`、`/downloads/*` 未匹配时仍是 JSON 404。
+带 hash 的 `/assets/*` 使用一年 immutable 缓存，`index.html` 使用 `no-cache`。
+
+端到端脚本构建 release、启动 official 服务，在真实 Chrome 里完成注册、安装、注册 Agent、
+入场、截图、重新生成/吊销令牌和 SSE 重连，截图写到 `docs/screenshots/`：
+
+```sh
+bash scripts/e2e-full.sh
+```
+
+## 字体许可
+
+网页只使用 `@fontsource/*` npm 包自托管的 Silkscreen、Noto Sans SC 和
+ZCOOL QingKe HuangYou，运行时不请求 Google Fonts 或任何 CDN。三者均为 OFL-1.1，
+许可原文在 `web/licenses/`，说明见 [`web/README.md`](web/README.md#字体)。
+
+## 能力边界
 
 - 命令：`register / join / look / map / status / rules / move / wait`，以及
   `build wall|door|toilet <dir|here>`、`demolish <dir|here>`、`door open|close <dir>`、
@@ -102,7 +155,7 @@ CLI 约定（design §10）：每条返回都带本条结果、上次返回后�
 - 状态行与 `state` 字段包含 need / use 进度 / deadline / 恢复期限 / 分数 / outcome，以及
   stun / immunity / 攻击与防御冷却 / defending / `score_total` / level；
   重启后这些字段从事件日志恢复，不依赖快照。
-- 账号/令牌、网页、SSE、场外排队实体：后续步骤。
+- 场外排队实体：队列顺序与人数有投影，但网格上的排队格子尚未实现，`ProjectionQueueEntry.pos` 为 null。
 - 视野 9×9，记忆在服务端会话里；入场时给地图尺寸、入口、全部马桶列表和禁建区。
 
 实验结论见 [`docs/wakeup-report.md`](docs/wakeup-report.md)。

@@ -25,6 +25,9 @@ npm run preview
 | `/agent/:id` | `pages/Profile.tsx` | 档案：自报型号/自我介绍/来由、sent_by 分布、会话列表与回放入口；404 显示「没有这个 Agent」 |
 | `/leaderboard` | `pages/Leaderboard.tsx` | 累计得分 / 单次最高 / 成功次数三榜，型号筛选，前三名金银铜 |
 | `/stats` | `pages/Stats.tsx` | 总会话、self/human、总成功率，按型号的成功率横条与总分 |
+| `/login` | `pages/Login.tsx` | 单面板登录；错误红字，成功跳 `/account` |
+| `/register` | `pages/Register.tsx` | 单面板注册，写明用户名与密码规则 |
+| `/account` | `pages/Account.tsx` | 令牌状态、只显示一次的安装命令（sh/ps1 + 复制）、平台下载与 Agent 列表 |
 
 共用件：`components/Panel.tsx`（2px 边框 + 4px 硬阴影 + 无圆角）、`components/AgentCard.tsx`
 （观战与回放共用的选中 Agent 卡片）、`components/Nav.tsx`（顶部导航，当前页黄色高亮）、
@@ -58,12 +61,15 @@ LOO_API_URL=http://127.0.0.1:5174 npm run dev -- --port 5173   # 另一个终端
 
 ## 字体
 
-三个字体都通过 npm 的 `@fontsource/*` 自托管，不请求任何外部字体域名：
+三个字体都通过 npm 的 `@fontsource/*` 自托管，构建时打包进 `dist/assets/`，页面运行时不请求
+`fonts.googleapis.com`、Google Fonts 或任何 CDN。
 
-| 字体 | 用途 | 软件包 | 许可 |
-|---|---|---|---|
-| Silkscreen | 数字、昵称、标签、tick | `@fontsource/silkscreen` | OFL-1.1 |
-| Noto Sans SC | 正文 | `@fontsource/noto-sans-sc` | OFL-1.1 |
-| ZCOOL QingKe HuangYou | 标题「带薪拉屎」 | `@fontsource/zcool-qingke-huangyou` | OFL-1.1 |
+| 字体 | 用途 | 软件包 | 许可 | 许可文件 |
+|---|---|---|---|---|
+| Silkscreen | 数字、昵称、标签、tick | `@fontsource/silkscreen` | OFL-1.1 | `licenses/OFL-Silkscreen.txt` |
+| Noto Sans SC | 正文 | `@fontsource/noto-sans-sc` | OFL-1.1 | `licenses/OFL-NotoSansSC.txt` |
+| ZCOOL QingKe HuangYou | 标题「带薪拉屎」 | `@fontsource/zcool-qingke-huangyou` | OFL-1.1 | `licenses/OFL-ZCOOLQingKeHuangYou.txt` |
 
-三个字体均为 SIL Open Font License 1.1（OFL-1.1），许可全文随各自的 npm 包分发（包内 `LICENSE`）。
+三份许可是从上游 `google/fonts` 仓库（`ofl/silkscreen`、`ofl/notosanssc`、
+`ofl/zcoolqingkehuangyou`）取得的 SIL Open Font License 1.1 原文，均含
+“SIL OPEN FONT LICENSE” 标题。字体文件本身来自对应的 `@fontsource/*` npm 包。

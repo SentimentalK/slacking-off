@@ -2,9 +2,10 @@
 // the site's gold.
 
 import type { ComponentChildren } from 'preact';
+import { useAuth } from '../auth';
 import { Link } from './Link';
 
-export type NavKey = 'spectator' | 'replay' | 'leaderboard' | 'stats';
+export type NavKey = 'spectator' | 'replay' | 'leaderboard' | 'stats' | 'account';
 
 const LINKS: Array<{ key: NavKey; href: string; label: string }> = [
   { key: 'spectator', href: '/', label: '观战' },
@@ -14,6 +15,7 @@ const LINKS: Array<{ key: NavKey; href: string; label: string }> = [
 ];
 
 export function Nav({ current }: { current: NavKey | null }) {
+  const auth = useAuth();
   return (
     <nav class="nav" aria-label="主导航">
       {LINKS.map((link) => (
@@ -26,6 +28,13 @@ export function Nav({ current }: { current: NavKey | null }) {
           {link.label}
         </Link>
       ))}
+      <Link
+        href={auth.username ? '/account' : '/login'}
+        class={current === 'account' ? 'nav-link nav-current' : 'nav-link'}
+        ariaCurrent={current === 'account' ? 'page' : undefined}
+      >
+        {auth.username ? '账号' : '登录'}
+      </Link>
     </nav>
   );
 }
