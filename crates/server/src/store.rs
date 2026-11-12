@@ -6,15 +6,21 @@
 //! a crash never leaves a tick half-recorded.
 
 use loo_core::{Event, EventKind, IntentKind, Snapshot, WorldState};
-use loo_proto::{AccountTokenInfo, AgentId, Tick, WorldSummary};
+use loo_proto::{
+    AccountTokenInfo, AgentId, EventTag, LeaderRow, ModelStats, Need, ProfileResponse, SentBy,
+    SessionId, SessionOutcome, SessionRow, StatsResponse, Tick, TimelineMarker, WorldSummary,
+};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::Value;
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use crate::projection::event_tag;
+
 /// This server keeps a single world per database file.
-const WORLD_ID: i64 = 1;
+pub(crate) const WORLD_ID: i64 = 1;
 
 const SCHEMA: &str = "\
 CREATE TABLE IF NOT EXISTS worlds(
@@ -87,6 +93,13 @@ CREATE TABLE IF NOT EXISTS web_sessions(
     token_hash TEXT PRIMARY KEY,
     user_id INTEGER NOT NULL,
     created_at_ms INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS sessions(
+  id INTEGER PRIMARY KEY, world_id INTEGER NOT NULL, agent INTEGER NOT NULL,
+  started_tick INTEGER NOT NULL, ended_tick INTEGER, outcome TEXT,
+  score INTEGER NOT NULL DEFAULT 0, need TEXT, sent_by TEXT, why TEXT NOT NULL DEFAULT '',
+  moved INTEGER NOT NULL DEFAULT 0, built INTEGER NOT NULL DEFAULT 0,
+  hits_taken INTEGER NOT NULL DEFAULT 0, defends INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS events_by_tick ON events(world_id, tick, seq);
 ";
@@ -865,12 +878,463 @@ impl Store {
         Ok(())
     }
 
+    /// Records a join. `need` is written when the session got one immediately;
+    /// queued sessions get it through [`Store::set_session_need`] later.
+    #[allow(clippy::too_many_arguments)]
+    pub fn insert_session(
+        &self,
+        id: SessionId,
+        world_id: u64,
+        agent: AgentId,
+        started_tick: Tick,
+        need: Option<Need>,
+        sent_by: Option<SentBy>,
+        why: &str,
+    ) -> Result<(), StoreError> {
+        self.conn()?.execute(
+            "INSERT INTO sessions(id, world_id, agent, started_tick, need, sent_by, why) \
+             VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                id as i64,
+                world_id as i64,
+                agent as i64,
+                started_tick as i64,
+                need.map(need_name),
+                sent_by.map(SentBy::as_str),
+                why
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Highest session id persisted so a restart never reuses one.
+    pub fn max_session_id(&self) -> Result<Option<SessionId>, StoreError> {
+        let id: Option<i64> =
+            self.conn()?
+                .query_row("SELECT MAX(id) FROM sessions", [], |row| row.get(0))?;
+        Ok(id.map(|id| id as SessionId))
+    }
+
+    pub fn set_session_need(&self, session: SessionId, need: Need) -> Result<(), StoreError> {
+        self.conn()?.execute(
+            "UPDATE sessions SET need = ?1 WHERE id = ?2",
+            params![need_name(need), session as i64],
+        )?;
+        Ok(())
+    }
+
+    /// Adds one settled tick's counters in a single statement.
+    pub fn bump_session(
+        &self,
+        session: SessionId,
+        moved: u32,
+        built: u32,
+        hits_taken: u32,
+        defends: u32,
+    ) -> Result<(), StoreError> {
+        self.conn()?.execute(
+            "UPDATE sessions SET moved = moved + ?1, built = built + ?2, \
+             hits_taken = hits_taken + ?3, defends = defends + ?4 WHERE id = ?5",
+            params![
+                moved as i64,
+                built as i64,
+                hits_taken as i64,
+                defends as i64,
+                session as i64
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn finish_session(
+        &self,
+        session: SessionId,
+        ended_tick: Tick,
+        outcome: SessionOutcome,
+        score: u32,
+    ) -> Result<(), StoreError> {
+        self.conn()?.execute(
+            "UPDATE sessions SET ended_tick = ?1, outcome = ?2, score = ?3 WHERE id = ?4",
+            params![
+                ended_tick as i64,
+                outcome_name(outcome),
+                score as i64,
+                session as i64
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Only official worlds with account-owned agents feed the boards.
+    pub fn leaderboard(
+        &self,
+        metric: &str,
+        model: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<LeaderRow>, StoreError> {
+        let order = match metric {
+            "best" => "best_score DESC, a.id ASC",
+            "successes" => "successes DESC, a.id ASC",
+            _ => "a.score_total DESC, a.id ASC",
+        };
+        let sql = format!(
+            "SELECT a.id, a.nick, COALESCE(u.username, ''), a.model, a.score_total, \
+             COALESCE(MAX(s.score), 0) AS best_score, \
+             COALESCE(SUM(CASE WHEN s.outcome = 'success' THEN 1 ELSE 0 END), 0) AS successes \
+             FROM agents a \
+             JOIN worlds w ON w.id = a.world_id AND w.official = 1 \
+             LEFT JOIN users u ON u.id = a.user_id \
+             LEFT JOIN sessions s ON s.agent = a.id AND s.world_id = a.world_id \
+             WHERE a.user_id IS NOT NULL AND (?1 IS NULL OR a.model = ?1) \
+             GROUP BY a.id, a.nick, u.username, a.model, a.score_total \
+             ORDER BY {order} LIMIT ?2"
+        );
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map(params![model, limit as i64], |row| {
+            Ok(LeaderRow {
+                rank: 0,
+                agent_id: row.get::<_, i64>(0)? as AgentId,
+                nick: row.get(1)?,
+                owner: row.get(2)?,
+                model: row.get(3)?,
+                score_total: row.get::<_, i64>(4)? as u32,
+                best_score: row.get::<_, i64>(5)? as u32,
+                successes: row.get::<_, i64>(6)? as u32,
+            })
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            let mut row = row?;
+            row.rank = out.len() + 1;
+            out.push(row);
+        }
+        Ok(out)
+    }
+
+    pub fn stats(&self) -> Result<StatsResponse, StoreError> {
+        let conn = self.conn()?;
+        let (total_sessions, self_sessions, human_sessions, successes, ended) = conn.query_row(
+            "SELECT COUNT(s.id), \
+             COALESCE(SUM(CASE WHEN s.sent_by = 'self' THEN 1 ELSE 0 END), 0), \
+             COALESCE(SUM(CASE WHEN s.sent_by = 'human' THEN 1 ELSE 0 END), 0), \
+             COALESCE(SUM(CASE WHEN s.outcome = 'success' THEN 1 ELSE 0 END), 0), \
+             COALESCE(SUM(CASE WHEN s.outcome IS NOT NULL THEN 1 ELSE 0 END), 0) \
+             FROM sessions s \
+             JOIN agents a ON a.id = s.agent AND a.world_id = s.world_id \
+             JOIN worlds w ON w.id = s.world_id AND w.official = 1 \
+             WHERE a.user_id IS NOT NULL",
+            [],
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, i64>(3)?,
+                    row.get::<_, i64>(4)?,
+                ))
+            },
+        )?;
+
+        #[derive(Default)]
+        struct ModelAcc {
+            agents: u64,
+            sessions: u64,
+            successes: u64,
+            ended: u64,
+            total_score: u64,
+        }
+        let mut models: BTreeMap<String, ModelAcc> = BTreeMap::new();
+        {
+            let mut stmt = conn.prepare(
+                "SELECT a.model, COUNT(*), COALESCE(SUM(a.score_total), 0) \
+                 FROM agents a JOIN worlds w ON w.id = a.world_id AND w.official = 1 \
+                 WHERE a.user_id IS NOT NULL GROUP BY a.model",
+            )?;
+            let rows = stmt.query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, i64>(2)?,
+                ))
+            })?;
+            for row in rows {
+                let (model, agents, total_score) = row?;
+                let acc = models.entry(model).or_default();
+                acc.agents = agents as u64;
+                acc.total_score = total_score as u64;
+            }
+        }
+        {
+            let mut stmt = conn.prepare(
+                "SELECT a.model, COUNT(s.id), \
+                 COALESCE(SUM(CASE WHEN s.outcome = 'success' THEN 1 ELSE 0 END), 0), \
+                 COALESCE(SUM(CASE WHEN s.outcome IS NOT NULL THEN 1 ELSE 0 END), 0) \
+                 FROM sessions s \
+                 JOIN agents a ON a.id = s.agent AND a.world_id = s.world_id \
+                 JOIN worlds w ON w.id = s.world_id AND w.official = 1 \
+                 WHERE a.user_id IS NOT NULL GROUP BY a.model",
+            )?;
+            let rows = stmt.query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, i64>(3)?,
+                ))
+            })?;
+            for row in rows {
+                let (model, sessions, successes, ended) = row?;
+                let acc = models.entry(model).or_default();
+                acc.sessions = sessions as u64;
+                acc.successes = successes as u64;
+                acc.ended = ended as u64;
+            }
+        }
+        let mut model_stats: Vec<ModelStats> = models
+            .into_iter()
+            .map(|(model, acc)| ModelStats {
+                model,
+                agents: acc.agents,
+                sessions: acc.sessions,
+                successes: acc.successes,
+                success_rate: rate(acc.successes, acc.ended),
+                total_score: acc.total_score,
+            })
+            .collect();
+        model_stats.sort_by(|a, b| {
+            b.total_score
+                .cmp(&a.total_score)
+                .then_with(|| a.model.cmp(&b.model))
+        });
+
+        Ok(StatsResponse {
+            total_sessions: total_sessions as u64,
+            self_sessions: self_sessions as u64,
+            human_sessions: human_sessions as u64,
+            success_rate: rate(successes as u64, ended as u64),
+            models: model_stats,
+        })
+    }
+
+    /// Any agent is queryable; dev agents have an empty owner. `why`/`intro`/
+    /// `model` are web-only and never enter the projection.
+    pub fn profile(&self, agent_id: AgentId) -> Result<Option<ProfileResponse>, StoreError> {
+        let conn = self.conn()?;
+        let agent: Option<(String, String, String, String, i64)> = conn
+            .query_row(
+                "SELECT a.nick, COALESCE(u.username, ''), a.model, a.intro, a.score_total \
+                 FROM agents a LEFT JOIN users u ON u.id = a.user_id \
+                 WHERE a.id = ?1 AND a.world_id = ?2",
+                params![agent_id as i64, WORLD_ID],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                    ))
+                },
+            )
+            .optional()?;
+        let Some((nick, owner, model, intro, score_total)) = agent else {
+            return Ok(None);
+        };
+
+        let mut stmt = conn.prepare(
+            "SELECT id, world_id, started_tick, ended_tick, outcome, score, need, sent_by, \
+             why, moved, built, hits_taken, defends FROM sessions \
+             WHERE agent = ?1 ORDER BY started_tick DESC, id DESC",
+        )?;
+        let rows = stmt.query_map([agent_id as i64], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, i64>(2)?,
+                row.get::<_, Option<i64>>(3)?,
+                row.get::<_, Option<String>>(4)?,
+                row.get::<_, i64>(5)?,
+                row.get::<_, Option<String>>(6)?,
+                row.get::<_, Option<String>>(7)?,
+                row.get::<_, String>(8)?,
+                row.get::<_, i64>(9)?,
+                row.get::<_, i64>(10)?,
+                row.get::<_, i64>(11)?,
+                row.get::<_, i64>(12)?,
+            ))
+        })?;
+        let mut sessions = Vec::new();
+        let (mut successes, mut self_sessions, mut human_sessions, mut ended) =
+            (0u32, 0u32, 0u32, 0u32);
+        for row in rows {
+            let (
+                id,
+                world,
+                started_tick,
+                ended_tick,
+                outcome,
+                score,
+                need,
+                sent_by,
+                why,
+                moved,
+                built,
+                hits_taken,
+                defends,
+            ) = row?;
+            let outcome = outcome.map(|name| outcome_from_name(&name)).transpose()?;
+            let need = need.map(|name| need_from_name(&name)).transpose()?;
+            let sent_by = sent_by.map(|name| sent_by_from_name(&name)).transpose()?;
+            if outcome == Some(SessionOutcome::Success) {
+                successes += 1;
+            }
+            if outcome.is_some() {
+                ended += 1;
+            }
+            match sent_by {
+                Some(SentBy::Self_) => self_sessions += 1,
+                Some(SentBy::Human) => human_sessions += 1,
+                None => {}
+            }
+            sessions.push(SessionRow {
+                session_id: id as SessionId,
+                world: world as u64,
+                started_tick: started_tick as Tick,
+                ended_tick: ended_tick.map(|tick| tick as Tick),
+                outcome,
+                score: score as u32,
+                need,
+                sent_by,
+                why,
+                moved: moved as u32,
+                built: built as u32,
+                hits_taken: hits_taken as u32,
+                defends: defends as u32,
+            });
+        }
+        let visits = sessions.len() as u32;
+        let score_total = score_total as u32;
+        Ok(Some(ProfileResponse {
+            agent_id,
+            nick,
+            owner,
+            model,
+            intro,
+            score_total,
+            level: loo_core::agent_level(score_total, &loo_core::Config::default()),
+            visits,
+            successes,
+            success_rate: rate(u64::from(successes), u64::from(ended)),
+            self_sessions,
+            human_sessions,
+            sessions,
+        }))
+    }
+
+    /// `success`/`attack`/`demolish`/`defend` markers in `[from, to]`, ascending,
+    /// capped at 5000.
+    pub fn timeline_markers(
+        &self,
+        from: Tick,
+        to: Tick,
+    ) -> Result<Vec<TimelineMarker>, StoreError> {
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(
+            "SELECT payload FROM events WHERE world_id = ?1 AND tick >= ?2 AND tick <= ?3 \
+             AND kind IN ('UseSucceeded', 'AttackStarted', 'AttackLanded', 'AttackMissed', \
+             'AttackBlocked', 'AttackCancelled', 'DefendStarted', 'DefendEnded', \
+             'DemolishBlocked', 'ObjectChanged', 'ActionStarted', 'ActionFinished', \
+             'ActionReplaced') ORDER BY tick, seq",
+        )?;
+        let rows = stmt.query_map(params![WORLD_ID, from as i64, to as i64], |row| {
+            row.get::<_, String>(0)
+        })?;
+        let mut markers = Vec::new();
+        for payload in rows {
+            let event: Event = serde_json::from_str(&payload?)?;
+            let kind = event_tag(&event);
+            if matches!(
+                kind,
+                EventTag::Success | EventTag::Attack | EventTag::Demolish | EventTag::Defend
+            ) {
+                markers.push(TimelineMarker {
+                    tick: event.tick,
+                    kind,
+                    text: event.text(),
+                });
+                if markers.len() == 5000 {
+                    break;
+                }
+            }
+        }
+        Ok(markers)
+    }
+
     pub fn is_official(&self) -> Result<bool, StoreError> {
         Ok(self.conn()?.query_row(
             "SELECT official FROM worlds WHERE id = ?1",
             [WORLD_ID],
             |row| row.get::<_, i64>(0),
         )? != 0)
+    }
+}
+
+fn rate(successes: u64, ended: u64) -> f64 {
+    if ended == 0 {
+        0.0
+    } else {
+        successes as f64 / ended as f64
+    }
+}
+
+fn need_name(need: Need) -> &'static str {
+    match need {
+        Need::Urine => "urine",
+        Need::Feces => "feces",
+    }
+}
+
+fn need_from_name(name: &str) -> Result<Need, StoreError> {
+    match name {
+        "urine" => Ok(Need::Urine),
+        "feces" => Ok(Need::Feces),
+        other => Err(StoreError::Corrupt(format!(
+            "sessions holds an unknown need {other:?}"
+        ))),
+    }
+}
+
+fn outcome_name(outcome: SessionOutcome) -> &'static str {
+    match outcome {
+        SessionOutcome::Success => "success",
+        SessionOutcome::FailedDeadline => "failed_deadline",
+        SessionOutcome::FailedRecovery => "failed_recovery",
+        SessionOutcome::Left => "left",
+        SessionOutcome::Abandoned => "abandoned",
+    }
+}
+
+fn outcome_from_name(name: &str) -> Result<SessionOutcome, StoreError> {
+    match name {
+        "success" => Ok(SessionOutcome::Success),
+        "failed_deadline" => Ok(SessionOutcome::FailedDeadline),
+        "failed_recovery" => Ok(SessionOutcome::FailedRecovery),
+        "left" => Ok(SessionOutcome::Left),
+        "abandoned" => Ok(SessionOutcome::Abandoned),
+        other => Err(StoreError::Corrupt(format!(
+            "sessions holds an unknown outcome {other:?}"
+        ))),
+    }
+}
+
+fn sent_by_from_name(name: &str) -> Result<SentBy, StoreError> {
+    match name {
+        "self" => Ok(SentBy::Self_),
+        "human" => Ok(SentBy::Human),
+        other => Err(StoreError::Corrupt(format!(
+            "sessions holds an unknown sent_by {other:?}"
+        ))),
     }
 }
 

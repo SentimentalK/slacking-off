@@ -80,6 +80,10 @@ pub fn router_with(server: Arc<Server>, options: HttpOptions) -> Router {
         .route("/api/rules", get(rules))
         .route("/api/terrain", get(terrain))
         .route("/api/worlds", get(worlds))
+        .route("/api/leaderboard", get(leaderboard))
+        .route("/api/stats", get(stats))
+        .route("/api/agents/{id}", get(agent_profile))
+        .route("/api/timeline", get(timeline))
         .route("/api/projection", get(projection))
         .route("/api/watch", get(watch))
         .route("/api/move", post(move_cmd))
@@ -397,6 +401,84 @@ async fn terrain(State(app): State<Arc<AppState>>) -> Response {
 
 async fn worlds(State(app): State<Arc<AppState>>) -> Response {
     respond(Envelope::ok(app.server.worlds().await, Vec::new(), None))
+}
+
+#[derive(Deserialize)]
+struct LeaderboardQuery {
+    metric: Option<String>,
+    model: Option<String>,
+    limit: Option<usize>,
+}
+
+async fn leaderboard(
+    State(app): State<Arc<AppState>>,
+    Query(query): Query<LeaderboardQuery>,
+) -> Response {
+    let metric = query.metric.as_deref().unwrap_or("score");
+    let limit = query.limit.unwrap_or(50);
+    respond(
+        app.server
+            .leaderboard(metric, query.model.as_deref(), limit)
+            .await,
+    )
+}
+
+async fn stats(State(app): State<Arc<AppState>>) -> Response {
+    respond(app.server.stats().await)
+}
+
+async fn agent_profile(State(app): State<Arc<AppState>>, Path(id): Path<String>) -> Response {
+    let Ok(agent_id) = id.trim().parse::<u64>() else {
+        return respond_status(
+            StatusCode::NOT_FOUND,
+            error_envelope::<loo_proto::ProfileResponse>(
+                ErrorCode::BadRequest,
+                format!("unknown agent {id}"),
+            ),
+        );
+    };
+    let env = app.server.profile(agent_id).await;
+    let unknown = env
+        .error
+        .as_ref()
+        .is_some_and(|error| error.code == ErrorCode::BadRequest);
+    if unknown {
+        return respond_status(StatusCode::NOT_FOUND, env);
+    }
+    respond(env)
+}
+
+#[derive(Deserialize)]
+struct TimelineQuery {
+    from: Option<String>,
+    to: Option<String>,
+}
+
+/// `?from=&to=` with empty values falls back to the whole log.
+fn query_tick(raw: Option<&str>, default: Tick) -> Option<Tick> {
+    match raw.map(str::trim) {
+        None | Some("") => Some(default),
+        Some(text) => text.parse::<Tick>().ok(),
+    }
+}
+
+async fn timeline(
+    State(app): State<Arc<AppState>>,
+    Query(query): Query<TimelineQuery>,
+) -> Response {
+    let (Some(from), Some(to)) = (
+        query_tick(query.from.as_deref(), 0),
+        query_tick(query.to.as_deref(), Tick::MAX),
+    ) else {
+        return respond_status(
+            StatusCode::BAD_REQUEST,
+            error_envelope::<loo_proto::Timeline>(
+                ErrorCode::BadRequest,
+                "from and to must be unsigned tick numbers",
+            ),
+        );
+    };
+    respond(app.server.timeline(from, to).await)
 }
 
 async fn projection(

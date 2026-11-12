@@ -6,16 +6,17 @@
 //! toilets in use, combat, accounts, SSE and the web UI are later steps.
 
 use loo_core::{
-    Config, Intent, IntentKind, JoinCommand, JoinOutcome, JoinRejectKind, MapDef, SiteKind,
-    Snapshot, WorldState,
+    Action, ActionOutcome, Config, Event, EventKind, Intent, IntentKind, JoinCommand, JoinOutcome,
+    JoinRejectKind, MapDef, SiteKind, Snapshot, WorldState,
 };
 use loo_proto::{
     AccountAgent, AccountRegisterResponse, AccountResponse, ActionQueued, ActionState, AgentId,
     AgentView, ApiError, AttackRequest, AuthMeResponse, Briefing, BuildKind, BuildRequest,
     ConfigResponse, DefendRequest, DemolishRequest, DoorRequest, DowngradeRequest, Envelope,
-    ErrorCode, EventView, InstallCommands, JoinRequest, JoinResponse, LeaveResponse, LookResponse,
-    MapResponse, MoveRequest, Need, Placement, PlacementKind, Pos, Projection, RegisterRequest,
-    RegisterResponse, RulesResponse, SentBy, SessionId, TargetSpec, TerrainResponse, Tick,
+    ErrorCode, EventView, InstallCommands, JoinRequest, JoinResponse, LeaderRow, LeaveResponse,
+    LookResponse, MapResponse, MoveRequest, Need, Placement, PlacementKind, Pos, ProfileResponse,
+    Projection, RegisterRequest, RegisterResponse, RulesResponse, SentBy, SessionId,
+    SessionOutcome, StatsResponse, TargetSpec, TerrainResponse, Tick, Timeline,
     TokenCreateResponse, UpgradeRequest, WaitRequest, WaitResponse, WaitWake, WorldSummary,
 };
 use std::collections::{BTreeMap, HashMap};
@@ -23,6 +24,7 @@ use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use store::WORLD_ID;
 pub use store::{Store, StoreError, StoredAgent};
 use tokio::sync::{broadcast, Mutex};
 
@@ -193,6 +195,16 @@ impl Server {
         let (watch_tx, _) = broadcast::channel(32);
         let need_use_ticks = [cfg.need.urine_use_ticks, cfg.need.feces_use_ticks];
         let current_events = store.events_of_tick(world.tick)?;
+        // Ended sessions only exist in the store; their ids must never be
+        // reused, or a new join would overwrite a historical row.
+        let next_session_id = world
+            .sessions
+            .keys()
+            .copied()
+            .max()
+            .unwrap_or(0)
+            .max(store.max_session_id()?.unwrap_or(0))
+            + 1;
         Ok(Server {
             cfg,
             inner: Mutex::new(Inner {
@@ -202,7 +214,7 @@ impl Server {
                     .max()
                     .unwrap_or(0)
                     + 1,
-                next_session_id: world.sessions.keys().copied().max().unwrap_or(0) + 1,
+                next_session_id,
                 world,
                 pending,
                 agents,
@@ -250,6 +262,85 @@ impl Server {
                 server.tick_once().await;
             }
         })
+    }
+
+    /// Accumulates one batch of events into `sessions`: counters in one
+    /// statement per session, then need/end transitions. Settlement and
+    /// between-tick leave events both go through here.
+    fn record_session_events(&self, events: &[Event]) {
+        #[derive(Default)]
+        struct Delta {
+            moved: u32,
+            built: u32,
+            hits_taken: u32,
+            defends: u32,
+        }
+
+        let mut deltas: BTreeMap<SessionId, Delta> = BTreeMap::new();
+        let mut needs: Vec<(SessionId, Need)> = Vec::new();
+        let mut endings: Vec<(SessionId, Tick, SessionOutcome, u32)> = Vec::new();
+        for event in events {
+            match &event.kind {
+                EventKind::AgentMoved { session, .. } | EventKind::AgentSwapped { session, .. } => {
+                    deltas.entry(*session).or_default().moved += 1;
+                }
+                EventKind::ActionFinished {
+                    session,
+                    action: Action::Build { .. } | Action::Upgrade { .. },
+                    outcome: ActionOutcome::Completed,
+                    ..
+                } => {
+                    deltas.entry(*session).or_default().built += 1;
+                }
+                EventKind::AttackLanded { target_session, .. } => {
+                    deltas.entry(*target_session).or_default().hits_taken += 1;
+                }
+                EventKind::AttackBlocked {
+                    defender_session, ..
+                }
+                | EventKind::DemolishBlocked {
+                    defender_session, ..
+                } => {
+                    deltas.entry(*defender_session).or_default().defends += 1;
+                }
+                EventKind::NeedAssigned { session, need, .. } => needs.push((*session, *need)),
+                EventKind::SessionEnded {
+                    session,
+                    outcome,
+                    score,
+                    ..
+                } => endings.push((*session, event.tick, *outcome, *score)),
+                _ => {}
+            }
+        }
+
+        for (session, delta) in deltas {
+            if delta.moved == 0 && delta.built == 0 && delta.hits_taken == 0 && delta.defends == 0 {
+                continue;
+            }
+            if let Err(error) = self.store.bump_session(
+                session,
+                delta.moved,
+                delta.built,
+                delta.hits_taken,
+                delta.defends,
+            ) {
+                eprintln!("session {session} counters were not stored: {error}");
+            }
+        }
+        for (session, need) in needs {
+            if let Err(error) = self.store.set_session_need(session, need) {
+                eprintln!("session {session} need was not stored: {error}");
+            }
+        }
+        for (session, ended_tick, outcome, score) in endings {
+            if let Err(error) = self
+                .store
+                .finish_session(session, ended_tick, outcome, score)
+            {
+                eprintln!("session {session} end was not stored: {error}");
+            }
+        }
     }
 
     /// Settles exactly one tick. Public so tests and tooling can drive the world
@@ -305,6 +396,7 @@ impl Server {
                 }
             }
         }
+        self.record_session_events(&events);
         inner.last_seq = events
             .last()
             .map(|event| event.seq)
@@ -458,6 +550,72 @@ impl Server {
                 eprintln!("the world row could not be read: {error}");
                 Vec::new()
             }
+        }
+    }
+
+    /// `GET /api/leaderboard` (contract §3). Only `score|best|successes` are
+    /// metrics; `limit` is clamped to 1..=100.
+    pub async fn leaderboard(
+        &self,
+        metric: &str,
+        model: Option<&str>,
+        limit: usize,
+    ) -> Envelope<Vec<LeaderRow>> {
+        if !matches!(metric, "score" | "best" | "successes") {
+            return error_envelope(
+                ErrorCode::BadRequest,
+                "metric must be one of score, best, successes",
+            );
+        }
+        let limit = limit.clamp(1, 100);
+        let model = model.filter(|model| !model.is_empty());
+        match self.store.leaderboard(metric, model, limit) {
+            Ok(rows) => Envelope::ok(rows, Vec::new(), None),
+            Err(error) => error_envelope(
+                ErrorCode::Internal,
+                format!("reading the leaderboard failed: {error}"),
+            ),
+        }
+    }
+
+    /// `GET /api/stats` (contract §3).
+    pub async fn stats(&self) -> Envelope<StatsResponse> {
+        match self.store.stats() {
+            Ok(stats) => Envelope::ok(stats, Vec::new(), None),
+            Err(error) => error_envelope(
+                ErrorCode::Internal,
+                format!("reading the stats failed: {error}"),
+            ),
+        }
+    }
+
+    /// `GET /api/agents/:id` (contract §3). Any registered agent is queryable,
+    /// including dev agents; unknown ids are a bad request (the HTTP layer
+    /// turns that into 404).
+    pub async fn profile(&self, agent_id: AgentId) -> Envelope<ProfileResponse> {
+        match self.store.profile(agent_id) {
+            Ok(Some(mut profile)) => {
+                // The store has no config handle; the live level comes from
+                // this server's thresholds.
+                profile.level = loo_core::agent_level(profile.score_total, &self.cfg);
+                Envelope::ok(profile, Vec::new(), None)
+            }
+            Ok(None) => error_envelope(ErrorCode::BadRequest, format!("unknown agent {agent_id}")),
+            Err(error) => error_envelope(
+                ErrorCode::Internal,
+                format!("reading the profile failed: {error}"),
+            ),
+        }
+    }
+
+    /// `GET /api/timeline` (contract §3): four marker kinds, ascending, capped.
+    pub async fn timeline(&self, from: Tick, to: Tick) -> Envelope<Timeline> {
+        match self.store.timeline_markers(from, to) {
+            Ok(markers) => Envelope::ok(Timeline { from, to, markers }, Vec::new(), None),
+            Err(error) => error_envelope(
+                ErrorCode::Internal,
+                format!("reading the timeline failed: {error}"),
+            ),
         }
     }
 
@@ -1020,6 +1178,22 @@ impl Server {
                         .update_agent_entry(agent, Some(req.sent_by.as_str()), &why)
                 {
                     eprintln!("agent {agent} join entry was not persisted: {error}");
+                }
+                let need = inner
+                    .world
+                    .sessions
+                    .get(&session_id)
+                    .and_then(|session| session.need);
+                if let Err(error) = self.store.insert_session(
+                    session_id,
+                    WORLD_ID as u64,
+                    agent,
+                    tick,
+                    need,
+                    Some(req.sent_by),
+                    &why,
+                ) {
+                    eprintln!("session {session_id} was not persisted: {error}");
                 }
                 match outcome {
                     JoinOutcome::Inside { at } => {
@@ -1880,6 +2054,9 @@ impl Server {
                     .last()
                     .map(|event| event.seq)
                     .unwrap_or(inner.last_seq);
+                // A leave ends the session between ticks; the tick loop never
+                // sees these events, so account for them here.
+                self.record_session_events(&events);
                 inner.sessions.remove(&agent);
                 inner.pending.remove(&agent);
                 // Keep the closing events for the agent to read on its next

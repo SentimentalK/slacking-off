@@ -84,6 +84,24 @@ async fn replay_matches_the_live_projection_field_for_field() {
     }
     assert_eq!(recorded.len(), 6, "tick 0 plus five settled ticks");
 
+    // Contract §2: the settlement marker never reaches the live event log.
+    for projection in &recorded {
+        let settled = format!("tick {} settled", projection.tick);
+        assert!(
+            projection.events.iter().all(|event| event.text != settled),
+            "TickSettled leaked into the projection at tick {}",
+            projection.tick
+        );
+    }
+
+    // The projection advertises the configured field capacity and the real
+    // entrance cell.
+    let world = server.world_state().await;
+    let live = recorded.last().expect("a projection");
+    assert_eq!(live.counts.capacity, cfg.max_on_field);
+    let terrain = server.terrain().await;
+    assert_eq!(terrain.entrance, world.entrance, "terrain entrance");
+
     // Privacy: no private field name or value may reach the wire.
     let json = serde_json::to_string(recorded.last().expect("a projection")).unwrap();
     for forbidden in [
@@ -151,6 +169,7 @@ async fn queue_and_counts_agree() {
     let projection = server.current_projection().await;
     assert_eq!(projection.counts.inside, 1, "only one agent fits");
     assert_eq!(projection.counts.queued, 1, "the second agent waits");
+    assert_eq!(projection.counts.capacity, 1, "capacity is configured");
     assert_eq!(
         projection.queue.len(),
         projection.counts.queued,

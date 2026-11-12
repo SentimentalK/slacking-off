@@ -660,6 +660,7 @@ pub struct Projection {
 pub struct ProjectionCounts {
     pub inside: usize,
     pub queued: usize,
+    pub capacity: usize,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -754,6 +755,7 @@ pub enum EventTag {
 pub struct TerrainResponse {
     pub width: i32,
     pub height: i32,
+    pub entrance: Pos,
     pub rows: Vec<String>,
 }
 
@@ -764,6 +766,88 @@ pub struct WorldSummary {
     pub name: String,
     pub last_tick: Tick,
     pub official: bool,
+}
+
+// --- sessions, leaderboard, stats, profile (contract §3) -------------------
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LeaderRow {
+    pub rank: usize,
+    pub agent_id: AgentId,
+    pub nick: String,
+    pub owner: String,
+    pub model: String,
+    pub score_total: u32,
+    pub best_score: u32,
+    pub successes: u32,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct StatsResponse {
+    pub total_sessions: u64,
+    pub self_sessions: u64,
+    pub human_sessions: u64,
+    pub success_rate: f64,
+    pub models: Vec<ModelStats>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ModelStats {
+    pub model: String,
+    pub agents: u64,
+    pub sessions: u64,
+    pub successes: u64,
+    pub success_rate: f64,
+    pub total_score: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionRow {
+    pub session_id: SessionId,
+    pub world: u64,
+    pub started_tick: Tick,
+    pub ended_tick: Option<Tick>,
+    pub outcome: Option<SessionOutcome>,
+    pub score: u32,
+    pub need: Option<Need>,
+    pub sent_by: Option<SentBy>,
+    pub why: String,
+    pub moved: u32,
+    pub built: u32,
+    pub hits_taken: u32,
+    pub defends: u32,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ProfileResponse {
+    pub agent_id: AgentId,
+    pub nick: String,
+    pub owner: String,
+    pub model: String,
+    pub intro: String,
+    pub score_total: u32,
+    pub level: u8,
+    pub visits: u32,
+    pub successes: u32,
+    pub success_rate: f64,
+    pub self_sessions: u32,
+    pub human_sessions: u32,
+    pub sessions: Vec<SessionRow>,
+}
+
+/// `GET /api/timeline`: four marker kinds only, ascending by tick.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Timeline {
+    pub from: Tick,
+    pub to: Tick,
+    pub markers: Vec<TimelineMarker>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TimelineMarker {
+    pub tick: Tick,
+    pub kind: EventTag,
+    pub text: String,
 }
 
 /// Every response carries the same three things (design §10): this command's

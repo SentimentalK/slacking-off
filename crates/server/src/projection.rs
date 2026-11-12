@@ -45,11 +45,18 @@ pub fn build(
         counts: ProjectionCounts {
             inside: world.inside_count(),
             queued: world.entry_queue.len(),
+            capacity: cfg.max_on_field,
         },
         agents: project_agents(cfg, world, agents),
         objects: project_objects(cfg, world),
         queue: project_queue(world),
-        events: events.iter().map(project_event).collect(),
+        // Contract §2: a settlement marker has no user-facing meaning and
+        // would flood the live log.
+        events: events
+            .iter()
+            .filter(|event| !matches!(event.kind, EventKind::TickSettled))
+            .map(project_event)
+            .collect(),
     }
 }
 
@@ -73,6 +80,7 @@ pub fn terrain_rows(world: &WorldState) -> TerrainResponse {
     TerrainResponse {
         width,
         height,
+        entrance: world.entrance,
         rows,
     }
 }
@@ -266,7 +274,7 @@ fn project_event(event: &Event) -> ProjectionEvent {
 }
 
 /// Contract §2 tag mapping; the first matching rule wins.
-fn event_tag(event: &Event) -> EventTag {
+pub(crate) fn event_tag(event: &Event) -> EventTag {
     match &event.kind {
         EventKind::UseSucceeded { .. } => EventTag::Success,
         EventKind::AttackStarted { .. }
