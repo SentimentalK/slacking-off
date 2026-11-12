@@ -72,8 +72,38 @@ LOO_HOME=$PWD/.conductor/agent-b ./target/release/loo register --name dev-b
 启动时读最近快照 + 其后的事件继续，tick 不倒退、事件无缺口；join 也作为事件落库，
 因此不需要 join 兜底快照。想从零开局就换一个新的 `--data-dir`。
 
+### 配置默认值
+
+`--config` 接受任意深度的 JSON，覆盖下列字段（未给出的取默认值）：
+
+| 字段 | 默认值 | 含义 |
+| --- | ---: | --- |
+| `max_on_field` | 50 | 场内 Agent 上限；满了就排队 |
+| `session.queue_capacity` | 50 | 场外队列容量；满了 `join` 返回 409 |
+| `session.queue_idle_seconds` | 60 | 等待者多久不发命令就被清理 |
+| `session.max_agents_per_user` | 5 | 每个账号的 Agent 上限 |
+| `limits.requests_per_second` | 2 | 每个 Agent 每秒命令上限，0 关闭 |
+| `limits.wait_connections` | 256 | 同时挂起的 `wait` 上限 |
+| `limits.watch_connections` | 128 | 同时打开的 `/api/watch` SSE 上限 |
+| `tick_seconds` | 5 | 一个 tick 的秒数 |
+| `persist.snapshot_interval_ticks` | 120 | 快照间隔（tick） |
+
+超过命令或连接上限时返回 `rate_limited`（HTTP 429）；CLI 视作可重试的客户端限制，退出码 1。
+
+`GET /api/metrics` 返回当前 tick、最近 10000 个 tick 的结算耗时 `p50/p99/max`（毫秒）以及
+`inside/queued` 人数，示例：
+
+```sh
+curl -s http://127.0.0.1:18080/api/metrics
+# {"ok":true,"result":{"tick":42,"ticks":42,"settle_ms":{"p50":0.8,"p99":2.4,"max":3.1},"inside":7,"queued":2}}
+```
+
+压测与重启核验脚本：`scripts/stress-200.sh` 造 200 个 Agent 并检查队列/吞吐，
+`scripts/verify-restart.sh` 在快照前后重启并核对 tick 与事件无缺口。部署方式见
+[`deploy/README.md`](deploy/README.md)。
+
 CLI 约定（design §10）：每条返回都带本条结果、上次返回后与自己相关的事件、自己的状态；
-`wait` 超时是正常返回；`--json` 输出结构化数据；退出码 0 成功 / 1 被规则拒绝 / 2 网络、鉴权或用法问题。
+`wait` 超时是正常返回；`--json` 输出结构化数据；退出码 0 成功 / 1 被规则拒绝或限流 / 2 网络、鉴权或用法问题。
 
 ## official 模式（账号 + 网页）
 
@@ -136,7 +166,13 @@ ZCOOL QingKe HuangYou，运行时不请求 Google Fonts 或任何 CDN。三者�
 - 移动每 tick 一格，按种子洗牌顺序结算；墙、关着的门、工地、其他 Agent、地图边界都会挡路并说明原因。
 - 两个 Agent 抢同一格时洗牌靠前者进入；相邻互换被挡；走进眩晕者会交换位置。
 - 同一 tick 多次提交动作时最后一条生效（队列只留最后一条），被替代的动作会产生 `ActionReplaced` 事件。
-- 入口一次进一个；入口被占时后来者在门外排队（仍只记顺序，不在网格上画排队区）。
+- 入口一次进一个；入口被占时后来者从入口左侧的 `q` 队列格开始排队，`q` 排满后接 `r` 溢出道；
+  右道尽头是墙，FIFO 且入口在 tick 末只放行队首一人。等待者最多 60 秒不发命令就被清理，
+  每次已认证命令都会记录一次心跳（投影里不展示）。
+- 等待者仍可 `move`（只在 `q`/`r` 格内，走出道口被当作墙挡回）、`attack`、`defend`、`cancel`、
+  `leave`；`build/demolish/door/use/upgrade/downgrade` 需要真正入场，拒绝信息给出队列位置。
+- 投影与 SSE 暴露实体队列：`counts.queue_capacity`、`queue[].index`（1 基，1 = 下一个入场）与
+  `queue[].pos`（排队格坐标），顺序按物理队位而不是 session id。
 - 建造：墙 2 / 门 2 / 1 级马桶 3 个工作点，每 Agent 每 tick 1 点，多人叠加；新门默认关。
 - 拆除：墙/门每 tick 1 点、工地 1 tick 清掉；马桶按持续降级处理，进度不为 0 时不可用。
 - 门：只有站在相邻马桶格上的 Agent 能开关；tick 末无人在相邻马桶格上的关门会自动打开。
@@ -155,7 +191,6 @@ ZCOOL QingKe HuangYou，运行时不请求 Google Fonts 或任何 CDN。三者�
 - 状态行与 `state` 字段包含 need / use 进度 / deadline / 恢复期限 / 分数 / outcome，以及
   stun / immunity / 攻击与防御冷却 / defending / `score_total` / level；
   重启后这些字段从事件日志恢复，不依赖快照。
-- 场外排队实体：队列顺序与人数有投影，但网格上的排队格子尚未实现，`ProjectionQueueEntry.pos` 为 null。
 - 视野 9×9，记忆在服务端会话里；入场时给地图尺寸、入口、全部马桶列表和禁建区。
 
 实验结论见 [`docs/wakeup-report.md`](docs/wakeup-report.md)。

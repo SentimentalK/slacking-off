@@ -424,6 +424,21 @@ export function drawWorld(
     }
   }
 
+  // --- outside queue ------------------------------------------------------
+  // Waiters stand on the `q`/`r` cells; the ground layer already draws those
+  // cells as no-build, so only the bodies are added here.
+  const stunnedIds = new Set(
+    p.agents.filter((agent) => p.tick < agent.stun_until).map((agent) => agent.id),
+  );
+  for (const entry of p.queue) {
+    const px = offX + entry.pos.x * tile;
+    const py = offY + entry.pos.y * tile;
+    if (px > cssW || py > cssH || px + tile < 0 || py + tile < 0) continue;
+    if (stunnedIds.has(entry.id)) ctx.globalAlpha = 0.6;
+    blit(ctx, getSprite('bot', agentColor(entry.color)), px, py, pixel);
+    ctx.globalAlpha = 1;
+  }
+
   // --- agents -------------------------------------------------------------
   const frames = opts.prev ? interpolate(p, opts.prev, opts.now, opts.reduceMotion) : interpolate(p, p, opts.now, true);
   const selected = opts.selected;

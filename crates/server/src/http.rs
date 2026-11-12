@@ -95,6 +95,7 @@ pub fn router_with(server: Arc<Server>, options: HttpOptions) -> Router {
         .route("/api/agents/{id}", get(agent_profile))
         .route("/api/timeline", get(timeline))
         .route("/api/projection", get(projection))
+        .route("/api/metrics", get(metrics))
         .route("/api/watch", get(watch))
         .route("/api/move", post(move_cmd))
         .route("/api/build", post(build_cmd))
@@ -560,6 +561,10 @@ async fn timeline(
     respond(app.server.timeline(from, to).await)
 }
 
+async fn metrics(State(app): State<Arc<AppState>>) -> Response {
+    respond(Envelope::ok(app.server.metrics().await, Vec::new(), None))
+}
+
 async fn projection(
     State(app): State<Arc<AppState>>,
     Query(query): Query<ProjectionQuery>,
@@ -587,6 +592,8 @@ const PING_INTERVAL: Duration = Duration::from_secs(15);
 
 struct WatchState {
     server: Arc<Server>,
+    /// Released when the stream (and this state) is dropped.
+    _slot: crate::WatchSlot,
     receiver: broadcast::Receiver<Arc<Projection>>,
     /// Frames still to send before live updates start.
     pending: VecDeque<SseEvent>,
@@ -596,6 +603,12 @@ struct WatchState {
 }
 
 async fn watch(State(app): State<Arc<AppState>>, headers: HeaderMap) -> Response {
+    let slot = match app.server.watch_slot() {
+        Ok(slot) => slot,
+        Err(error) => {
+            return respond(error_envelope::<()>(error.code, error.message));
+        }
+    };
     let server = app.server.clone();
     let live = server.current_projection().await;
     let current_tick = live.tick;
@@ -654,6 +667,7 @@ async fn watch(State(app): State<Arc<AppState>>, headers: HeaderMap) -> Response
 
     let state = WatchState {
         server,
+        _slot: slot,
         receiver,
         pending,
         last_sent,

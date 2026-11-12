@@ -640,7 +640,7 @@ fn exit_code(value: &Value) -> u8 {
         .and_then(Value::as_str)
         .unwrap_or("")
     {
-        "rule_rejected" => 1,
+        "rule_rejected" | "rate_limited" => 1,
         _ => 2,
     }
 }

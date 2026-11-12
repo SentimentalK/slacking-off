@@ -14,14 +14,15 @@ use loo_proto::{
     AgentView, ApiError, AttackRequest, AuthMeResponse, Briefing, BuildKind, BuildRequest,
     ConfigResponse, DefendRequest, DemolishRequest, DoorRequest, DowngradeRequest, Envelope,
     ErrorCode, EventView, InstallCommands, JoinRequest, JoinResponse, LeaderRow, LeaveResponse,
-    LookResponse, MapResponse, MoveRequest, Need, Placement, PlacementKind, Pos, ProfileResponse,
-    Projection, RegisterRequest, RegisterResponse, RulesResponse, SentBy, SessionId,
-    SessionOutcome, StatsResponse, TargetSpec, TerrainResponse, Tick, Timeline,
-    TokenCreateResponse, UpgradeRequest, WaitRequest, WaitResponse, WaitWake, WorldSummary,
+    LookResponse, MapResponse, MetricsResponse, MoveRequest, Need, Placement, PlacementKind, Pos,
+    ProfileResponse, Projection, RegisterRequest, RegisterResponse, RulesResponse, SentBy,
+    SessionId, SessionOutcome, SettleMs, StatsResponse, TargetSpec, TerrainResponse, Tick,
+    Timeline, TokenCreateResponse, UpgradeRequest, WaitRequest, WaitResponse, WaitWake,
+    WorldSummary,
 };
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::path::Path;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use store::WORLD_ID;
@@ -44,6 +45,14 @@ pub struct Server {
     official: bool,
     /// Dev identities: `agents.token` -> agent. Only read in dev mode.
     dev_tokens: std::sync::Mutex<HashMap<String, AgentId>>,
+    /// Fixed one-second command windows per agent (`limits.requests_per_second`).
+    rate: std::sync::Mutex<BTreeMap<AgentId, (Instant, u32)>>,
+    /// Open long-poll connections, capped by `limits.wait_connections`.
+    wait_active: AtomicUsize,
+    /// Open SSE connections, capped by `limits.watch_connections`.
+    watch_active: AtomicUsize,
+    /// Milliseconds from the start of `tick_once` to a built projection.
+    settle_samples: std::sync::Mutex<VecDeque<f64>>,
 }
 
 struct Inner {
@@ -86,6 +95,36 @@ struct AgentMeta {
     why: String,
     /// Cumulative score carried across sessions, persisted in `agents`.
     score_total: u32,
+}
+
+/// One open long-poll slot; released when the handler returns.
+struct WaitSlot<'a>(&'a AtomicUsize);
+
+impl Drop for WaitSlot<'_> {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::Relaxed);
+    }
+}
+
+/// One open SSE slot; keeps the server alive so the decrement is safe.
+pub struct WatchSlot {
+    server: Arc<Server>,
+}
+
+impl Drop for WatchSlot {
+    fn drop(&mut self) {
+        self.server.watch_active.fetch_sub(1, Ordering::Relaxed);
+    }
+}
+
+/// `current >= limit` rejects before the counter is incremented further.
+fn take_slot(counter: &AtomicUsize, limit: usize) -> bool {
+    if counter.fetch_add(1, Ordering::Relaxed) >= limit {
+        counter.fetch_sub(1, Ordering::Relaxed);
+        false
+    } else {
+        true
+    }
 }
 
 impl Server {
@@ -232,6 +271,10 @@ impl Server {
             store,
             official,
             dev_tokens: std::sync::Mutex::new(dev_tokens),
+            rate: std::sync::Mutex::new(BTreeMap::new()),
+            wait_active: AtomicUsize::new(0),
+            watch_active: AtomicUsize::new(0),
+            settle_samples: std::sync::Mutex::new(VecDeque::new()),
         })
     }
 
@@ -346,6 +389,7 @@ impl Server {
     /// Settles exactly one tick. Public so tests and tooling can drive the world
     /// without a live timer. Nothing is published unless the tick is persisted.
     pub async fn tick_once(&self) -> Tick {
+        let started = Instant::now();
         let mut inner = self.inner.lock().await;
         let intents: Vec<Intent> = inner
             .pending
@@ -440,6 +484,17 @@ impl Server {
             &inner.agent_public,
             &inner.current_events,
         );
+        {
+            let elapsed_ms = started.elapsed().as_secs_f64() * 1000.0;
+            let mut samples = self
+                .settle_samples
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if samples.len() >= 10_000 {
+                samples.pop_front();
+            }
+            samples.push_back(elapsed_ms);
+        }
         let interval = self.cfg.persist.snapshot_interval_ticks;
         if interval > 0 && tick % u64::from(interval) == 0 {
             let snapshot = Snapshot {
@@ -638,6 +693,112 @@ impl Server {
     /// The configured default `loo wait` timeout in seconds.
     pub fn default_wait_seconds(&self) -> f64 {
         self.cfg.wait_default_seconds()
+    }
+
+    /// Fixed one-second window per agent (`limits.requests_per_second = 0`
+    /// disables the check). The first `rps` calls in a window pass.
+    fn check_rate(&self, agent: AgentId) -> Result<(), ApiError> {
+        let limit = self.cfg.limits.requests_per_second;
+        if limit == 0 {
+            return Ok(());
+        }
+        let now = Instant::now();
+        let mut windows = self
+            .rate
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        match windows.get_mut(&agent) {
+            Some((started, count)) if now.duration_since(*started) < Duration::from_secs(1) => {
+                if *count >= limit {
+                    return Err(ApiError::new(
+                        ErrorCode::RateLimited,
+                        "too many requests; try again shortly",
+                    ));
+                }
+                *count += 1;
+            }
+            _ => {
+                windows.insert(agent, (now, 1));
+            }
+        }
+        Ok(())
+    }
+
+    fn wait_slot(&self) -> Option<WaitSlot<'_>> {
+        take_slot(&self.wait_active, self.cfg.limits.wait_connections)
+            .then_some(WaitSlot(&self.wait_active))
+    }
+
+    /// Reserves an SSE slot; the guard releases it when the stream ends.
+    pub fn watch_slot(self: &Arc<Self>) -> Result<WatchSlot, ApiError> {
+        let limit = self.cfg.limits.watch_connections;
+        if !take_slot(&self.watch_active, limit) {
+            return Err(ApiError::new(
+                ErrorCode::RateLimited,
+                format!("too many open watch connections (limit {limit})"),
+            ));
+        }
+        Ok(WatchSlot {
+            server: self.clone(),
+        })
+    }
+
+    /// Records that a waiting agent is alive at the current tick. The event is
+    /// persisted like a join so a restart replays the same `last_active_tick`;
+    /// `QueueTouched` is filtered out of the projection.
+    fn touch_waiting(&self, inner: &mut Inner, agent: AgentId) {
+        let tick = inner.world.tick;
+        let Some(mut event) = loo_core::touch(&inner.world, agent, tick) else {
+            return;
+        };
+        event.seq = inner.last_seq.saturating_add(1);
+        if let Err(error) = self
+            .store
+            .append_join_events(tick, std::slice::from_ref(&event))
+        {
+            eprintln!("queue touch for agent {agent} was not persisted: {error}");
+            return;
+        }
+        inner.last_seq = event.seq;
+        inner.current_events.push(event);
+        if let Some(session) = inner.world.session_of(agent) {
+            let session_id = session.id;
+            if let Some(session) = inner.world.sessions.get_mut(&session_id) {
+                session.last_active_tick = tick;
+            }
+        }
+    }
+
+    /// `GET /api/metrics`: live tick, occupancy and settlement latency.
+    pub async fn metrics(&self) -> MetricsResponse {
+        let (tick, inside, queued) = {
+            let inner = self.inner.lock().await;
+            (
+                inner.world.tick,
+                inner.world.inside_count(),
+                inner.world.waiting_sessions().len(),
+            )
+        };
+        let mut samples: Vec<f64> = {
+            let samples = self
+                .settle_samples
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            samples.iter().copied().collect()
+        };
+        samples.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let max = samples.last().copied().unwrap_or(0.0);
+        MetricsResponse {
+            tick,
+            ticks: samples.len() as u64,
+            settle_ms: SettleMs {
+                p50: percentile(&samples, 50.0),
+                p99: percentile(&samples, 99.0),
+                max,
+            },
+            inside,
+            queued,
+        }
     }
 
     pub fn store_path(&self) -> &Path {
@@ -1070,6 +1231,20 @@ impl Server {
             return self.finish("join", None, 0, env, started, "not authenticated", None);
         };
         let tick = inner.world.tick;
+        if let Err(error) = self.check_rate(agent) {
+            let env = failed_env(&self.cfg, &mut inner, Some(agent), error);
+            drop(inner);
+            return self.finish(
+                "join",
+                Some(agent),
+                tick,
+                env,
+                started,
+                "rate limited",
+                None,
+            );
+        }
+        self.touch_waiting(&mut inner, agent);
 
         let why = req.why.trim().to_string();
         if why.is_empty() || why.chars().count() > 200 {
@@ -1253,6 +1428,20 @@ impl Server {
             return self.finish("look", None, 0, env, started, "not authenticated", None);
         };
         let tick = inner.world.tick;
+        if let Err(error) = self.check_rate(agent) {
+            let env = failed_env(&self.cfg, &mut inner, Some(agent), error);
+            drop(inner);
+            return self.finish(
+                "look",
+                Some(agent),
+                tick,
+                env,
+                started,
+                "rate limited",
+                None,
+            );
+        }
+        self.touch_waiting(&mut inner, agent);
         let env = match loo_core::look(&inner.world, agent, &self.cfg) {
             Some(view) => ok_env(&self.cfg, &mut inner, agent, view),
             None => {
@@ -1274,6 +1463,12 @@ impl Server {
             return self.finish("map", None, 0, env, started, "not authenticated", None);
         };
         let tick = inner.world.tick;
+        if let Err(error) = self.check_rate(agent) {
+            let env = failed_env(&self.cfg, &mut inner, Some(agent), error);
+            drop(inner);
+            return self.finish("map", Some(agent), tick, env, started, "rate limited", None);
+        }
+        self.touch_waiting(&mut inner, agent);
         let env = match loo_core::map_memory(&inner.world, agent) {
             Some(view) => ok_env(&self.cfg, &mut inner, agent, view),
             None => {
@@ -1295,6 +1490,20 @@ impl Server {
             return self.finish("status", None, 0, env, started, "not authenticated", None);
         };
         let tick = inner.world.tick;
+        if let Err(error) = self.check_rate(agent) {
+            let env = failed_env(&self.cfg, &mut inner, Some(agent), error);
+            drop(inner);
+            return self.finish(
+                "status",
+                Some(agent),
+                tick,
+                env,
+                started,
+                "rate limited",
+                None,
+            );
+        }
+        self.touch_waiting(&mut inner, agent);
         let env = ok_env(&self.cfg, &mut inner, agent, ());
         drop(inner);
         self.finish("status", Some(agent), tick, env, started, "state", None)
@@ -1343,6 +1552,20 @@ impl Server {
             return self.finish("move", None, 0, env, started, "not authenticated", None);
         };
         let tick = inner.world.tick;
+        if let Err(error) = self.check_rate(agent) {
+            let env = failed_env(&self.cfg, &mut inner, Some(agent), error);
+            drop(inner);
+            return self.finish(
+                "move",
+                Some(agent),
+                tick,
+                env,
+                started,
+                "rate limited",
+                None,
+            );
+        }
+        self.touch_waiting(&mut inner, agent);
 
         let dirs = match req.spec.dirs() {
             Ok(dirs) => dirs,
@@ -1389,9 +1612,8 @@ impl Server {
                 None,
             );
         }
-        if !inner.world.is_inside(agent) {
-            let err = session_required(&inner, agent);
-            let env = failed_env(&self.cfg, &mut inner, Some(agent), err);
+        if let Err(error) = require_session_pos(&inner, agent) {
+            let env = failed_env(&self.cfg, &mut inner, Some(agent), error);
             drop(inner);
             return self.finish("move", Some(agent), tick, env, started, "not inside", None);
         }
@@ -1438,6 +1660,20 @@ impl Server {
             return self.finish("build", None, 0, env, started, "not authenticated", None);
         };
         let tick = inner.world.tick;
+        if let Err(error) = self.check_rate(agent) {
+            let env = failed_env(&self.cfg, &mut inner, Some(agent), error);
+            drop(inner);
+            return self.finish(
+                "build",
+                Some(agent),
+                tick,
+                env,
+                started,
+                "rate limited",
+                None,
+            );
+        }
+        self.touch_waiting(&mut inner, agent);
         let pos = match require_inside(&inner, agent) {
             Ok(pos) => pos,
             Err(error) => {
@@ -1500,6 +1736,20 @@ impl Server {
             return self.finish("demolish", None, 0, env, started, "not authenticated", None);
         };
         let tick = inner.world.tick;
+        if let Err(error) = self.check_rate(agent) {
+            let env = failed_env(&self.cfg, &mut inner, Some(agent), error);
+            drop(inner);
+            return self.finish(
+                "demolish",
+                Some(agent),
+                tick,
+                env,
+                started,
+                "rate limited",
+                None,
+            );
+        }
+        self.touch_waiting(&mut inner, agent);
         let pos = match require_inside(&inner, agent) {
             Ok(pos) => pos,
             Err(error) => {
@@ -1568,6 +1818,20 @@ impl Server {
             return self.finish("door", None, 0, env, started, "not authenticated", None);
         };
         let tick = inner.world.tick;
+        if let Err(error) = self.check_rate(agent) {
+            let env = failed_env(&self.cfg, &mut inner, Some(agent), error);
+            drop(inner);
+            return self.finish(
+                "door",
+                Some(agent),
+                tick,
+                env,
+                started,
+                "rate limited",
+                None,
+            );
+        }
+        self.touch_waiting(&mut inner, agent);
         let pos = match require_inside(&inner, agent) {
             Ok(pos) => pos,
             Err(error) => {
@@ -1631,7 +1895,21 @@ impl Server {
             return self.finish("attack", None, 0, env, started, "not authenticated", None);
         };
         let tick = inner.world.tick;
-        let pos = match require_inside(&inner, agent) {
+        if let Err(error) = self.check_rate(agent) {
+            let env = failed_env(&self.cfg, &mut inner, Some(agent), error);
+            drop(inner);
+            return self.finish(
+                "attack",
+                Some(agent),
+                tick,
+                env,
+                started,
+                "rate limited",
+                None,
+            );
+        }
+        self.touch_waiting(&mut inner, agent);
+        let pos = match require_session_pos(&inner, agent) {
             Ok(pos) => pos,
             Err(error) => {
                 let env = failed_env(&self.cfg, &mut inner, Some(agent), error);
@@ -1701,7 +1979,21 @@ impl Server {
             return self.finish("defend", None, 0, env, started, "not authenticated", None);
         };
         let tick = inner.world.tick;
-        let pos = match require_inside(&inner, agent) {
+        if let Err(error) = self.check_rate(agent) {
+            let env = failed_env(&self.cfg, &mut inner, Some(agent), error);
+            drop(inner);
+            return self.finish(
+                "defend",
+                Some(agent),
+                tick,
+                env,
+                started,
+                "rate limited",
+                None,
+            );
+        }
+        self.touch_waiting(&mut inner, agent);
+        let pos = match require_session_pos(&inner, agent) {
             Ok(pos) => pos,
             Err(error) => {
                 let env = failed_env(&self.cfg, &mut inner, Some(agent), error);
@@ -1769,6 +2061,20 @@ impl Server {
             return self.finish("upgrade", None, 0, env, started, "not authenticated", None);
         };
         let tick = inner.world.tick;
+        if let Err(error) = self.check_rate(agent) {
+            let env = failed_env(&self.cfg, &mut inner, Some(agent), error);
+            drop(inner);
+            return self.finish(
+                "upgrade",
+                Some(agent),
+                tick,
+                env,
+                started,
+                "rate limited",
+                None,
+            );
+        }
+        self.touch_waiting(&mut inner, agent);
         let pos = match require_inside(&inner, agent) {
             Ok(pos) => pos,
             Err(error) => {
@@ -1849,6 +2155,20 @@ impl Server {
             );
         };
         let tick = inner.world.tick;
+        if let Err(error) = self.check_rate(agent) {
+            let env = failed_env(&self.cfg, &mut inner, Some(agent), error);
+            drop(inner);
+            return self.finish(
+                "downgrade",
+                Some(agent),
+                tick,
+                env,
+                started,
+                "rate limited",
+                None,
+            );
+        }
+        self.touch_waiting(&mut inner, agent);
         let pos = match require_inside(&inner, agent) {
             Ok(pos) => pos,
             Err(error) => {
@@ -1917,6 +2237,12 @@ impl Server {
             return self.finish("use", None, 0, env, started, "not authenticated", None);
         };
         let tick = inner.world.tick;
+        if let Err(error) = self.check_rate(agent) {
+            let env = failed_env(&self.cfg, &mut inner, Some(agent), error);
+            drop(inner);
+            return self.finish("use", Some(agent), tick, env, started, "rate limited", None);
+        }
+        self.touch_waiting(&mut inner, agent);
         if let Err(error) = require_inside(&inner, agent) {
             let env = failed_env(&self.cfg, &mut inner, Some(agent), error);
             drop(inner);
@@ -1968,6 +2294,20 @@ impl Server {
             return self.finish("cancel", None, 0, env, started, "not authenticated", None);
         };
         let tick = inner.world.tick;
+        if let Err(error) = self.check_rate(agent) {
+            let env = failed_env(&self.cfg, &mut inner, Some(agent), error);
+            drop(inner);
+            return self.finish(
+                "cancel",
+                Some(agent),
+                tick,
+                env,
+                started,
+                "rate limited",
+                None,
+            );
+        }
+        self.touch_waiting(&mut inner, agent);
         let intent = IntentKind::Cancel;
         let intent_json = serde_json::to_value(&intent).ok();
         queue_intent(&mut inner, agent, intent);
@@ -2005,6 +2345,20 @@ impl Server {
             return self.finish("leave", None, 0, env, started, "not authenticated", None);
         };
         let tick = inner.world.tick;
+        if let Err(error) = self.check_rate(agent) {
+            let env = failed_env(&self.cfg, &mut inner, Some(agent), error);
+            drop(inner);
+            return self.finish(
+                "leave",
+                Some(agent),
+                tick,
+                env,
+                started,
+                "rate limited",
+                None,
+            );
+        }
+        self.touch_waiting(&mut inner, agent);
         let last_pos = inner.world.agents.get(&agent).and_then(|a| a.pos);
         match loo_core::leave(
             &inner.world,
@@ -2104,17 +2458,54 @@ impl Server {
             return self.finish("wait", None, 0, env, started, "not authenticated", None);
         };
 
+        let tick = {
+            let mut inner = self.inner.lock().await;
+            let tick = inner.world.tick;
+            if let Err(error) = self.check_rate(agent) {
+                let env = failed_env(&self.cfg, &mut inner, Some(agent), error);
+                drop(inner);
+                return self.finish(
+                    "wait",
+                    Some(agent),
+                    tick,
+                    env,
+                    started,
+                    "rate limited",
+                    None,
+                );
+            }
+            self.touch_waiting(&mut inner, agent);
+            tick
+        };
+        let Some(_slot) = self.wait_slot() else {
+            let limit = self.cfg.limits.wait_connections;
+            let env = error_envelope::<WaitResponse>(
+                ErrorCode::RateLimited,
+                format!("too many open wait connections (limit {limit})"),
+            );
+            return self.finish(
+                "wait",
+                Some(agent),
+                tick,
+                env,
+                started,
+                "too many wait connections",
+                None,
+            );
+        };
+
         let deadline = Instant::now() + Duration::from_secs_f64(timeout_seconds);
         let mut rx = self.tick_tx.subscribe();
         loop {
             {
                 let mut inner = self.inner.lock().await;
-                let state = agent_view(&self.cfg, &inner, agent);
                 let has_events = inner
                     .outbox
                     .get(&agent)
                     .is_some_and(|queue| !queue.is_empty());
                 if has_events {
+                    self.touch_waiting(&mut inner, agent);
+                    let state = agent_view(&self.cfg, &inner, agent);
                     let events = take_events(&mut inner, agent);
                     let tick = inner.world.tick;
                     let elapsed_ms = started.elapsed().as_millis() as u64;
@@ -2149,6 +2540,7 @@ impl Server {
         }
 
         let mut inner = self.inner.lock().await;
+        self.touch_waiting(&mut inner, agent);
         let state = agent_view(&self.cfg, &inner, agent);
         // A session that already ended has no state session left, but its
         // closing events must still be delivered.
@@ -2250,6 +2642,15 @@ fn not_authenticated() -> ApiError {
     )
 }
 
+/// Nearest-rank percentile over an ascending slice; empty input is zero.
+fn percentile(sorted: &[f64], percent: f64) -> f64 {
+    if sorted.is_empty() {
+        return 0.0;
+    }
+    let rank = ((percent / 100.0) * sorted.len() as f64).ceil() as usize;
+    sorted[rank.saturating_sub(1).min(sorted.len() - 1)]
+}
+
 fn error_envelope<T>(code: ErrorCode, message: impl Into<String>) -> Envelope<T> {
     Envelope::failed(ApiError::new(code, message), Vec::new(), None)
 }
@@ -2272,19 +2673,28 @@ fn session_required(inner: &Inner, agent: AgentId) -> ApiError {
     {
         None => ApiError::rule("you are not in the world; run `loo join` first"),
         Some(session) if session.status == loo_core::SessionStatus::Waiting => {
-            let ahead = inner
-                .world
-                .entry_queue
-                .iter()
-                .position(|s| *s == session.id)
-                .map(|i| i + 1)
-                .unwrap_or(0);
+            let position = inner.world.queue_position(session.id).unwrap_or(0);
+            let ahead = position.saturating_sub(1);
             ApiError::rule(format!(
-                "you are still outside the entrance waiting ({ahead} in line); you are not in the world yet"
+                "you are still outside the entrance waiting (queue position {position}, {ahead} ahead)"
             ))
         }
         Some(_) => ApiError::rule("no position in the world"),
     }
+}
+
+/// Any session with a cell passes: waiters may move, attack and defend inside
+/// the queue lanes. Building and toilets still require `Inside`.
+fn require_session_pos(inner: &Inner, agent: AgentId) -> Result<Pos, ApiError> {
+    if inner.world.session_of(agent).is_none() {
+        return Err(session_required(inner, agent));
+    }
+    inner
+        .world
+        .agents
+        .get(&agent)
+        .and_then(|agent| agent.pos)
+        .ok_or_else(|| session_required(inner, agent))
 }
 
 fn agent_view(cfg: &Config, inner: &Inner, agent: AgentId) -> Option<AgentView> {
@@ -2298,14 +2708,7 @@ fn agent_view(cfg: &Config, inner: &Inner, agent: AgentId) -> Option<AgentView> 
         loo_core::SessionStatus::Inside => PlacementKind::Inside,
         loo_core::SessionStatus::Waiting => PlacementKind::Waiting,
     });
-    let queue_ahead = session.and_then(|s| {
-        inner
-            .world
-            .entry_queue
-            .iter()
-            .position(|queued| *queued == s.id)
-            .map(|i| i + 1)
-    });
+    let queue_ahead = session.and_then(|s| inner.world.queue_position(s.id));
     let action = world_agent
         .and_then(|a| a.action.as_ref())
         .map(|action| ActionState {

@@ -2,7 +2,7 @@
 //! future-tick guard.
 
 use loo_core::{map, Config};
-use loo_proto::{JoinRequest, Projection, RegisterRequest, SentBy};
+use loo_proto::{JoinRequest, Pos, Projection, RegisterRequest, SentBy};
 use loo_server::Server;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -12,7 +12,7 @@ grid
 #########
 #.......#
 #.......#
-#E......#
+qE......#
 #.......#
 #########
 ";
@@ -23,7 +23,9 @@ fn fresh_dir(name: &str) -> PathBuf {
     dir
 }
 
-fn open_server(dir: &Path, cfg: Config) -> Arc<Server> {
+fn open_server(dir: &Path, mut cfg: Config) -> Arc<Server> {
+    // Rate limiting has its own test; projection tests issue bursts.
+    cfg.limits.requests_per_second = 0;
     let def = map::parse(TEST_MAP).expect("test map parses");
     Arc::new(Server::open(cfg, def, "test-map", TEST_MAP, dir, 7).expect("server opens"))
 }
@@ -149,7 +151,7 @@ async fn queue_and_counts_agree() {
         max_on_field: 1,
         ..Config::default()
     };
-    let server = open_server(&dir, cfg);
+    let server = open_server(&dir, cfg.clone());
 
     let token_a = register(&server, "first-one", "m", "i").await;
     let token_b = register(&server, "second-one", "m", "i").await;
@@ -171,10 +173,19 @@ async fn queue_and_counts_agree() {
     assert_eq!(projection.counts.queued, 1, "the second agent waits");
     assert_eq!(projection.counts.capacity, 1, "capacity is configured");
     assert_eq!(
+        projection.counts.queue_capacity, cfg.session.queue_capacity,
+        "the queue capacity is advertised"
+    );
+    assert_eq!(
         projection.queue.len(),
         projection.counts.queued,
         "queue and counts must agree"
     );
     assert_eq!(projection.queue[0].nick, "second-one");
-    assert_eq!(projection.queue[0].pos, None, "core has no queue cells yet");
+    assert_eq!(projection.queue[0].index, 1, "1-based line position");
+    assert_eq!(
+        projection.queue[0].pos,
+        Pos::new(0, 3),
+        "the waiter stands on the queue cell west of the entrance"
+    );
 }
