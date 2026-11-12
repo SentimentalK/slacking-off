@@ -28,6 +28,17 @@ grid
 #######
 ";
 
+/// A level-2 toilet at (2,2) walled in on all four sides, so it counts as
+/// usable once its progress is zero.
+const WALLED_TOILET: &str = "\
+grid
+.....
+.###.
+.#2#.
+.###.
+..E..
+";
+
 const TOILET: Pos = Pos::new(2, 2);
 const NORTH: Pos = Pos::new(2, 1);
 const WEST: Pos = Pos::new(1, 2);
@@ -298,19 +309,115 @@ fn one_upgrade_and_one_downgrade_net_minus_one() {
 #[test]
 fn net_change_is_applied_once_not_per_worker() {
     let cfg = Config::default();
-    let mut world = build(ARENA);
+    let mut world = build(WALLED_TOILET);
     world = claim(&world, &cfg, 1, LEVEL_3);
     world = claim(&world, &cfg, 2, LEVEL_3);
+    // The toilet is walled in on all four sides, which is what makes a finished
+    // toilet usable; the two workers are placed on two of those wall cells
+    // because a usable toilet has no free neighbour to stand on.
     place(&mut world, 1, NORTH);
     place(&mut world, 2, WEST);
     set_toilet(&mut world, TOILET, 2, 11);
+    assert!(
+        !is_usable(&world, TOILET),
+        "a toilet under construction is not usable"
+    );
 
     let intents = [upgrade_intent(1, TOILET), upgrade_intent(2, TOILET)];
-    let (next, _) = run(&world, &intents, 1, &cfg);
+    let (next, events) = run(&world, &intents, 1, &cfg);
     assert_eq!(
         toilet_at(&next, TOILET),
-        (3, 1),
-        "11 + 2 = 13 settles as level 3 progress 1, not two separate crossings"
+        (3, 0),
+        "11 + 2 = 13 crosses to level 3 and the new level starts at zero"
+    );
+    assert!(
+        is_usable(&next, TOILET),
+        "the crossed toilet is finished and usable"
+    );
+    for agent in [1u64, 2] {
+        assert!(
+            next.agents[&agent].action.is_none(),
+            "agent {agent} finished its upgrade"
+        );
+        let completed = count(&events, |kind| {
+            matches!(
+                kind,
+                EventKind::ActionFinished {
+                    agent: who,
+                    outcome: ActionOutcome::Completed,
+                    ..
+                } if *who == agent
+            )
+        });
+        assert_eq!(completed, 1, "agent {agent} reports one completed upgrade");
+    }
+    assert_eq!(
+        count(&events, |kind| matches!(
+            kind,
+            EventKind::ObjectChanged { .. }
+        )),
+        1
+    );
+}
+
+#[test]
+fn multiple_downgraders_apply_four_per_tick() {
+    let cfg = Config::default();
+    let mut world = build(ARENA);
+    world = claim(&world, &cfg, 1, 0);
+    world = claim(&world, &cfg, 2, 0);
+    place(&mut world, 1, NORTH);
+    place(&mut world, 2, WEST);
+    set_toilet(&mut world, TOILET, 3, 10);
+
+    let intents = [downgrade_intent(1, TOILET), downgrade_intent(2, TOILET)];
+    let (next, events) = run(&world, &intents, 1, &cfg);
+    assert_eq!(
+        toilet_at(&next, TOILET),
+        (3, 6),
+        "two downgraders remove 2 each once for the tick, not one after the other"
+    );
+    assert_eq!(
+        count(&events, |kind| matches!(
+            kind,
+            EventKind::ObjectChanged {
+                cause: ObjectCause::Downgrade,
+                ..
+            }
+        )),
+        1,
+        "one net change per toilet per tick"
+    );
+    for seed in 0..8u64 {
+        let (seeded, _) = step(&world, &intents, seed, &cfg);
+        assert_eq!(
+            toilet_at(&seeded, TOILET),
+            (3, 6),
+            "the net change cannot depend on the shuffle order (seed {seed})"
+        );
+    }
+}
+
+#[test]
+fn level_five_upgrade_is_rejected() {
+    let cfg = Config::default();
+    let mut world = build(ARENA);
+    world = claim(&world, &cfg, 1, LEVEL_5);
+    place(&mut world, 1, NORTH);
+    set_toilet(&mut world, TOILET, 5, 0);
+    assert_eq!(world.agents[&1].level, 5, "the agent is high enough");
+
+    let (next, events) = run(&world, &[upgrade_intent(1, TOILET)], 1, &cfg);
+    assert!(next.agents[&1].action.is_none(), "no upgrade was started");
+    let reason = failure_reason(&events, 1);
+    assert!(reason.contains("already level 5"), "{reason}");
+    assert_eq!(toilet_at(&next, TOILET), (5, 0), "the toilet is untouched");
+    assert_eq!(
+        count(&events, |kind| matches!(
+            kind,
+            EventKind::ObjectChanged { .. }
+        )),
+        0
     );
 }
 

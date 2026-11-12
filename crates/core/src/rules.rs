@@ -93,7 +93,23 @@ pub fn validate_attack(
     world: &WorldState,
     agent: AgentId,
     target: Pos,
+    cfg: &Config,
+) -> Result<AgentId, String> {
+    validate_attack_at(world, agent, target, cfg, world.tick)
+}
+
+/// Design §5: an attack needs an unstunned agent in one of the four adjacent
+/// cells, no stun on the attacker and no cooldown. Returns the target's id.
+///
+/// `at_tick` is the tick the command will settle in. A command submitted
+/// between ticks settles on `world.tick + 1`, so the server checks with that
+/// tick: a cooldown or stun that ends exactly then is already over.
+pub fn validate_attack_at(
+    world: &WorldState,
+    agent: AgentId,
+    target: Pos,
     _cfg: &Config,
+    at_tick: Tick,
 ) -> Result<AgentId, String> {
     let Some(me) = world.agents.get(&agent) else {
         return Err("you are not in the world".to_string());
@@ -103,16 +119,16 @@ pub fn validate_attack(
     };
     let adjacent = pos.manhattan(target) == 1;
     let target_agent = match world.agent_at(target) {
-        Some(other) if adjacent && !crate::state::is_stunned(other, world.tick) => Some(other.id),
+        Some(other) if adjacent && !crate::state::is_stunned(other, at_tick) => Some(other.id),
         _ => None,
     };
-    if crate::state::is_stunned(me, world.tick) {
+    if crate::state::is_stunned(me, at_tick) {
         return Err(format!(
             "you are stunned until tick {}; you cannot attack",
             me.stun_until
         ));
     }
-    if world.tick < me.attack_cooldown_until {
+    if at_tick < me.attack_cooldown_until {
         return Err(format!(
             "your attack is on cooldown until tick {}",
             me.attack_cooldown_until
@@ -121,16 +137,27 @@ pub fn validate_attack(
     target_agent.ok_or_else(|| NO_TARGET.to_string())
 }
 
-/// Design §5: a defence covers one adjacent cell for the current tick. It needs
-/// no cooldown check for the *target* cell, only the agent's own cooldown.
+/// Design §5: a defence covers one adjacent cell for one tick. It needs no
+/// cooldown check for the *target* cell, only the agent's own cooldown.
 pub fn validate_defend(world: &WorldState, agent: AgentId, target: Pos) -> Result<(), String> {
+    validate_defend_at(world, agent, target, world.tick)
+}
+
+/// The tick-parameterised form of [`validate_defend`]; see [`validate_attack_at`]
+/// for the meaning of `at_tick`.
+pub fn validate_defend_at(
+    world: &WorldState,
+    agent: AgentId,
+    target: Pos,
+    at_tick: Tick,
+) -> Result<(), String> {
     let Some(me) = world.agents.get(&agent) else {
         return Err("you are not in the world".to_string());
     };
     let Some(pos) = me.pos else {
         return Err("you are not in the world".to_string());
     };
-    if crate::state::is_stunned(me, world.tick) {
+    if crate::state::is_stunned(me, at_tick) {
         return Err(format!(
             "you are stunned until tick {}; you cannot defend",
             me.stun_until
@@ -145,7 +172,7 @@ pub fn validate_defend(world: &WorldState, agent: AgentId, target: Pos) -> Resul
     if pos.manhattan(target) != 1 {
         return Err(OUT_OF_REACH.to_string());
     }
-    if world.tick < me.defend_cooldown_until {
+    if at_tick < me.defend_cooldown_until {
         return Err(format!(
             "your defend is on cooldown until tick {}",
             me.defend_cooldown_until

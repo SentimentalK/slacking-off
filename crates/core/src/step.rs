@@ -198,8 +198,9 @@ pub fn join(
     Ok((next, JoinOutcome::Waiting { ahead }, log.into_vec()))
 }
 
-/// Settles one tick: the queue moves up, then every agent in seeded order
-/// applies its intents and advances one step of its final action.
+/// Settles one tick: last tick's defence lapses, the queue moves up, then every
+/// agent in seeded order applies its last intent and advances one step of its
+/// final action.
 pub fn step(
     world: &WorldState,
     intents: &[Intent],
@@ -210,6 +211,9 @@ pub fn step(
     next.tick += 1;
     let mut log = EventLog::new(next.tick, seed);
     log.push(EventKind::TickSettled);
+
+    // Last tick's defence lapses before anything else settles.
+    expire_defends(&mut next, &mut log);
 
     admit_from_queue(&mut next, &mut log, cfg, seed);
 
@@ -236,8 +240,6 @@ pub fn step(
     warn_deadlines(&mut next, &mut log, cfg);
     finish_lingering(&mut next, &mut log);
     auto_open_doors(&mut next, &mut log);
-    // A defence lasts this tick only: no snapshot ever carries one.
-    finish_defends(&mut next, &mut log);
 
     mark_all_seen(&mut next, cfg);
 
@@ -245,7 +247,9 @@ pub fn step(
 }
 
 /// Settles every defence intent of this tick before any agent acts, so a
-/// defence is in force for the whole tick whatever the shuffle order.
+/// defence is in force for the whole tick whatever the shuffle order. Only an
+/// agent whose *last* intent is a defence defends; that is also the only place
+/// a defence is rejected.
 ///
 /// A defence is a posture, not an action: it cancels whatever the agent was
 /// doing (except a `use`, which is only paused) and stores itself on the agent.
@@ -257,14 +261,15 @@ fn collect_defends(
     cfg: &Config,
 ) {
     for agent_id in order {
+        // Only the agent's last intent counts (design §3); a defence followed
+        // by another command is not a defence at all.
         let Some(target) = intents
             .iter()
-            .filter(|intent| intent.agent == *agent_id)
-            .filter_map(|intent| match &intent.kind {
+            .rfind(|intent| intent.agent == *agent_id)
+            .and_then(|intent| match &intent.kind {
                 IntentKind::Defend { target } => Some(*target),
                 _ => None,
             })
-            .next_back()
         else {
             continue;
         };
@@ -359,9 +364,10 @@ fn collect_defends(
     }
 }
 
-/// A defence never outlives its tick, so a snapshot taken at a tick boundary
-/// never contains one.
-fn finish_defends(world: &mut WorldState, log: &mut EventLog) {
+/// A defence covers exactly the tick it was settled in. It is cleared at the
+/// start of the *next* tick, so it stays observable between ticks (`loo status`
+/// reads `Agent.defending`) and never influences a settle it does not belong to.
+fn expire_defends(world: &mut WorldState, log: &mut EventLog) {
     for agent in world.agents.values_mut() {
         if agent.defending.take().is_some() {
             log.push(EventKind::DefendEnded {
@@ -469,16 +475,19 @@ fn assign_need(
     })
 }
 
-/// Turns the tick's intents for one agent into its final action. A cancel with
-/// no running action is a no-op; cancel with one ends it as `Cancelled`.
+/// Turns the agent's last intent of the tick into its final action. A second
+/// intent in the same window replaces the first (design §3), so only the last
+/// one is read. A cancel with no running action is a no-op; cancel with one ends
+/// it as `Cancelled`.
 ///
-/// A stunned agent keeps whatever it already had: every non-cancel intent is
-/// answered with `ActionRejected` and changes nothing.
+/// A stunned agent keeps whatever it already had: its intent is answered with
+/// `ActionRejected` and changes nothing.
 ///
 /// A `use` that cannot start ends immediately as `ActionFinished { Failed }`
 /// and puts the agent back to no action, so it never enters the use phase.
 ///
-/// `Defend` never reaches this function: `collect_defends` already settled it.
+/// `Defend` never reaches this function: `collect_defends` already settled it,
+/// rejection included.
 fn apply_intents(
     world: &mut WorldState,
     log: &mut EventLog,
@@ -500,98 +509,107 @@ fn apply_intents(
         .agents
         .get(&agent_id)
         .is_some_and(|agent| is_stunned(agent, world.tick));
-    for intent in intents.iter().filter(|intent| intent.agent == agent_id) {
-        if stunned && !matches!(intent.kind, IntentKind::Cancel) {
-            log.push(EventKind::ActionRejected {
-                session,
-                agent: agent_id,
-                nick: nick.clone(),
-                at: intent_target(&intent.kind).unwrap_or(pos),
-                action: intent_action_name(&intent.kind).to_string(),
-                reason: format!("you are stunned until tick {stun_until}; no action was taken"),
-            });
-            continue;
-        }
-        match &intent.kind {
-            IntentKind::Cancel => {
-                let Some(action) = world.agents.get(&agent_id).and_then(|a| a.action.clone())
-                else {
-                    continue;
-                };
-                if matches!(action, Action::Use { .. }) {
-                    interrupt_use(
-                        world,
-                        log,
-                        agent_id,
-                        session,
-                        nick.clone(),
-                        Some(pos),
-                        "cancelled".to_string(),
-                        cfg,
-                    );
-                } else {
-                    end_action(
-                        world,
-                        log,
-                        agent_id,
-                        session,
-                        nick.clone(),
-                        pos,
-                        None,
-                        ActionOutcome::Cancelled,
-                        &action,
-                    );
-                }
-            }
-            IntentKind::Defend { .. } => {}
-            IntentKind::Use { .. } => {
-                start_use(world, log, agent_id, session, nick.clone(), pos, cfg);
-            }
-            IntentKind::Attack { target } => {
-                start_attack(
+    // Design §3: one intent per agent per window; a later one replaces the
+    // earlier. The agent's last submitted intent is the only one that counts.
+    let Some(intent) = intents.iter().rfind(|intent| intent.agent == agent_id) else {
+        return;
+    };
+    // A defence is a whole-tick posture, settled by `collect_defends` before
+    // anyone acts — including its own rejection. Skipping it here keeps a
+    // stunned defender from being rejected twice.
+    if matches!(intent.kind, IntentKind::Defend { .. }) {
+        return;
+    }
+    if stunned && !matches!(intent.kind, IntentKind::Cancel) {
+        log.push(EventKind::ActionRejected {
+            session,
+            agent: agent_id,
+            nick,
+            at: intent_target(&intent.kind).unwrap_or(pos),
+            action: intent_action_name(&intent.kind).to_string(),
+            reason: format!("you are stunned until tick {stun_until}; no action was taken"),
+        });
+        return;
+    }
+    match &intent.kind {
+        IntentKind::Cancel => {
+            let Some(action) = world.agents.get(&agent_id).and_then(|a| a.action.clone()) else {
+                return;
+            };
+            if matches!(action, Action::Use { .. }) {
+                interrupt_use(
+                    world,
+                    log,
+                    agent_id,
+                    session,
+                    nick.clone(),
+                    Some(pos),
+                    "cancelled".to_string(),
+                    cfg,
+                );
+            } else {
+                end_action(
                     world,
                     log,
                     agent_id,
                     session,
                     nick.clone(),
                     pos,
-                    *target,
+                    None,
+                    ActionOutcome::Cancelled,
+                    &action,
+                );
+            }
+        }
+        // Handled by `collect_defends`; kept for an exhaustive match.
+        IntentKind::Defend { .. } => {}
+        IntentKind::Use { .. } => {
+            start_use(world, log, agent_id, session, nick.clone(), pos, cfg);
+        }
+        IntentKind::Attack { target } => {
+            start_attack(
+                world,
+                log,
+                agent_id,
+                session,
+                nick.clone(),
+                pos,
+                *target,
+                cfg,
+            );
+        }
+        _ => {
+            let new_action = action_for(&intent.kind);
+            let old = world.agents.get(&agent_id).and_then(|a| a.action.clone());
+            if matches!(old, Some(Action::Use { .. })) {
+                interrupt_use(
+                    world,
+                    log,
+                    agent_id,
+                    session,
+                    nick.clone(),
+                    Some(pos),
+                    format!("replaced by {}", new_action.label()),
                     cfg,
                 );
             }
-            _ => {
-                let new_action = action_for(&intent.kind);
-                let old = world.agents.get(&agent_id).and_then(|a| a.action.clone());
-                if matches!(old, Some(Action::Use { .. })) {
-                    interrupt_use(
-                        world,
-                        log,
-                        agent_id,
-                        session,
-                        nick.clone(),
-                        Some(pos),
-                        format!("replaced by {}", new_action.label()),
-                        cfg,
-                    );
-                }
-                match old {
-                    Some(from) => log.push(EventKind::ActionReplaced {
-                        session,
-                        agent: agent_id,
-                        nick: nick.clone(),
-                        from,
-                        to: new_action.clone(),
-                    }),
-                    None => log.push(EventKind::ActionStarted {
-                        session,
-                        agent: agent_id,
-                        nick: nick.clone(),
-                        action: new_action.clone(),
-                    }),
-                }
-                if let Some(agent) = world.agents.get_mut(&agent_id) {
-                    agent.action = Some(new_action);
-                }
+            match old {
+                Some(from) => log.push(EventKind::ActionReplaced {
+                    session,
+                    agent: agent_id,
+                    nick: nick.clone(),
+                    from,
+                    to: new_action.clone(),
+                }),
+                None => log.push(EventKind::ActionStarted {
+                    session,
+                    agent: agent_id,
+                    nick: nick.clone(),
+                    action: new_action.clone(),
+                }),
+            }
+            if let Some(agent) = world.agents.get_mut(&agent_id) {
+                agent.action = Some(new_action);
             }
         }
     }
@@ -1264,9 +1282,13 @@ fn apply_toilet_work(
         let mut level = start_level;
         let mut progress = start_progress + net;
         if net > 0 {
-            while level < 5 && progress >= cfg.build.upgrade_work[usize::from(level) - 1] as i32 {
-                progress -= cfg.build.upgrade_work[usize::from(level) - 1] as i32;
+            // Design §4.7: reaching the work total lifts the toilet one level
+            // and the new level starts at zero; the excess never carries over.
+            // One level per tick is enough: the largest net is +5 and the
+            // smallest total is 6.
+            if level < 5 && progress >= cfg.build.upgrade_work[usize::from(level) - 1] as i32 {
                 level += 1;
+                progress = 0;
             }
             if level == 5 {
                 progress = 0;

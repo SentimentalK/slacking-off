@@ -4,9 +4,9 @@
 //! event.
 
 use loo_core::{
-    diff_worlds, is_stunned, join, map, restore, step, validate_attack, validate_defend, Action,
-    ActionOutcome, Config, Event, EventKind, Intent, IntentKind, JoinCommand, Object,
-    SessionStatus, SiteKind, Snapshot, WorldState,
+    diff_worlds, is_stunned, join, map, restore, step, validate_attack, validate_attack_at,
+    validate_defend, validate_defend_at, Action, ActionOutcome, Config, Event, EventKind, Intent,
+    IntentKind, JoinCommand, Object, SessionStatus, SiteKind, Snapshot, WorldState,
 };
 use loo_proto::{Dir, Need, Nick, Pos};
 
@@ -755,13 +755,15 @@ fn defend_tick_pauses_use_without_interrupting_it() {
         count(&e2, |kind| matches!(kind, EventKind::DefendStarted { .. })),
         1
     );
-    assert!(
-        w2.agents[&1].defending.is_none(),
-        "a defence never survives its tick"
+    assert_eq!(
+        w2.agents[&1].defending,
+        Some(Pos::new(3, 0)),
+        "the defence stays observable until the next tick starts"
     );
     assert_eq!(
         count(&e2, |kind| matches!(kind, EventKind::DefendEnded { .. })),
-        1
+        0,
+        "nothing ends a defence inside its own tick"
     );
 
     let (w3, e3) = step(&w2, &[], 4, &cfg);
@@ -770,6 +772,13 @@ fn defend_tick_pauses_use_without_interrupting_it() {
         count(&e3, |kind| matches!(kind, EventKind::UseProgressed { .. })),
         1
     );
+    assert_eq!(
+        w3.agents[&1].defending, None,
+        "the next tick expires the defence"
+    );
+    let ended = find_event(&e3, |kind| matches!(kind, EventKind::DefendEnded { .. }));
+    assert_eq!(ended.text(), "dev-1 stopped defending");
+    assert_eq!(ended.at(), None);
 }
 
 #[test]
@@ -799,11 +808,17 @@ fn defend_cooldown_two_ticks() {
         started.text(),
         "dev-1 defends (2,0) this tick; defend cooldown until tick 4"
     );
-    let ended = find_event(&e1, |kind| matches!(kind, EventKind::DefendEnded { .. }));
-    assert_eq!(ended.text(), "dev-1 stopped defending");
-    assert_eq!(ended.at(), None);
+    assert_eq!(
+        count(&e1, |kind| matches!(kind, EventKind::DefendEnded { .. })),
+        0,
+        "the defence lapses at the start of the next tick, not inside its own"
+    );
 
     let (w2, e2) = step(&w1, &[defend_intent(1, target)], 8, &cfg);
+    let ended = find_event(&e2, |kind| matches!(kind, EventKind::DefendEnded { .. }));
+    assert_eq!(ended.text(), "dev-1 stopped defending");
+    assert_eq!(ended.at(), None);
+    assert_eq!(w2.agents[&1].defending, None);
     assert_eq!(
         count(&e2, |kind| matches!(kind, EventKind::DefendStarted { .. })),
         0,
@@ -1069,7 +1084,12 @@ fn restore_keeps_windup_stun_immunity_and_cooldowns() {
     assert_eq!(restored.agents[&2].immunity_until, 11);
     assert_eq!(restored.agents[&1].attack_cooldown_until, 7);
     assert_eq!(restored.agents[&3].defend_cooldown_until, 8);
-    assert!(restored.agents[&3].defending.is_none());
+    assert_eq!(
+        restored.agents[&3].defending,
+        Some(B_POS),
+        "a defence stays observable until the next tick starts"
+    );
+    assert_eq!(after.agents[&3].defending, Some(B_POS));
 
     // The new serde shapes survive a round trip, including the action.
     for action in [
@@ -1281,4 +1301,137 @@ fn stunned_cancel_still_stops_a_use() {
         0,
         "a cancel is never rejected for a stun"
     );
+}
+
+#[test]
+fn validation_at_tick_uses_the_settlement_tick() {
+    let cfg = Config::default();
+    let mut world = build(ARENA);
+    world = claim(&world, &cfg, 1, 0);
+    world = claim(&world, &cfg, 2, 0);
+    place(&mut world, 1, A_POS);
+    place(&mut world, 2, NORTH_OF_A);
+
+    // An attack started on tick 1 is off cooldown from tick 7.
+    let (w1, _) = step(&world, &[attack_intent(1, NORTH_OF_A)], 6, &cfg);
+    assert_eq!(w1.agents[&1].attack_cooldown_until, 7);
+    assert!(
+        validate_attack_at(&w1, 1, NORTH_OF_A, &cfg, 7).is_ok(),
+        "the cooldown is over on its own tick, so a command for tick 7 is legal"
+    );
+    let err =
+        validate_attack_at(&w1, 1, NORTH_OF_A, &cfg, 6).expect_err("tick 6 is one tick too early");
+    assert!(
+        err.contains("cooldown") && err.contains("until tick 7"),
+        "{err}"
+    );
+    assert!(
+        validate_attack(&w1, 1, NORTH_OF_A, &cfg).is_err(),
+        "the wrapper asks about the current tick and is still on cooldown"
+    );
+
+    // A defence settled on tick 1 is off cooldown from tick 4.
+    let (d1, _) = step(&world, &[defend_intent(2, A_POS)], 6, &cfg);
+    assert_eq!(d1.agents[&2].defend_cooldown_until, 4);
+    assert!(
+        validate_defend_at(&d1, 2, A_POS, 4).is_ok(),
+        "the defend cooldown is over on tick 4"
+    );
+    let err = validate_defend_at(&d1, 2, A_POS, 3).expect_err("tick 3 is one tick too early");
+    assert!(
+        err.contains("cooldown") && err.contains("until tick 4"),
+        "{err}"
+    );
+    assert!(validate_defend(&d1, 2, A_POS).is_err());
+}
+
+#[test]
+fn last_intent_wins_and_defend_is_not_double_rejected() {
+    let cfg = Config::default();
+    let mut world = build(ARENA);
+    world = claim(&world, &cfg, 1, 0);
+    place(&mut world, 1, A_POS);
+
+    // [Move, Defend]: the defence is the last word, so the move never runs.
+    let (w1, e1) = step(
+        &world,
+        &[move_intent(1, &[Dir::E]), defend_intent(1, NORTH_OF_A)],
+        4,
+        &cfg,
+    );
+    assert_eq!(pos_of(&w1, 1), A_POS, "the overwritten move never ran");
+    assert_eq!(
+        count(&e1, |kind| matches!(kind, EventKind::AgentMoved { .. })),
+        0
+    );
+    assert_eq!(
+        count(&e1, |kind| matches!(kind, EventKind::DefendStarted { .. })),
+        1
+    );
+    assert_eq!(w1.agents[&1].defending, Some(NORTH_OF_A));
+
+    // [Defend, Move]: the move is the last word, so there is no defence.
+    let (w2, e2) = step(
+        &w1,
+        &[defend_intent(1, NORTH_OF_A), move_intent(1, &[Dir::E])],
+        4,
+        &cfg,
+    );
+    assert_eq!(
+        count(&e2, |kind| matches!(kind, EventKind::DefendStarted { .. })),
+        0,
+        "a later move replaces the defence"
+    );
+    assert_eq!(pos_of(&w2, 1), Pos::new(3, 1), "the move ran one cell east");
+    assert_eq!(w2.agents[&1].defending, None);
+
+    // A stunned defender is rejected once: by the defence pass, not twice.
+    let mut stunned = build(ARENA);
+    stunned = claim(&stunned, &cfg, 1, 0);
+    place(&mut stunned, 1, A_POS);
+    stunned.agents.get_mut(&1).expect("agent").stun_until = 5;
+    let (w3, e3) = step(&stunned, &[defend_intent(1, NORTH_OF_A)], 4, &cfg);
+    assert_eq!(
+        count(&e3, |kind| matches!(kind, EventKind::ActionRejected { .. })),
+        1,
+        "exactly one rejection: {e3:?}"
+    );
+    assert!(rejection_reason(&e3, 1).contains("stunned"));
+    assert_eq!(w3.agents[&1].defending, None);
+}
+
+#[test]
+fn defending_is_visible_between_ticks_and_cleared_on_the_next() {
+    let cfg = Config::default();
+    let mut world = build(ARENA);
+    world = claim(&world, &cfg, 1, 0);
+    place(&mut world, 1, A_POS);
+
+    let (w1, e1) = step(&world, &[defend_intent(1, NORTH_OF_A)], 1, &cfg);
+    assert_eq!(
+        w1.agents[&1].defending,
+        Some(NORTH_OF_A),
+        "a status read between ticks sees the shield"
+    );
+    assert_eq!(
+        count(&e1, |kind| matches!(kind, EventKind::DefendEnded { .. })),
+        0
+    );
+
+    let snapshot = Snapshot::new(w1.clone());
+    let (w2, e2) = step(&w1, &[], 1, &cfg);
+    assert_eq!(w2.agents[&1].defending, None, "the next tick clears it");
+    assert_eq!(
+        count(&e2, |kind| matches!(kind, EventKind::DefendEnded { .. })),
+        1
+    );
+    assert!(matches!(e2[0].kind, EventKind::TickSettled));
+    assert!(
+        matches!(e2[1].kind, EventKind::DefendEnded { .. }),
+        "the lapse is the first thing the tick does: {e2:?}"
+    );
+
+    let restored = restore(&snapshot, &e2, &cfg).expect("the lapse restores");
+    let diffs = diff_worlds(&w2, &restored);
+    assert!(diffs.is_empty(), "defence restore differs: {diffs:?}");
 }
