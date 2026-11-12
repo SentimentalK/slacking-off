@@ -95,6 +95,14 @@ pub enum Action {
         target: Pos,
         label: String,
     },
+    Upgrade {
+        target: Pos,
+        label: String,
+    },
+    Downgrade {
+        target: Pos,
+        label: String,
+    },
 }
 
 impl Action {
@@ -104,7 +112,9 @@ impl Action {
             | Action::Build { label, .. }
             | Action::Demolish { label, .. }
             | Action::Door { label, .. }
-            | Action::Use { label, .. } => label,
+            | Action::Use { label, .. }
+            | Action::Upgrade { label, .. }
+            | Action::Downgrade { label, .. } => label,
         }
     }
 
@@ -115,7 +125,9 @@ impl Action {
             Action::Build { .. }
             | Action::Demolish { .. }
             | Action::Door { .. }
-            | Action::Use { .. } => 0,
+            | Action::Use { .. }
+            | Action::Upgrade { .. }
+            | Action::Downgrade { .. } => 0,
         }
     }
 }
@@ -129,6 +141,17 @@ pub struct Agent {
     /// Tick until which the agent is stunned; `0` means not stunned. A stunned
     /// agent can be shoved out of its cell by a mover.
     pub stun_until: Tick,
+    /// Cumulative score over every session of this agent (design §4.8).
+    #[serde(default)]
+    pub score_total: u32,
+    /// Level derived from `score_total` (design §4.8).
+    #[serde(default = "default_level")]
+    pub level: u8,
+}
+
+/// Serde default for `Agent::level`; old snapshots predate levels.
+fn default_level() -> u8 {
+    1
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

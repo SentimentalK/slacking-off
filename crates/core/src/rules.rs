@@ -6,7 +6,7 @@
 
 use crate::config::Config;
 use crate::map::Terrain;
-use crate::state::{Object, Session, SiteKind, WorldState};
+use crate::state::{Action, Object, Session, SiteKind, WorldState};
 use loo_proto::{AgentId, Dir, Need, Pos, SessionOutcome, Tick};
 
 const OUT_OF_REACH: &str =
@@ -15,6 +15,19 @@ const NO_BUILD_AREA: &str = "that cell is in a no-build area";
 const NO_DOOR: &str = "there is no door there";
 const DOOR_PERMISSION: &str =
     "only an agent on an adjacent toilet cell can open or close this door";
+/// Design §4.7: at most this many agents may work one toilet at a time.
+const MAX_TOILET_WORKERS: usize = 5;
+
+/// Design §4.8: the highest threshold (from level 5 down to 1) that is at most
+/// `score_total`. Score 0 is level 1.
+pub fn agent_level(score_total: u32, cfg: &Config) -> u8 {
+    for level in (1..=5u8).rev() {
+        if cfg.agent.level_thresholds[usize::from(level) - 1] <= score_total {
+            return level;
+        }
+    }
+    1
+}
 
 /// The agent's cell; shared by every validator.
 fn acting_pos(world: &WorldState, agent: AgentId, target: Pos) -> Result<Pos, String> {
@@ -68,6 +81,89 @@ pub fn validate_demolish(world: &WorldState, agent: AgentId, target: Pos) -> Res
     acting_pos(world, agent, target)?;
     if world.object_at(target).is_none() {
         return Err("there is nothing to demolish there".to_string());
+    }
+    Ok(())
+}
+
+/// Agents other than `agent` already working `target`, whatever the verb. The
+/// agent issuing the command counts towards the same cap, so five others are
+/// already the maximum.
+fn other_workers(world: &WorldState, agent: AgentId, target: Pos) -> usize {
+    world
+        .agents
+        .values()
+        .filter(|other| {
+            other.id != agent
+                && matches!(
+                    other.action.as_ref(),
+                    Some(
+                        Action::Upgrade { target: at, .. }
+                            | Action::Downgrade { target: at, .. }
+                            | Action::Demolish { target: at, .. }
+                    ) if *at == target
+                )
+        })
+        .count()
+}
+
+fn toilet_state_for(
+    world: &WorldState,
+    agent: AgentId,
+    target: Pos,
+    verb: &str,
+) -> Result<(u8, i32), String> {
+    acting_pos(world, agent, target)?;
+    match world.object_at(target) {
+        Some(Object::Toilet { level, progress }) => Ok((level, progress)),
+        _ => Err(format!(
+            "there is no toilet there; {verb} only works on a toilet"
+        )),
+    }
+}
+
+/// Design §4.7: an upgrade needs the toilet below level 5, an agent at least one
+/// level above the toilet's next level, and a free worker slot.
+pub fn validate_upgrade(
+    world: &WorldState,
+    agent: AgentId,
+    target: Pos,
+    _cfg: &Config,
+) -> Result<(), String> {
+    let (level, _) = toilet_state_for(world, agent, target, "upgrade")?;
+    if level >= 5 {
+        return Err(
+            "this toilet is already level 5 (the highest); it cannot be upgraded".to_string(),
+        );
+    }
+    let wanted = level + 1;
+    let me = world.agents.get(&agent).map_or(1, |entry| entry.level);
+    if me < wanted {
+        return Err(format!(
+            "your agent level is {me}; upgrading to level {wanted} needs level {wanted}; this tick's +1 was not counted"
+        ));
+    }
+    let workers = other_workers(world, agent, target);
+    if workers >= MAX_TOILET_WORKERS {
+        return Err(format!(
+            "this toilet already has {workers} workers (the maximum); wait for one to finish"
+        ));
+    }
+    Ok(())
+}
+
+/// Downgrading has no level requirement. A level-1 toilet with no progress left
+/// is a demolition target instead; one that still carries progress from an
+/// earlier level keeps its downgrade running until the progress reaches zero.
+pub fn validate_downgrade(world: &WorldState, agent: AgentId, target: Pos) -> Result<(), String> {
+    let (level, progress) = toilet_state_for(world, agent, target, "downgrade")?;
+    if level == 1 && progress == 0 {
+        return Err("this toilet is already level 1; use demolish to remove it".to_string());
+    }
+    let workers = other_workers(world, agent, target);
+    if workers >= MAX_TOILET_WORKERS {
+        return Err(format!(
+            "this toilet already has {workers} workers (the maximum); wait for one to finish"
+        ));
     }
     Ok(())
 }

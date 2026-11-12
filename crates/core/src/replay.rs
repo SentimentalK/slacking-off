@@ -8,6 +8,7 @@
 use crate::config::Config;
 use crate::event::{Event, EventKind};
 use crate::map::Terrain;
+use crate::rules::agent_level;
 use crate::state::{Action, Agent, Object, Session, SessionStatus, WorldState};
 use crate::step::{mark_all_seen, step, Intent};
 use loo_proto::{AgentId, Nick, Pos, SessionId, SessionOutcome, Tick};
@@ -165,7 +166,7 @@ pub fn restore(
                 ),
             ));
         }
-        apply_event(&mut world, event)?;
+        apply_event(&mut world, event, cfg)?;
         expected_seq += 1;
     }
 
@@ -173,7 +174,7 @@ pub fn restore(
     Ok(world)
 }
 
-fn apply_event(world: &mut WorldState, event: &Event) -> Result<(), ReplayError> {
+fn apply_event(world: &mut WorldState, event: &Event, cfg: &Config) -> Result<(), ReplayError> {
     match &event.kind {
         EventKind::TickSettled => {}
         EventKind::Joined {
@@ -181,6 +182,7 @@ fn apply_event(world: &mut WorldState, event: &Event) -> Result<(), ReplayError>
             agent,
             nick,
             at,
+            score_total,
         } => {
             if world.agents.contains_key(agent) {
                 return Err(fail(event, format!("agent {agent} already exists")));
@@ -198,6 +200,8 @@ fn apply_event(world: &mut WorldState, event: &Event) -> Result<(), ReplayError>
                     pos: *at,
                     action: None,
                     stun_until: 0,
+                    score_total: *score_total,
+                    level: agent_level(*score_total, cfg),
                 },
             );
             world.sessions.insert(
@@ -386,6 +390,8 @@ fn apply_event(world: &mut WorldState, event: &Event) -> Result<(), ReplayError>
                 return Err(fail(event, format!("agent {agent} does not exist")));
             };
             entry.action = None;
+            entry.score_total = entry.score_total.saturating_add(*score);
+            entry.level = agent_level(entry.score_total, cfg);
         }
         EventKind::UseFailed {
             session, outcome, ..

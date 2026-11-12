@@ -68,6 +68,9 @@ pub enum EventKind {
         agent: AgentId,
         nick: String,
         at: Option<Pos>,
+        /// Cumulative score this agent carries in, which sets its level.
+        #[serde(default)]
+        score_total: u32,
     },
     /// A queued session got the entrance cell.
     EnteredWorld {
@@ -224,6 +227,8 @@ pub enum ObjectCause {
     DoorOpened,
     DoorClosed,
     AutoOpened,
+    Upgrade,
+    Downgrade,
 }
 
 impl EventKind {
@@ -433,6 +438,28 @@ impl Event {
                 ObjectCause::AutoOpened => format!(
                     "the door at {pos} closed with nobody on its toilet and opened automatically"
                 ),
+                ObjectCause::Upgrade | ObjectCause::Downgrade => {
+                    let verb = if *cause == ObjectCause::Upgrade {
+                        "upgraded"
+                    } else {
+                        "downgraded"
+                    };
+                    match object {
+                        Some(Object::Toilet { level, progress }) => format!(
+                            "{} {verb} the toilet at {pos} to level {level} (progress {progress})",
+                            nick.as_deref().unwrap_or("someone")
+                        ),
+                        Some(other) => format!(
+                            "{} {verb} the {} at {pos}",
+                            nick.as_deref().unwrap_or("someone"),
+                            object_kind_name(*other)
+                        ),
+                        None => format!(
+                            "{} {verb} the object at {pos}",
+                            nick.as_deref().unwrap_or("someone")
+                        ),
+                    }
+                }
             },
             EventKind::NeedAssigned {
                 nick,

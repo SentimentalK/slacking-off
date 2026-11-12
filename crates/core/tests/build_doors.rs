@@ -30,6 +30,7 @@ fn join_agent(world: &WorldState, cfg: &Config, agent: u64, name: &str) -> World
             agent,
             nick: nick(name),
             session: agent * 10,
+            score_total: 0,
         },
         cfg,
         0,

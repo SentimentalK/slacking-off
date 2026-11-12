@@ -49,6 +49,7 @@ fn claim(world: &WorldState, cfg: &Config, agent: u64) -> (WorldState, Vec<Event
             agent,
             nick: nick(&format!("dev-{agent}")),
             session: agent * 10,
+            score_total: 0,
         },
         cfg,
         0,

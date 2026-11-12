@@ -6,18 +6,26 @@
 use crate::config::Config;
 use crate::event::{ActionOutcome, Blocker, Event, EventKind, EventLog, ObjectCause};
 use crate::rng::{shuffle, Rng};
-use crate::rules::{session_score, validate_build, validate_demolish, validate_door, validate_use};
+use crate::rules::{
+    agent_level, session_score, validate_build, validate_demolish, validate_door,
+    validate_downgrade, validate_upgrade, validate_use,
+};
 use crate::state::{Action, Agent, Object, Session, SessionStatus, SiteKind, WorldState};
 use loo_proto::{AgentId, Dir, Need, Nick, Pos, SessionId, SessionOutcome};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 /// A join request as the server understands it: one persistent agent id, one
 /// nickname, one session id per entry.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct JoinCommand {
     pub agent: AgentId,
     pub nick: Nick,
     pub session: SessionId,
+    /// Cumulative score the agent brings from earlier sessions; it picks the
+    /// agent's level at join time.
+    #[serde(default)]
+    pub score_total: u32,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -53,6 +61,8 @@ pub enum IntentKind {
     Demolish { target: Pos },
     Door { target: Pos, open: bool },
     Use { target: Pos },
+    Upgrade { target: Pos },
+    Downgrade { target: Pos },
     Cancel,
 }
 
@@ -98,6 +108,8 @@ pub fn join(
                 pos: Some(next.entrance),
                 action: None,
                 stun_until: 0,
+                score_total: cmd.score_total,
+                level: agent_level(cmd.score_total, cfg),
             },
         );
         next.sessions.insert(
@@ -122,6 +134,7 @@ pub fn join(
             agent: cmd.agent,
             nick: cmd.nick.to_string(),
             at: Some(at),
+            score_total: cmd.score_total,
         });
         if let Some(kind) = assign_need(&mut next, cmd.session, cfg, seed) {
             log.push(kind);
@@ -147,6 +160,8 @@ pub fn join(
             pos: None,
             action: None,
             stun_until: 0,
+            score_total: cmd.score_total,
+            level: agent_level(cmd.score_total, cfg),
         },
     );
     next.sessions.insert(
@@ -164,6 +179,7 @@ pub fn join(
         agent: cmd.agent,
         nick: cmd.nick.to_string(),
         at: None,
+        score_total: cmd.score_total,
     });
     Ok((next, JoinOutcome::Waiting { ahead }, log.into_vec()))
 }
@@ -190,11 +206,13 @@ pub fn step(
         .map(|(id, _)| *id)
         .collect();
     shuffle(&mut order, seed);
+    let mut toilet_work: BTreeMap<Pos, Vec<ToiletWorker>> = BTreeMap::new();
     for agent in &order {
         apply_intents(&mut next, &mut log, *agent, intents, cfg);
-        advance_action(&mut next, &mut log, *agent, cfg);
+        advance_action(&mut next, &mut log, *agent, cfg, &mut toilet_work);
     }
 
+    apply_toilet_work(&mut next, &mut log, toilet_work, cfg);
     progress_uses(&mut next, &mut log, &order, cfg);
     expire_sessions(&mut next, &mut log);
     warn_deadlines(&mut next, &mut log, cfg);
@@ -549,6 +567,14 @@ fn action_for(kind: &IntentKind) -> Action {
             target: *target,
             label: "use the toilet".to_string(),
         },
+        IntentKind::Upgrade { target } => Action::Upgrade {
+            target: *target,
+            label: format!("upgrade the toilet at {target}"),
+        },
+        IntentKind::Downgrade { target } => Action::Downgrade {
+            target: *target,
+            label: format!("downgrade the toilet at {target}"),
+        },
         IntentKind::Cancel => unreachable!("cancel never creates an action"),
     }
 }
@@ -561,8 +587,25 @@ fn kind_name(kind: SiteKind) -> &'static str {
     }
 }
 
+/// One agent's contribution to a toilet's work this tick. Toilets settle as a
+/// net change per cell, never per worker and never in shuffle order.
+struct ToiletWorker {
+    agent: AgentId,
+    session: SessionId,
+    nick: String,
+    up: bool,
+    /// The level the agent saw when it started this tick.
+    start_level: u8,
+}
+
 /// Advances whichever action the agent currently holds by one tick.
-fn advance_action(world: &mut WorldState, log: &mut EventLog, agent_id: AgentId, cfg: &Config) {
+fn advance_action(
+    world: &mut WorldState,
+    log: &mut EventLog,
+    agent_id: AgentId,
+    cfg: &Config,
+    toilet_work: &mut BTreeMap<Pos, Vec<ToiletWorker>>,
+) {
     let Some(agent) = world.agents.get(&agent_id) else {
         return;
     };
@@ -583,8 +626,175 @@ fn advance_action(world: &mut WorldState, log: &mut EventLog, agent_id: AgentId,
             demolish_tick(world, log, agent_id, session, nick, pos, &action, cfg)
         }
         Action::Door { .. } => door_tick(world, log, agent_id, session, nick, pos, &action),
+        // `Upgrade`/`Downgrade` only register work; it settles once for the
+        // whole tick in `apply_toilet_work`.
+        Action::Upgrade { .. } | Action::Downgrade { .. } => collect_toilet_work(
+            world,
+            log,
+            agent_id,
+            session,
+            nick,
+            pos,
+            &action,
+            toilet_work,
+            cfg,
+        ),
         // `Use` advances in `progress_uses`, after every action has settled.
         Action::Use { .. } => {}
+    }
+}
+
+/// Re-checks a toilet action against the live world and queues its contribution.
+/// An action that no longer validates ends on the spot and adds no work.
+#[allow(clippy::too_many_arguments)]
+fn collect_toilet_work(
+    world: &mut WorldState,
+    log: &mut EventLog,
+    agent_id: AgentId,
+    session: SessionId,
+    nick: String,
+    pos: Pos,
+    action: &Action,
+    toilet_work: &mut BTreeMap<Pos, Vec<ToiletWorker>>,
+    cfg: &Config,
+) {
+    let (target, up) = match action {
+        Action::Upgrade { target, .. } => (*target, true),
+        Action::Downgrade { target, .. } => (*target, false),
+        _ => return,
+    };
+    let checked = if up {
+        validate_upgrade(world, agent_id, target, cfg)
+    } else {
+        validate_downgrade(world, agent_id, target)
+    };
+    if let Err(reason) = checked {
+        end_action(
+            world,
+            log,
+            agent_id,
+            session,
+            nick,
+            pos,
+            None,
+            ActionOutcome::Failed { reason },
+            action,
+        );
+        return;
+    }
+    let Some(Object::Toilet { level, .. }) = world.object_at(target) else {
+        // The toilet vanished between the check and the read; nothing to do.
+        return;
+    };
+    toilet_work.entry(target).or_default().push(ToiletWorker {
+        agent: agent_id,
+        session,
+        nick,
+        up,
+        start_level: level,
+    });
+}
+
+/// Settles every toilet that had workers this tick. One net change per cell:
+/// `+1` per upgrader and `-2` per downgrader, so a mixed group cannot climb and
+/// fall at once and the result never depends on the shuffle order.
+fn apply_toilet_work(
+    world: &mut WorldState,
+    log: &mut EventLog,
+    toilet_work: BTreeMap<Pos, Vec<ToiletWorker>>,
+    cfg: &Config,
+) {
+    for (pos, workers) in toilet_work {
+        let Some(Object::Toilet {
+            level: start_level,
+            progress: start_progress,
+        }) = world.object_at(pos)
+        else {
+            continue;
+        };
+        let ups = workers.iter().filter(|worker| worker.up).count() as i32;
+        let downs = workers.len() as i32 - ups;
+        let net = ups - downs * 2;
+        let mut level = start_level;
+        let mut progress = start_progress + net;
+        if net > 0 {
+            while level < 5 && progress >= cfg.build.upgrade_work[usize::from(level) - 1] as i32 {
+                progress -= cfg.build.upgrade_work[usize::from(level) - 1] as i32;
+                level += 1;
+            }
+            if level == 5 {
+                progress = 0;
+            }
+        } else if net < 0 {
+            while progress < 0 && level > 1 {
+                level -= 1;
+                progress += cfg.build.upgrade_work[usize::from(level) - 1] as i32;
+            }
+            if level == 1 {
+                progress = progress.max(0);
+            }
+        }
+        if net != 0 && (level, progress) != (start_level, start_progress) {
+            let object = Object::Toilet { level, progress };
+            world.set_object(pos, Some(object));
+            let first = &workers[0];
+            log.push(EventKind::ObjectChanged {
+                session: Some(first.session),
+                agent: Some(first.agent),
+                nick: Some(first.nick.clone()),
+                pos,
+                object: Some(object),
+                cause: if net > 0 {
+                    ObjectCause::Upgrade
+                } else {
+                    ObjectCause::Downgrade
+                },
+            });
+        }
+        for worker in &workers {
+            // A downgrade is done once the toilet sits at level 1 with no
+            // progress left, even when the level already dropped on an earlier
+            // tick; an upgrade is done only on the tick it crosses a level.
+            let wanted = if worker.up {
+                level > worker.start_level
+            } else {
+                level <= worker.start_level
+            };
+            if progress != 0 || !wanted {
+                continue;
+            }
+            let Some(running) = world
+                .agents
+                .get(&worker.agent)
+                .and_then(|agent| agent.action.clone())
+            else {
+                continue;
+            };
+            let still_working = match &running {
+                Action::Upgrade { target, .. } if worker.up => *target == pos,
+                Action::Downgrade { target, .. } if !worker.up => *target == pos,
+                _ => false,
+            };
+            if !still_working {
+                continue;
+            }
+            let at = world
+                .agents
+                .get(&worker.agent)
+                .and_then(|agent| agent.pos)
+                .unwrap_or(pos);
+            end_action(
+                world,
+                log,
+                worker.agent,
+                worker.session,
+                worker.nick.clone(),
+                at,
+                None,
+                ActionOutcome::Completed,
+                &running,
+            );
+        }
     }
 }
 
@@ -1076,6 +1286,14 @@ fn progress_uses(world: &mut WorldState, log: &mut EventLog, order: &[AgentId], 
         let Some(session_id) = world.session_of(*agent_id).map(|entry| entry.id) else {
             continue;
         };
+        if world
+            .sessions
+            .get(&session_id)
+            .is_some_and(|entry| entry.outcome.is_some())
+        {
+            // Already scored: a finished session never adds progress or score.
+            continue;
+        }
         let tick = world.tick;
         let use_ticks = match world.sessions.get(&session_id).and_then(|entry| entry.need) {
             Some(Need::Urine) => cfg.need.urine_use_ticks,
@@ -1120,6 +1338,8 @@ fn progress_uses(world: &mut WorldState, log: &mut EventLog, order: &[AgentId], 
                 }
                 if let Some(agent) = world.agents.get_mut(agent_id) {
                     agent.action = None;
+                    agent.score_total = agent.score_total.saturating_add(score);
+                    agent.level = agent_level(agent.score_total, cfg);
                 }
                 log.push(EventKind::UseSucceeded {
                     session: session_id,

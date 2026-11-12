@@ -13,7 +13,7 @@
 //! let world = WorldState::new(def);
 //! let (world, outcome, _events) = join(
 //!     &world,
-//!     &JoinCommand { agent: 1, nick: Nick::parse("dev-1").unwrap(), session: 1 },
+//!     &JoinCommand { agent: 1, nick: Nick::parse("dev-1").unwrap(), session: 1, score_total: 0 },
 //!     &cfg,
 //!     0,
 //!     0,
@@ -40,7 +40,8 @@ pub use event::{ActionOutcome, Blocker, Event, EventKind, ObjectCause};
 pub use map::{Map, MapDef, MapError, Terrain};
 pub use replay::{diff_worlds, replay, restore, ReplayError, Snapshot, WorldDiff};
 pub use rules::{
-    session_score, validate_build, validate_demolish, validate_door, validate_use, weighted_score,
+    agent_level, session_score, validate_build, validate_demolish, validate_door,
+    validate_downgrade, validate_upgrade, validate_use, weighted_score,
 };
 pub use state::{Action, Agent, Object, Session, SessionStatus, SiteKind, WorldState};
 pub use step::{
