@@ -406,6 +406,13 @@ a:hover {
   border: 2px dashed var(--gold);
 }
 
+.legend-skip {
+  width: 18px;
+  height: 2px;
+  background: repeating-linear-gradient(90deg, var(--muted) 0 3px, transparent 3px 7px);
+  opacity: 0.7;
+}
+
 /* The live header shares one 64px row with the nav and the tick chips. */
 .status-bar .nav-link {
   padding: 0 9px;
@@ -1007,6 +1014,20 @@ a.brand {
   height: 32px;
   background: var(--fg);
   box-shadow: none;
+}
+
+/* A run of ticks with nothing in it: the reel cuts the time and shows a dash. */
+.timeline-skip {
+  position: absolute;
+  top: 21px;
+  height: 2px;
+  background: repeating-linear-gradient(
+    90deg,
+    var(--muted) 0 3px,
+    transparent 3px 7px
+  );
+  opacity: 0.55;
+  pointer-events: none;
 }
 
 .replay-timeline .timeline-labels {
@@ -1673,4 +1694,9 @@ a.brand {
   .install-actions .button {
     width: 100%;
   }
+}
+
+.replay-timeline .timeline-labels {
+  flex-wrap: wrap;
+  gap: 4px 12px;
 }

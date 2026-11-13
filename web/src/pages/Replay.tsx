@@ -14,6 +14,7 @@ import type {
   Projection,
   Terrain,
   Timeline,
+  TimelineMarker,
   WorldSummary,
 } from '../types';
 
@@ -140,11 +141,34 @@ export function Replay() {
   const world = worlds?.find((entry) => entry.id === worldId) ?? null;
   const lastTick = world?.last_tick ?? null;
 
-  // No `?tick=` in the URL: start at the end of the recording.
+  // The timeline is a highlight reel: one slot per tick that carries a marker
+  // (success / attack / demolish / defend). Quiet ticks are skipped entirely —
+  // that is what "empty needles" used to be. A world with fewer than two
+  // markers falls back to the full tick range so a lone marker is still visible.
+  const highlightTicks = useMemo(() => {
+    const ticks = new Set<number>();
+    for (const marker of timeline?.markers ?? []) ticks.add(marker.tick);
+    return [...ticks].sort((a, b) => a - b);
+  }, [timeline]);
+  const highlightReel = highlightTicks.length >= 2;
+  const lastHighlightTick =
+    highlightTicks.length > 0 ? highlightTicks[highlightTicks.length - 1] : null;
+  const markersByTick = useMemo(() => {
+    const grouped = new Map<number, TimelineMarker[]>();
+    for (const marker of timeline?.markers ?? []) {
+      const list = grouped.get(marker.tick);
+      if (list) list.push(marker);
+      else grouped.set(marker.tick, [marker]);
+    }
+    return grouped;
+  }, [timeline]);
+
+  // No `?tick=` in the URL: start at the last highlight, not at the tail of
+  // quiet ticks after it. Wait for the marker list before choosing.
   useEffect(() => {
-    if (tick >= 0 || lastTick === null) return;
-    setTick(lastTick);
-  }, [tick, lastTick]);
+    if (tick >= 0 || lastTick === null || timeline === null) return;
+    setTick(lastHighlightTick ?? lastTick);
+  }, [tick, lastTick, lastHighlightTick, timeline]);
 
   // Timeline markers for the whole recording.
   useEffect(() => {
@@ -194,25 +218,49 @@ export function Replay() {
     return () => query.removeEventListener('change', update);
   }, []);
 
-  // One tick per `tick_seconds / speed`; playback only advances the tick, the
-  // projection request effect does the loading.
+  // Each step lands on the next highlight, so a quiet stretch never blocks
+  // the reel.
+  const nextHighlight = useCallback(
+    (from: number): number | null => {
+      if (!highlightReel) {
+        return lastTick === null || from >= lastTick ? null : from + 1;
+      }
+      return highlightTicks.find((value) => value > from) ?? null;
+    },
+    [highlightReel, highlightTicks, lastTick],
+  );
+
+  const prevHighlight = useCallback(
+    (from: number): number | null => {
+      if (!highlightReel) return from > 0 ? from - 1 : null;
+      for (let index = highlightTicks.length - 1; index >= 0; index -= 1) {
+        if (highlightTicks[index] < from) return highlightTicks[index];
+      }
+      return null;
+    },
+    [highlightReel, highlightTicks],
+  );
+
+  // One highlight per `tick_seconds / speed`; playback jumps over the quiet
+  // ticks in between, so the recording plays as a highlight reel.
   useEffect(() => {
     if (!playing) return;
     if (tick < 0) return;
-    if (lastTick !== null && tick >= lastTick) {
+    const next = nextHighlight(tick);
+    if (next === null) {
       setPlaying(false);
       return;
     }
     const interval = Math.max(60, ((frame?.tick_seconds ?? 5) * 1000) / speed);
-    const timer = window.setTimeout(() => setTick((current) => current + 1), interval);
+    const timer = window.setTimeout(() => setTick(next), interval);
     return () => window.clearTimeout(timer);
-  }, [playing, tick, lastTick, speed, frame?.tick_seconds]);
+  }, [playing, tick, speed, frame?.tick_seconds, nextHighlight]);
 
-  // Playback warms the next tick so the switch is instant.
+  // Playback warms the next highlight so the switch is instant.
   useEffect(() => {
     if (!playing || !frame) return;
-    const next = frame.tick + 1;
-    if (lastTick !== null && next > lastTick) return;
+    const next = nextHighlight(frame.tick);
+    if (next === null) return;
     if (cacheRef.current.has(next)) return;
     getJSON<Projection>(`/api/projection?tick=${next}`)
       .then((projection) => {
@@ -222,7 +270,7 @@ export function Replay() {
       .catch(() => {
         // The due tick will surface the failure with the retry affordance.
       });
-  }, [playing, frame, lastTick]);
+  }, [playing, frame, nextHighlight]);
 
   useEffect(() => {
     let raf = 0;
@@ -247,6 +295,14 @@ export function Replay() {
   const track = useMemo(() => {
     const edge = lastTick ?? Math.max(tick, 1);
     const markers = timeline?.markers ?? [];
+    if (highlightReel) {
+      return {
+        from: highlightTicks[0],
+        to: highlightTicks[highlightTicks.length - 1],
+        markers,
+        slots: highlightTicks,
+      };
+    }
     const first = markers.length > 0 ? Math.min(...markers.map((marker) => marker.tick)) : null;
     const last = markers.length > 0 ? Math.max(...markers.map((marker) => marker.tick)) : null;
     let from = first ?? Math.max(0, edge - 600);
@@ -255,13 +311,34 @@ export function Replay() {
       from = Math.min(from, tick);
       to = Math.max(to, tick);
     }
-    return { from, to: Math.max(to, from + 1), markers };
-  }, [timeline, lastTick, tick]);
+    return { from, to: Math.max(to, from + 1), markers, slots: null };
+  }, [timeline, lastTick, tick, highlightReel, highlightTicks]);
 
-  /** Seek to a pointer position on the timeline; snaps to a marker within 16px. */
+  const slots = track.slots;
+  // Keep the first/last bars fully inside the rail instead of half-clipped.
+  const slotPercent = (index: number) => {
+    if (slots === null || slots.length <= 1) return 0;
+    const raw = (index / (slots.length - 1)) * 100;
+    return Math.min(99.6, Math.max(0.4, raw));
+  };
+  /** Pointer slot: the last highlight at or before the shown tick. */
+  const pointerSlot = (() => {
+    if (slots === null) return -1;
+    for (let index = slots.length - 1; index >= 0; index -= 1) {
+      if (slots[index] <= tick) return index;
+    }
+    return 0;
+  })();
+
+  /** Seek on the reel picks the nearest highlight; the fallback range is free-form. */
   const seek = (clientX: number, rect: DOMRect) => {
     const x = Math.min(rect.width, Math.max(0, clientX - rect.left));
     const ratio = rect.width > 0 ? x / rect.width : 0;
+    if (slots !== null) {
+      const index = Math.round(ratio * (slots.length - 1));
+      setTick(slots[Math.max(0, Math.min(slots.length - 1, index))]);
+      return;
+    }
     let snapped: number | null = null;
     let bestDistance = Number.POSITIVE_INFINITY;
     for (const marker of track.markers) {
@@ -452,7 +529,7 @@ export function Replay() {
         <button
           type="button"
           class="marker-track"
-          aria-label="回放时间轴：点击或拖动跳到该 tick 或最近的事件"
+          aria-label="回放时间轴：只排列有事件的 tick，点击或拖动跳到最近的高光"
           onClick={(event) => {
             // Keyboard activation has no pointer position; arrow keys step instead.
             if (event.detail === 0) return;
@@ -481,32 +558,73 @@ export function Replay() {
             if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
               event.preventDefault();
               setTick((current) => {
-                const step = event.key === 'ArrowRight' ? 1 : -1;
-                const next = Math.max(0, current + step);
-                return lastTick === null ? next : Math.min(lastTick, next);
+                const next =
+                  event.key === 'ArrowRight' ? nextHighlight(current) : prevHighlight(current);
+                return next ?? current;
               });
             }
           }}
         >
           <span class="timeline-rail" />
-          {track.markers.map((marker) => (
-            <span
-              key={`${marker.tick}:${marker.kind}`}
-              class="marker-hit"
-              style={{ left: `${((marker.tick - track.from) / span) * 100}%` }}
-              title={`TICK ${marker.tick} · ${marker.text}`}
-            >
-              <span class="marker-bar" style={{ background: MARKER_COLOR[marker.kind] }} />
-            </span>
-          ))}
+          {slots === null
+            ? track.markers.map((marker) => (
+                <span
+                  key={`${marker.tick}:${marker.kind}`}
+                  class="marker-hit"
+                  style={{ left: `${((marker.tick - track.from) / span) * 100}%` }}
+                  title={`TICK ${marker.tick} · ${marker.text}`}
+                >
+                  <span class="marker-bar" style={{ background: MARKER_COLOR[marker.kind] }} />
+                </span>
+              ))
+            : slots.map((slotTick, index) => {
+                const group = markersByTick.get(slotTick) ?? [];
+                return group.map((marker, offset) => (
+                  <span
+                    key={`${slotTick}:${marker.kind}:${offset}`}
+                    class="marker-hit"
+                    style={{
+                      left: `calc(${slotPercent(index)}% + ${(offset - (group.length - 1) / 2) * 4}px)`,
+                    }}
+                    title={`TICK ${slotTick} · ${marker.text}`}
+                  >
+                    <span class="marker-bar" style={{ background: MARKER_COLOR[marker.kind] }} />
+                  </span>
+                ));
+              })}
+          {slots === null
+            ? null
+            : slots.slice(1).map((slotTick, index) => {
+                const gap = slotTick - slots[index] - 1;
+                if (gap <= 0) return null;
+                return (
+                  <span
+                    key={`gap:${slotTick}`}
+                    class="timeline-skip"
+                    style={{
+                      left: `${slotPercent(index)}%`,
+                      width: `${slotPercent(index + 1) - slotPercent(index)}%`,
+                    }}
+                    title={`跳过 ${gap} 个空 tick`}
+                  />
+                );
+              })}
           <span
             class="timeline-pointer replay-pointer"
-            style={{ left: `${((tick - track.from) / span) * 100}%` }}
+            style={{
+              left: slots === null
+                ? `${((tick - track.from) / span) * 100}%`
+                : `${slotPercent(pointerSlot)}%`,
+            }}
           />
         </button>
         <div class="timeline-labels">
           <span>{formatNumber(track.from)}</span>
-          <span>TICK {tick >= 0 ? formatNumber(tick) : '–'}</span>
+          <span>
+            {slots === null
+              ? `TICK ${tick >= 0 ? formatNumber(tick) : '–'}`
+              : `高光 ${pointerSlot + 1}/${slots.length} · TICK ${tick >= 0 ? formatNumber(tick) : '–'}${slots[pointerSlot] === tick ? '' : '（非高光）'} · 跳过 ${formatNumber(track.to - track.from + 1 - slots.length)} tick`}
+          </span>
           <span>{formatNumber(track.to)}</span>
         </div>
         <div class="timeline-legend">
@@ -525,6 +643,10 @@ export function Replay() {
           <span class="legend-item">
             <span class="legend-mark vision" />
             选中 Agent 的视野
+          </span>
+          <span class="legend-item">
+            <span class="legend-skip" />
+            空档已裁掉
           </span>
         </div>
       </div>

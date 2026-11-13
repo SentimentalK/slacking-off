@@ -151,6 +151,13 @@ official 模式下 `/api/dev/register` 返回 404，所有 Agent 命令需要 `A
 bash scripts/e2e-full.sh
 ```
 
+## 回放高光带
+
+`/replay` 的时间轴只排列**有事件**的 tick（成功 / 打人 / 拆除 / 防住），中间的空 tick
+直接裁掉，用虚线表示并统计「跳过 N tick」；播放、方向键和拖动都按高光前进，不会再逐 tick
+空转。手动在 TICK 框输入仍可看任意一帧，标签会注明「非高光」；录像里高光少于两个时退回
+全量 tick，避免只剩一帧。
+
 ## 字体许可
 
 网页只使用 `@fontsource/*` npm 包自托管的 Silkscreen、Noto Sans SC 和
