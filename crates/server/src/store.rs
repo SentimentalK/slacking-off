@@ -1518,7 +1518,9 @@ impl Store {
                 _ => {}
             }
         }
-        for start in starts.into_keys() {
+        // `starts` maps a session to the tick it entered: the values are the
+        // start ticks, the keys are only session ids.
+        for start in starts.into_values() {
             spans.push(TimelineSpan {
                 from: start,
                 to: start.max(current_tick),

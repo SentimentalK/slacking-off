@@ -272,3 +272,76 @@ async fn the_timeline_response_carries_spans() {
         "markers stay on the wire"
     );
 }
+
+#[tokio::test]
+async fn an_open_session_starts_its_span_at_the_join_tick() {
+    let server = open("open-start", Config::default());
+    let token = register(&server, "alpha-one").await;
+    // Four empty ticks first, so the session id (1) cannot pass for its tick.
+    tick_n(&server, 4).await;
+    let join_tick = tick(&server).await;
+    assert_eq!(join_tick, 4);
+    assert!(join(&server, &token).await.ok);
+
+    assert_eq!(
+        spans(&server, 0, join_tick).await,
+        vec![TimelineSpan {
+            from: join_tick,
+            to: join_tick,
+        }],
+        "a standing session's span begins at its join tick, not at its session id"
+    );
+    assert!(
+        spans(&server, 0, join_tick - 1).await.is_empty(),
+        "the empty ticks before the join stay unreplayable"
+    );
+
+    tick_n(&server, 2).await;
+    assert_eq!(
+        spans(&server, 0, tick(&server).await).await,
+        vec![TimelineSpan {
+            from: join_tick,
+            to: join_tick + 2,
+        }],
+        "the span runs from the join tick to the current tick"
+    );
+}
+
+#[tokio::test]
+async fn an_open_session_does_not_swallow_the_empty_gap_before_it() {
+    let server = open("open-gap", Config::default());
+    let first = register(&server, "alpha-one").await;
+    assert!(join(&server, &first).await.ok);
+    tick_n(&server, 1).await;
+    leave(&server, &first).await;
+    // Ticks 1 and 2 hold nobody.
+    tick_n(&server, 2).await;
+
+    let second = register(&server, "beta-one").await;
+    let second_join = tick(&server).await;
+    assert_eq!(second_join, 3, "two empty ticks passed");
+    assert!(join(&server, &second).await.ok);
+    tick_n(&server, 2).await;
+
+    let now = tick(&server).await;
+    let spans = spans(&server, 0, now).await;
+    assert_eq!(
+        spans,
+        vec![
+            TimelineSpan { from: 0, to: 0 },
+            TimelineSpan {
+                from: second_join,
+                to: now,
+            },
+        ],
+        "the open session starts at its join tick; session id {second_join} must not set it"
+    );
+    for empty in 1..second_join {
+        assert!(
+            spans
+                .iter()
+                .all(|span| empty < span.from || empty > span.to),
+            "tick {empty} held nobody but a span covers it: {spans:?}"
+        );
+    }
+}
