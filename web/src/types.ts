@@ -158,10 +158,18 @@ export interface TimelineMarker {
   text: string;
 }
 
+/** One closed interval of replayable ticks: every tick in it holds a session. */
+export interface TimelineSpan {
+  from: Tick;
+  to: Tick;
+}
+
 export interface Timeline {
   from: Tick;
   to: Tick;
   markers: TimelineMarker[];
+  /** Closed, ascending, non-overlapping replayable intervals. */
+  spans: TimelineSpan[];
 }
 
 // --- §1 accounts -----------------------------------------------------------

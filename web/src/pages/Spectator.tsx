@@ -9,7 +9,7 @@ import { Nav } from '../components/Nav';
 import { QueueStrip } from '../components/QueueStrip';
 import { EVENT_LABEL, formatNumber } from '../labels';
 import { drawWorld } from '../render';
-import { pickReplayWindow, REPLAY_TICKS_PER_SECOND } from '../replay-source';
+import { pickReplaySpan, REPLAY_TICKS_PER_SECOND } from '../replay-source';
 import type { LeaderRow, Projection, ProjectionEvent, Terrain, Timeline } from '../types';
 
 const EVENT_LOG_LIMIT = 50;
@@ -96,15 +96,15 @@ export function Spectator() {
     startingReplay.current = true;
     getJSON<Timeline>(`/api/timeline?from=0&to=${liveTick}`)
       .then((timeline) => {
-        const window = pickReplayWindow(timeline.markers, liveTick);
-        if (!window || modeRef.current !== 'live') return;
+        const span = pickReplaySpan(timeline.spans, liveTick);
+        if (!span || modeRef.current !== 'live') return;
         replayCache.current.clear();
-        replayTick.current = window.from;
-        setReplay(window);
+        replayTick.current = span.from;
+        setReplay(span);
         modeRef.current = 'replay';
         setMode('replay');
         setSelected(null);
-        return loadReplayFrame(window.from).then((frame) => {
+        return loadReplayFrame(span.from).then((frame) => {
           if (!frame || modeRef.current !== 'replay') return;
           live.current.previous = undefined;
           live.current.projection = frame;
