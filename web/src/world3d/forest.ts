@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import type { Terrain } from '../types';
+import type { Pos, Terrain } from '../types';
 import { MG, cellKey, forEachCell, signature, wallKeys } from './grid';
 import { Instancer } from './instancer';
 import { PINE_PARTS, STUMP_PARTS, pineMatrices, place, local } from './models';
@@ -66,18 +66,47 @@ function buildPines(terrain: Terrain, worldId: number, quality: SceneCtx['qualit
   const pines: PineRec[] = [];
   const stumps: StumpRec[] = [];
 
-  const pineAt = (x: number, y: number, j: number, lo: number, span: number, wild: boolean, offset: number) => {
-    const px = x + 0.5 + (r(x, y, j * 16 + 1) - 0.5) * offset;
-    const pz = y + 0.5 + (r(x, y, j * 16 + 2) - 0.5) * offset;
+  const lane: Pos[] = [terrain.entrance];
+  forEachCell(terrain, (x, y, ch) => {
+    if (ch === ':') lane.push({ x, y });
+  });
+  const nearLane = (x: number, y: number): { dx: number; dy: number } | null => {
+    let best: { dx: number; dy: number; d: number } | null = null;
+    for (const p of lane) {
+      const d = Math.abs(x - p.x) + Math.abs(y - p.y);
+      if (d <= 2 && (!best || d < best.d)) best = { dx: x - p.x, dy: y - p.y, d };
+    }
+    return best;
+  };
+
+  const pineAt = (x: number, y: number, j: number, lo: number, span: number, px: number, pz: number) => {
     const s = lo + span * r(x, y, j * 16 + 12);
     const root = place(px, 0, pz, r(x, y, j * 16 + 3) * 2 * PI, s);
-    pines.push({ x, y, wild, mats: pineMatrices(root, (i) => r(x, y, j * 16 + 4 + i) * 2 * PI) });
+    pines.push({ x, y, wild: true, mats: pineMatrices(root, (i) => r(x, y, j * 16 + 4 + i) * 2 * PI) });
   };
 
   forEachCell(terrain, (x, y, ch) => {
     if (ch !== '~') return;
-    pineAt(x, y, 0, 0.95, 0.75, true, 0.5);
-    if (r(x, y, 13) < 0.5) pineAt(x, y, 1, 0.6, 0.3, true, 0.5);
+    const near = nearLane(x, y);
+    if (near) {
+      const len = Math.hypot(near.dx, near.dy);
+      pineAt(x, y, 0, 0.95 * 0.55, 0.75 * 0.55, x + 0.5 + (near.dx / len) * 0.3, y + 0.5 + (near.dy / len) * 0.3);
+    } else {
+      const px = x + 0.5 + (r(x, y, 1) - 0.5) * 0.5;
+      const pz = y + 0.5 + (r(x, y, 2) - 0.5) * 0.5;
+      pineAt(x, y, 0, 0.95, 0.75, px, pz);
+      if (r(x, y, 13) < 0.5) {
+        pineAt(
+          x,
+          y,
+          1,
+          0.6,
+          0.3,
+          x + 0.5 + (r(x, y, 17) - 0.5) * 0.5,
+          y + 0.5 + (r(x, y, 18) - 0.5) * 0.5,
+        );
+      }
+    }
     stumps.push({ x, y, mats: [local(x + 0.5, 0.125, y + 0.5)] });
   });
 
@@ -87,11 +116,11 @@ function buildPines(terrain: Terrain, worldId: number, quality: SceneCtx['qualit
   for (let y = -MG; y < H + MG; y++) {
     for (let x = -MG; x < W + MG; x++) {
       if (x >= 0 && x < W && y >= 0 && y < H) continue;
+      if (x < 0 && y >= ey - 3 && y <= ey + 4) continue;
       const n = whole + (r(x, y, 1) < frac ? 1 : 0);
       for (let j = 0; j < n; j++) {
         const px = x + r(x, y, j * 16 + 2);
         const pz = y + r(x, y, j * 16 + 3);
-        if (px < 0 && Math.abs(pz - (ey + 1)) < 0.75) continue;
         const s = 0.95 + r(x, y, j * 16 + 4) * 0.75;
         const root = place(px, 0, pz, r(x, y, j * 16 + 5) * 2 * PI, s);
         pines.push({ x, y, wild: false, mats: pineMatrices(root, (i) => r(x, y, j * 16 + 6 + i) * 2 * PI) });
