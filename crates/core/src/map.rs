@@ -9,7 +9,8 @@
 //! ```
 //!
 //! Characters: `#` wall, `+` closed door, `'` open door, `1`..`5` toilet of
-//! that level, `x` unfinished build site (blocks movement), `.` buildable
+//! that level, `x` unfinished build site (blocks movement), `*` pillar (a
+//! corner of a toilet's 3x3, blocks movement), `.` buildable
 //! floor, `:` no-build floor, `E` entrance (no-build floor), `q` primary queue
 //! lane, `r` overflow queue lane. Exactly one `E` is required.
 //!
@@ -228,6 +229,7 @@ pub fn parse(text: &str) -> Result<MapDef, MapError> {
                         work: 1,
                     }),
                 ),
+                '*' => (Terrain::Buildable, Some(Object::Pillar)),
                 other => {
                     return Err(MapError {
                         line: *line_no,

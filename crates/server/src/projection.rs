@@ -250,6 +250,16 @@ pub(crate) fn project_object(cfg: &Config, pos: Pos, object: Object) -> Projecti
             site: None,
             crack: false,
         },
+        Object::Pillar => ProjectionObject {
+            pos,
+            kind: ObjectKind::Pillar,
+            level: 0,
+            open: false,
+            progress: 0,
+            progress_total: 0,
+            site: None,
+            crack: false,
+        },
         Object::Site { kind, work } => {
             let (site_kind, total) = match kind {
                 SiteKind::Wall => (ObjectKind::Wall, cfg.build.wall_work),

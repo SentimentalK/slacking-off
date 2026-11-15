@@ -23,25 +23,28 @@ qE......#
 #########
 ";
 
-/// A level-1 toilet next to the entrance, with room for a second agent.
+/// A level-1 toilet with its 3x3 pillars, one row below the top wall and
+/// clear of the entrance, with room for a second agent.
 const TOILET_MAP: &str = "\
 grid
 #########
-#.1.....#
+#.*.*...#
+#..1....#
+#.*.*...#
 qE......#
 #.......#
 #########
 ";
 
 /// A level-1 toilet enclosed by walls north, west and south and an open door
-/// east; the entrance is one cell south-east of the door.
+/// east; its 3x3 corners are pillars and the entrance sits outside them.
 const ROOM_MAP: &str = "\
 grid
-#######
-#.#...#
-##1'..#
-#.#Eq.#
-#######
+########
+#*#*...#
+##1'...#
+#*#*Eq.#
+########
 ";
 
 fn test_dir(name: &str) -> PathBuf {
@@ -182,9 +185,9 @@ async fn upgrade_downgrade_commands_queue_and_reject_clear() {
     }
     let server = open_map(&dir, cfg, TOILET_MAP);
     join(&server, &token_a).await;
-    move_path(&server, &token_a, "E").await;
+    move_path(&server, &token_a, "EEN").await;
     join(&server, &token_b).await;
-    move_path(&server, &token_b, "N").await;
+    move_path(&server, &token_b, "NNE").await;
     assert_eq!(state(&server, &token_a).await.level, 1);
     assert_eq!(state(&server, &token_b).await.level, 3);
 
@@ -193,7 +196,7 @@ async fn upgrade_downgrade_commands_queue_and_reject_clear() {
         .upgrade_cmd(
             &token_a,
             UpgradeRequest {
-                target: TargetSpec::Dir(Dir::E),
+                target: TargetSpec::Dir(Dir::S),
             },
         )
         .await;
@@ -256,11 +259,11 @@ async fn upgrade_downgrade_commands_queue_and_reject_clear() {
     assert_eq!(result.effective_tick, before + 1);
     assert_eq!(
         result.action.description,
-        format!("upgrade the toilet at {}", loo_proto::Pos::new(2, 1))
+        format!("upgrade the toilet at {}", loo_proto::Pos::new(3, 2))
     );
     server.tick_once().await;
     assert_eq!(
-        glyph_at(&server, loo_proto::Pos::new(2, 1)).await,
+        glyph_at(&server, loo_proto::Pos::new(3, 2)).await,
         Some('2')
     );
     let texts = event_texts(&all_events(&server).await);
@@ -282,7 +285,7 @@ async fn upgrade_downgrade_commands_queue_and_reject_clear() {
     assert!(queued.ok, "downgrade rejected: {:?}", queued.error);
     server.tick_once().await;
     assert_eq!(
-        glyph_at(&server, loo_proto::Pos::new(2, 1)).await,
+        glyph_at(&server, loo_proto::Pos::new(3, 2)).await,
         Some('1')
     );
     let texts = event_texts(&all_events(&server).await);
@@ -369,7 +372,7 @@ async fn success_persists_score_across_restart_without_snapshot() {
 
     let server = open_map(&dir, cfg.clone(), ROOM_MAP);
     join(&server, &token).await;
-    move_path(&server, &token, "NW").await;
+    move_path(&server, &token, "NWW").await;
     let closed = server
         .door_cmd(
             &token,
@@ -589,9 +592,10 @@ async fn wait_wakes_on_attack_and_upgrade() {
     let server = open_map(&fresh_dir("wait-combat"), cfg, TOILET_MAP);
     let (token_a, _) = register(&server, "dev-a").await;
     join(&server, &token_a).await;
-    move_path(&server, &token_a, "E").await;
+    move_path(&server, &token_a, "EEN").await;
     let (token_b, _) = register(&server, "dev-b").await;
     join(&server, &token_b).await;
+    move_path(&server, &token_b, "EE").await;
 
     let queued = server
         .upgrade_cmd(
@@ -646,7 +650,7 @@ async fn wait_wakes_on_attack_and_upgrade() {
         "the target saw the upgrade in its view"
     );
     let queued = server
-        .attack_cmd(&token_a, AttackRequest { dir: Dir::W })
+        .attack_cmd(&token_a, AttackRequest { dir: Dir::S })
         .await;
     assert!(queued.ok, "attack rejected: {:?}", queued.error);
     let ticker = {
@@ -740,7 +744,7 @@ async fn store_score_is_atomic_with_tick_events() {
     let server = open_map(&dir, cfg.clone(), ROOM_MAP);
     let (token, _) = register(&server, "dev-a").await;
     join(&server, &token).await;
-    move_path(&server, &token, "NW").await;
+    move_path(&server, &token, "NWW").await;
     let closed = server
         .door_cmd(
             &token,

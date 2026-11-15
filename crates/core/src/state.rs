@@ -35,6 +35,18 @@ pub enum Object {
         kind: SiteKind,
         work: u32,
     },
+    /// A corner of a toilet's 3x3, present while that toilet or its site exists.
+    Pillar,
+}
+
+/// The four corner cells of the 3x3 centred on a toilet, in NW, NE, SW, SE order.
+pub fn toilet_corners(pos: Pos) -> [Pos; 4] {
+    [
+        Pos::new(pos.x - 1, pos.y - 1),
+        Pos::new(pos.x + 1, pos.y - 1),
+        Pos::new(pos.x - 1, pos.y + 1),
+        Pos::new(pos.x + 1, pos.y + 1),
+    ]
 }
 
 impl Object {
@@ -44,6 +56,7 @@ impl Object {
             Object::Door { open, .. } => !open,
             Object::Toilet { .. } => false,
             Object::Site { kind, .. } => kind != SiteKind::Toilet,
+            Object::Pillar => true,
         }
     }
 
@@ -55,6 +68,7 @@ impl Object {
             Object::Door { open: false, .. } => '+',
             Object::Toilet { level, .. } => char::from(b'0' + level.clamp(1, 9)),
             Object::Site { .. } => 'x',
+            Object::Pillar => '*',
         }
     }
 

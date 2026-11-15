@@ -60,6 +60,7 @@ function indexObjects(objects: ProjectionObject[]): CellMap {
 function objectSprite(cells: CellMap, object: ProjectionObject): SpriteId {
   switch (object.kind) {
     case 'wall':
+    case 'pillar':
       return cells.get(object.pos.x, object.pos.y + 1)?.kind === 'wall' ? 'wt' : 'w';
     case 'door':
       return object.open ? 'do' : 'dc';

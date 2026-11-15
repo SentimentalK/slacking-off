@@ -33,7 +33,7 @@ export type AgentPose =
   | 'success';
 
 /** `ObjectKind` — snake_case serde. */
-export type ObjectKind = 'wall' | 'door' | 'toilet';
+export type ObjectKind = 'wall' | 'door' | 'toilet' | 'pillar';
 
 /** `EventTag` — snake_case serde. */
 export type EventTag =
@@ -102,7 +102,7 @@ export interface ProjectionObject {
   open: boolean;
   progress: number;
   progress_total: number;
-  site: ObjectKind | null;
+  site: BuildKind | null;
   crack: boolean;
 }
 

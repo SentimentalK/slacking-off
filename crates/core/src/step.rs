@@ -11,7 +11,8 @@ use crate::rules::{
     validate_demolish, validate_door, validate_downgrade, validate_upgrade, validate_use,
 };
 use crate::state::{
-    is_stunned, Action, Agent, Object, QueueLane, Session, SessionStatus, SiteKind, WorldState,
+    is_stunned, toilet_corners, Action, Agent, Object, QueueLane, Session, SessionStatus, SiteKind,
+    WorldState,
 };
 use loo_proto::{AgentId, Dir, Need, Nick, Pos, SessionId, SessionOutcome};
 use serde::{Deserialize, Serialize};
@@ -1587,6 +1588,14 @@ fn build_tick(
             }
         }
     };
+    let starting_toilet = *kind == SiteKind::Toilet
+        && !matches!(
+            world.object_at(*target),
+            Some(Object::Site {
+                kind: SiteKind::Toilet,
+                ..
+            })
+        );
     world.set_object(*target, Some(object));
     log.push(EventKind::ObjectChanged {
         session: Some(session),
@@ -1596,6 +1605,9 @@ fn build_tick(
         object: Some(object),
         cause: ObjectCause::Build { kind: *kind },
     });
+    if starting_toilet {
+        raise_pillars(world, log, agent_id, session, &nick, *target);
+    }
     if !matches!(object, Object::Site { .. }) {
         end_action(
             world,
@@ -1608,6 +1620,55 @@ fn build_tick(
             ActionOutcome::Completed,
             action,
         );
+    }
+}
+
+/// A toilet claims the 3x3 around it: its four corners become pillars.
+fn raise_pillars(
+    world: &mut WorldState,
+    log: &mut EventLog,
+    agent_id: AgentId,
+    session: SessionId,
+    nick: &str,
+    toilet: Pos,
+) {
+    for corner in toilet_corners(toilet) {
+        world.set_object(corner, Some(Object::Pillar));
+        log.push(EventKind::ObjectChanged {
+            session: Some(session),
+            agent: Some(agent_id),
+            nick: Some(nick.to_string()),
+            pos: corner,
+            object: Some(Object::Pillar),
+            cause: ObjectCause::Build {
+                kind: SiteKind::Toilet,
+            },
+        });
+    }
+}
+
+/// The corners of a toilet's 3x3 that are still pillars go with the toilet.
+fn clear_pillars(
+    world: &mut WorldState,
+    log: &mut EventLog,
+    agent_id: AgentId,
+    session: SessionId,
+    nick: &str,
+    toilet: Pos,
+) {
+    for corner in toilet_corners(toilet) {
+        if world.object_at(corner) != Some(Object::Pillar) {
+            continue;
+        }
+        world.set_object(corner, None);
+        log.push(EventKind::ObjectChanged {
+            session: Some(session),
+            agent: Some(agent_id),
+            nick: Some(nick.to_string()),
+            pos: corner,
+            object: None,
+            cause: ObjectCause::Demolish,
+        });
     }
 }
 
@@ -1706,7 +1767,17 @@ fn demolish_tick(
             }
         }
         Object::Toilet { level, progress } => toilet_after_demolish(level, progress, cfg),
+        Object::Pillar => (Some(Object::Pillar), true),
     };
+    let took_toilet = object.is_none()
+        && matches!(
+            existing,
+            Object::Toilet { .. }
+                | Object::Site {
+                    kind: SiteKind::Toilet,
+                    ..
+                }
+        );
     world.set_object(*target, object);
     log.push(EventKind::ObjectChanged {
         session: Some(session),
@@ -1716,6 +1787,9 @@ fn demolish_tick(
         object,
         cause: ObjectCause::Demolish,
     });
+    if took_toilet {
+        clear_pillars(world, log, agent_id, session, &nick, *target);
+    }
     if finished {
         end_action(
             world,
@@ -1921,6 +1995,7 @@ fn advance_move(world: &mut WorldState, agent_id: AgentId, log: &mut EventLog) {
             .map(|object| match object {
                 Object::Door { .. } => Blocker::ClosedDoor,
                 Object::Site { .. } => Blocker::Site,
+                Object::Pillar => Blocker::Pillar,
                 _ => Blocker::Wall,
             })
     };

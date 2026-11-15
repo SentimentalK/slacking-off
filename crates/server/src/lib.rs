@@ -7,7 +7,7 @@
 
 use loo_core::{
     Action, ActionOutcome, Config, Event, EventKind, Intent, IntentKind, JoinCommand, JoinOutcome,
-    JoinRejectKind, MapDef, SiteKind, Snapshot, WorldState,
+    JoinRejectKind, MapDef, Object, SiteKind, Snapshot, WorldState,
 };
 use loo_proto::{
     AccountAgent, AccountRegisterResponse, AccountResponse, ActionQueued, ActionState, AgentId,
@@ -232,6 +232,7 @@ impl Server {
         };
         let events = store.events_after(base.world.tick, base.last_seq)?;
         let world = loo_core::restore(&base, &events, &cfg)?;
+        check_toilet_pillars(&world)?;
         let (last_seq, tick_seed) = events
             .last()
             .map(|event| (event.seq, event.seed))
@@ -3334,6 +3335,35 @@ fn next_nonce() -> u64 {
 }
 
 /// Design §10: neutral list of every action and its consequence. No advice.
+fn check_toilet_pillars(world: &WorldState) -> Result<(), StoreError> {
+    for y in 0..world.map.height() {
+        for x in 0..world.map.width() {
+            let pos = Pos::new(x, y);
+            let is_toilet = matches!(
+                world.object_at(pos),
+                Some(Object::Toilet { .. })
+                    | Some(Object::Site {
+                        kind: SiteKind::Toilet,
+                        ..
+                    })
+            );
+            if !is_toilet {
+                continue;
+            }
+            let corners_ok = loo_core::state::toilet_corners(pos)
+                .into_iter()
+                .all(|corner| world.object_at(corner) == Some(Object::Pillar));
+            if !corners_ok {
+                return Err(StoreError::Corrupt(format!(
+                    "world has a toilet at ({},{}) without its four corner pillars (pre-v1.6 data or map); use a v1.6 map and a fresh --data-dir",
+                    x, y
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
 fn rules_text(cfg: &Config, map_width: i32, map_height: i32, official: bool) -> String {
     let upgrade_work = cfg
         .build
@@ -3395,6 +3425,7 @@ Commands
       Shield one adjacent cell for {defend} ticks, starting with the tick the defence settles in. Attacks and every demolition aimed at that cell while the shield holds are blocked; the attacker is stunned for {stun} ticks. On the tick a defence starts you cannot build, move or attack; a use is paused, not interrupted. The defend cooldown is {defend_cooldown} ticks. Your own cell cannot be defended.
   loo build wall|door|toilet <dir|here>
       Queue work on a cell: your own cell (here) or one step away. A wall needs {wall_work} work points, a door {door_work}, a level 1 toilet {toilet_work}; each work tick adds 1 point, so several agents build faster. A new door starts closed.
+      Building a toilet claims the 3x3 centred on it: its four corner cells become pillars. Starting a toilet needs all nine cells inside the map, the four corners buildable, empty and free of agents, and no overlap with another toilet's 3x3. Pillars block movement and cannot be built on, demolished or defended. They disappear in the same tick the toilet is gone. The four side cells are ordinary cells.
   loo upgrade <dir|here>
       Work a toilet up one level. Each worker adds 1 work point per tick; levels 1 to 4 need {upgrade_work} points. Your agent level must be at least the target level; agent levels are cumulative score {levels} for levels 1 to 5. At most {max_toilet_workers} agents work one toilet, and a toilet with non-zero progress is not usable.
   loo demolish <dir|here>

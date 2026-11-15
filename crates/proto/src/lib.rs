@@ -810,6 +810,7 @@ pub enum ObjectKind {
     Wall,
     Door,
     Toilet,
+    Pillar,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

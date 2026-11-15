@@ -6,7 +6,7 @@
 
 use crate::config::Config;
 use crate::map::Terrain;
-use crate::state::{Action, Object, Session, SiteKind, WorldState};
+use crate::state::{toilet_corners, Action, Object, Session, SiteKind, WorldState};
 use loo_proto::{AgentId, Dir, Need, Pos, SessionOutcome, Tick};
 
 const OUT_OF_REACH: &str =
@@ -46,6 +46,78 @@ fn kind_name(kind: SiteKind) -> &'static str {
     }
 }
 
+fn object_phrase(object: Object) -> &'static str {
+    match object {
+        Object::Wall { .. } => "a wall",
+        Object::Door { .. } => "a door",
+        Object::Toilet { .. } => "a toilet",
+        Object::Site { .. } => "an unfinished build site",
+        Object::Pillar => "a pillar",
+    }
+}
+
+fn is_toilet_or_site(object: Option<Object>) -> bool {
+    matches!(
+        object,
+        Some(Object::Toilet { .. })
+            | Some(Object::Site {
+                kind: SiteKind::Toilet,
+                ..
+            })
+    )
+}
+
+fn corner_problem(corner: Pos, problem: &str) -> String {
+    format!(
+        "corner ({},{}) of the toilet's 3x3 {problem}",
+        corner.x, corner.y
+    )
+}
+
+/// Why a new toilet cannot start on `target`: the 3x3 must fit the map, the
+/// four corners must be free buildable ground, and no other toilet or toilet
+/// site may lie within Chebyshev distance 2.
+fn toilet_site_problem(world: &WorldState, target: Pos) -> Option<String> {
+    let inside = (-1..=1)
+        .all(|dy| (-1..=1).all(|dx| world.map.in_bounds(Pos::new(target.x + dx, target.y + dy))));
+    if !inside {
+        return Some("a toilet needs its whole 3x3 inside the map".to_string());
+    }
+    for corner in toilet_corners(target) {
+        if world.map.terrain_at(corner) != Some(Terrain::Buildable) {
+            return Some(corner_problem(corner, "is no-build ground"));
+        }
+        if let Some(object) = world.object_at(corner) {
+            return Some(corner_problem(
+                corner,
+                &format!("has {}", object_phrase(object)),
+            ));
+        }
+        if world.agent_at(corner).is_some() {
+            return Some(corner_problem(corner, "has an agent on it"));
+        }
+    }
+    let mut nearest: Option<(i32, i32, i32)> = None;
+    for dy in -2..=2 {
+        for dx in -2..=2 {
+            let cell = Pos::new(target.x + dx, target.y + dy);
+            if !world.map.in_bounds(cell) || !is_toilet_or_site(world.object_at(cell)) {
+                continue;
+            }
+            let key = (dx.abs().max(dy.abs()), cell.y, cell.x);
+            let better = match nearest {
+                None => true,
+                Some(best) => key < best,
+            };
+            if better {
+                nearest = Some(key);
+            }
+        }
+    }
+    nearest
+        .map(|(_, y, x)| format!("this toilet's 3x3 overlaps the 3x3 of the toilet at ({x},{y})"))
+}
+
 pub fn validate_build(
     world: &WorldState,
     agent: AgentId,
@@ -66,7 +138,15 @@ pub fn validate_build(
         ));
     }
     match world.object_at(target) {
+        None if kind == SiteKind::Toilet => match toilet_site_problem(world, target) {
+            Some(problem) => Err(problem),
+            None => Ok(()),
+        },
         None => Ok(()),
+        Some(Object::Pillar) => Err(
+            "a pillar is there; it belongs to the toilet next to it and cannot be built on"
+                .to_string(),
+        ),
         Some(Object::Site { kind: existing, .. }) if existing == kind => Ok(()),
         Some(Object::Site { .. }) => {
             Err("a different unfinished site is there; demolish it first".to_string())
@@ -77,10 +157,24 @@ pub fn validate_build(
 
 pub fn validate_demolish(world: &WorldState, agent: AgentId, target: Pos) -> Result<(), String> {
     acting_pos(world, agent, target)?;
-    if world.object_at(target).is_none() {
-        return Err("there is nothing to demolish there".to_string());
+    match world.object_at(target) {
+        None => Err("there is nothing to demolish there".to_string()),
+        Some(Object::Pillar) => {
+            let owner = toilet_corners(target)
+                .into_iter()
+                .find(|cell| is_toilet_or_site(world.object_at(*cell)));
+            Err(match owner {
+                Some(cell) => format!(
+                    "a pillar cannot be demolished; it goes when the toilet at ({},{}) is gone",
+                    cell.x, cell.y
+                ),
+                None => {
+                    "a pillar cannot be demolished; it goes when its toilet is gone".to_string()
+                }
+            })
+        }
+        Some(_) => Ok(()),
     }
-    Ok(())
 }
 
 const NO_TARGET: &str = "there is no unstunned agent next to you in that direction";
@@ -169,6 +263,9 @@ pub fn validate_defend_at(
     }
     if pos.manhattan(target) != 1 {
         return Err(OUT_OF_REACH.to_string());
+    }
+    if world.object_at(target) == Some(Object::Pillar) {
+        return Err("a pillar cannot be defended".to_string());
     }
     if at_tick < me.defend_cooldown_until {
         return Err(format!(

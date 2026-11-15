@@ -205,6 +205,7 @@ function toiletSprite(level: number): SpriteId {
 function objectSprite(cells: Map<number, Cell>, obj: ProjectionObject): SpriteId {
   switch (obj.kind) {
     case 'wall':
+    case 'pillar':
       return wallSprite(cells, obj.pos.x, obj.pos.y);
     case 'door':
       return obj.open ? 'do' : 'dc';

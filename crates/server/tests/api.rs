@@ -35,14 +35,15 @@ qE......#
 ";
 
 /// A pre-built room: a level-1 toilet with walls north, west and south and an
-/// open door east, next to the entrance. Closing the door makes it usable.
+/// open door east, a short walk from the entrance. Its 3x3 corners are pillars,
+/// so the entrance sits outside them. Closing the door makes it usable.
 const ROOM_MAP: &str = "\
 grid
-#######
-#.#...#
-##1'..#
-#.#Eq.#
-#######
+########
+#*#*...#
+##1'...#
+#*#*Eq.#
+########
 ";
 
 /// Wide enough that an agent at the entrance cannot see builds on the east side.
@@ -1224,20 +1225,21 @@ async fn door_permissions_and_auto_open() {
     let (token_a, _) = register(&server, "dev-a").await;
     let (token_b, _) = register(&server, "dev-b").await;
     join(&server, &token_a).await;
-    move_path(&server, &token_a, "NW").await;
+    move_path(&server, &token_a, "NWW").await;
     assert_eq!(
         server.status(&token_a).await.state.expect("state").pos,
         Some(Pos::new(2, 2)),
         "dev-a stands on the toilet"
     );
     join(&server, &token_b).await;
+    move_path(&server, &token_b, "N").await;
     assert_eq!(
         server.status(&token_b).await.state.expect("state").pos,
-        Some(Pos::new(3, 3))
+        Some(Pos::new(4, 2))
     );
 
     // dev-b is next to the door but not on a toilet cell.
-    let denied = door_at(&server, &token_b, Dir::N, false).await;
+    let denied = door_at(&server, &token_b, Dir::W, false).await;
     assert!(!denied.ok);
     let error = denied.error.expect("error");
     assert_eq!(error.code, ErrorCode::RuleRejected);
@@ -1275,7 +1277,7 @@ async fn wait_wakes_on_use_progress_and_door_change() {
     let server = open_with_map(&fresh_dir("wait-use"), Config::default(), ROOM_MAP);
     let (token, _) = register(&server, "dev-a").await;
     join(&server, &token).await;
-    move_path(&server, &token, "NW").await;
+    move_path(&server, &token, "NWW").await;
     let closed = door_at(&server, &token, Dir::E, false).await;
     assert!(closed.ok, "{:?}", closed.error);
     tick_n(&server, 1).await;
@@ -1410,7 +1412,7 @@ async fn restart_restores_need_deadline_use_and_recovery_without_snapshot() {
     let server = open_with_map(&dir, cfg.clone(), ROOM_MAP);
     let (token, _) = register(&server, "dev-a").await;
     join(&server, &token).await;
-    move_path(&server, &token, "NW").await;
+    move_path(&server, &token, "NWW").await;
     let closed = door_at(&server, &token, Dir::E, false).await;
     assert!(closed.ok, "{:?}", closed.error);
     tick_n(&server, 1).await;
@@ -1457,7 +1459,7 @@ async fn state_exposes_need_deadline_use_and_score() {
     let server = open_with_map(&fresh_dir("state-fields"), Config::default(), ROOM_MAP);
     let (token, _) = register(&server, "dev-a").await;
     join(&server, &token).await;
-    move_path(&server, &token, "NW").await;
+    move_path(&server, &token, "NWW").await;
     let closed = door_at(&server, &token, Dir::E, false).await;
     assert!(closed.ok, "{:?}", closed.error);
     tick_n(&server, 1).await;
@@ -1562,27 +1564,33 @@ async fn look_and_map_show_built_object_glyphs() {
     )
     .await;
 
-    // dev-b walks east while dev-a starts a second toilet: dev-b first sees that
-    // cell while it is still a site, so its remembered map keeps the `x`.
-    let built = build_at(
+    // dev-b steps to (2,3), out of view of (7,4). dev-a starts a wall there and
+    // dev-b walks into view on the same tick, so dev-b first sees the cell as a
+    // site and its remembered map keeps the `x` after the wall completes.
+    let approached = move_to(
         &server,
-        &token_a,
-        BuildKind::Toilet,
-        TargetSpec::Dir(Dir::S),
+        &token_b,
+        MoveSpec::Steps {
+            dir: Dir::E,
+            count: 1,
+        },
     )
     .await;
+    assert!(approached.ok, "{:?}", approached.error);
+    server.tick_once().await;
+
+    let built = build_at(&server, &token_a, BuildKind::Wall, TargetSpec::Dir(Dir::S)).await;
     assert!(built.ok, "{:?}", built.error);
     let walked = move_to(
         &server,
         &token_b,
         MoveSpec::Steps {
             dir: Dir::E,
-            count: 2,
+            count: 1,
         },
     )
     .await;
     assert!(walked.ok, "{:?}", walked.error);
-    server.tick_once().await;
     server.tick_once().await;
 
     let look = server.look(&token_a).await.result.expect("look result");
@@ -1591,20 +1599,17 @@ async fn look_and_map_show_built_object_glyphs() {
         assert!(rows.contains(glyph), "look is missing {glyph:?}: {rows}");
     }
 
+    server.tick_once().await;
+    assert_eq!(
+        glyph_at(&server, Pos::new(7, 4)).await,
+        Some('#'),
+        "the wall completes on the next tick"
+    );
     let map = server.map_view(&token_b).await.result.expect("map result");
     let rows = map.grid.rows.join("\n");
     for glyph in ['#', '+', '1', 'x'] {
         assert!(rows.contains(glyph), "map is missing {glyph:?}: {rows}");
     }
-
-    // The second toilet completes on the next tick and shows up in the view.
-    server.tick_once().await;
-    let look = server.look(&token_a).await.result.expect("look result");
-    let rows = look.grid.rows.join("\n");
-    assert!(
-        rows.contains('1'),
-        "look is missing the finished toilet: {rows}"
-    );
 }
 
 #[tokio::test]
@@ -1648,7 +1653,7 @@ async fn wait_delivers_session_ended_after_failure_and_success() {
     let server = open_with_map(&fresh_dir("end-success"), Config::default(), ROOM_MAP);
     let (token, _) = register(&server, "dev-a").await;
     join(&server, &token).await;
-    move_path(&server, &token, "NW").await;
+    move_path(&server, &token, "NWW").await;
     let closed = door_at(&server, &token, Dir::E, false).await;
     assert!(closed.ok, "{:?}", closed.error);
     tick_n(&server, 1).await;

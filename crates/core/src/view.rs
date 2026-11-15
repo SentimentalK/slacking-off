@@ -176,11 +176,12 @@ fn symbol_rank(ch: char) -> u8 {
         '\'' => 2,
         '1'..='9' => 3,
         'x' => 4,
-        '@' => 5,
-        'a'..='z' => 6,
-        '.' => 7,
-        ':' => 8,
-        _ => 9,
+        '*' => 5,
+        '@' => 6,
+        'a'..='z' => 7,
+        '.' => 8,
+        ':' => 9,
+        _ => 10,
     }
 }
 
@@ -203,6 +204,7 @@ fn symbol_meaning(ch: char, letters: &BTreeMap<AgentId, char>) -> String {
         '\'' => "open door".to_string(),
         '1'..='9' => format!("toilet level {}", ch.to_digit(10).unwrap_or(0)),
         'x' => "unfinished or half-demolished site".to_string(),
+        '*' => "pillar (corner of a toilet's 3x3)".to_string(),
         '@' => "you".to_string(),
         'a'..='z' => match letters.iter().find(|(_, letter)| **letter == ch) {
             Some((id, _)) => format!("another agent #{id}"),

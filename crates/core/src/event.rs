@@ -39,6 +39,7 @@ fn object_kind_name(object: Object) -> &'static str {
         Object::Door { .. } => "door",
         Object::Toilet { .. } => "toilet",
         Object::Site { kind, .. } => kind_name(kind),
+        Object::Pillar => "pillar",
     }
 }
 
@@ -411,6 +412,7 @@ pub enum Blocker {
         nick: String,
     },
     Site,
+    Pillar,
     /// A queued agent tried to step off the queue cells.
     QueueBoundary,
 }
@@ -423,6 +425,7 @@ impl Blocker {
             Blocker::ClosedDoor => "a closed door".to_string(),
             Blocker::Agent { nick } => format!("agent {nick}"),
             Blocker::Site => "an unfinished build site".to_string(),
+            Blocker::Pillar => "a pillar".to_string(),
             Blocker::QueueBoundary => "the queue edge".to_string(),
         }
     }
@@ -598,6 +601,10 @@ impl Event {
                         "{} worked on a {} at {pos}",
                         nick.as_deref().unwrap_or("someone"),
                         kind_name(*kind)
+                    ),
+                    Some(Object::Pillar) => format!(
+                        "{} raised a pillar at {pos}",
+                        nick.as_deref().unwrap_or("someone")
                     ),
                     _ => format!(
                         "{} finished a {} at {pos}",
