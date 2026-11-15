@@ -654,11 +654,13 @@ impl Server {
         }
     }
 
-    /// `GET /api/leaderboard` (contract §3). Only `score|best|successes` are
-    /// metrics; `limit` is clamped to 1..=100.
+    /// `GET /api/leaderboard` (contract-J §6). `metric` is one of
+    /// `score|best|successes`, `kind` one of `ai|human|mixed`; `limit` is
+    /// clamped to 1..=100.
     pub async fn leaderboard(
         &self,
         metric: &str,
+        kind: &str,
         model: Option<&str>,
         limit: usize,
     ) -> Envelope<Vec<LeaderRow>> {
@@ -668,9 +670,15 @@ impl Server {
                 "metric must be one of score, best, successes",
             );
         }
+        if !matches!(kind, "ai" | "human" | "mixed") {
+            return error_envelope(
+                ErrorCode::BadRequest,
+                "kind must be one of ai, human, mixed",
+            );
+        }
         let limit = limit.clamp(1, 100);
         let model = model.filter(|model| !model.is_empty());
-        match self.store.leaderboard(metric, model, limit) {
+        match self.store.leaderboard(metric, kind, model, limit) {
             Ok(rows) => Envelope::ok(rows, Vec::new(), None),
             Err(error) => error_envelope(
                 ErrorCode::Internal,

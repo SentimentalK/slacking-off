@@ -874,17 +874,43 @@ pub struct LeaderRow {
     pub nick: String,
     pub owner: String,
     pub model: String,
+    /// Which board the row belongs to; the web marks humans with 「人」.
+    pub kind: PlayerKind,
     pub score_total: u32,
     pub best_score: u32,
     pub successes: u32,
 }
 
+/// One player kind's numbers inside a [`ScopeStats`] range.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct KindStats {
+    /// Distinct characters of this kind that appear in the range.
+    pub agents: u64,
+    pub sessions: u64,
+    pub successes: u64,
+    /// Successes over sessions that ended with an outcome; 0 when none did.
+    pub success_rate: f64,
+    pub total_score: u64,
+    pub best_score: u32,
+}
+
+/// One range: every official session, or only those a second player kind
+/// shared (contract-J §6).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ScopeStats {
+    pub total_sessions: u64,
+    pub success_rate: f64,
+    pub ai: KindStats,
+    pub human: KindStats,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct StatsResponse {
-    pub total_sessions: u64,
-    pub self_sessions: u64,
-    pub human_sessions: u64,
-    pub success_rate: f64,
+    /// Every official session.
+    pub all: ScopeStats,
+    /// Only sessions with `with_other_kind = 1`.
+    pub mixed: ScopeStats,
+    /// AI characters only; humans have no self-reported model.
     pub models: Vec<ModelStats>,
 }
 

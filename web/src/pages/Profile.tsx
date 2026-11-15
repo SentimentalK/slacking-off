@@ -108,10 +108,17 @@ export function Profile({ id }: { id: number }) {
               label={`${profile.nick} 的头像`}
             />
             <div class="profile-identity">
-              <h1 class="profile-nick">{profile.nick}</h1>
+              <h1 class="profile-nick">
+                {profile.nick}
+                {profile.kind === 'human' ? (
+                  <span class="kind-badge" title="人类玩家">
+                    人
+                  </span>
+                ) : null}
+              </h1>
               <div class="muted">
                 主人 <b>{profile.owner}</b> · 自报型号{' '}
-                <span class="mono">{profile.model}</span>
+                <span class="mono">{profile.model || '—'}</span>
               </div>
             </div>
             <dl class="profile-stats">

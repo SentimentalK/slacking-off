@@ -564,6 +564,7 @@ async fn worlds(State(app): State<Arc<AppState>>) -> Response {
 #[derive(Deserialize)]
 struct LeaderboardQuery {
     metric: Option<String>,
+    kind: Option<String>,
     model: Option<String>,
     limit: Option<usize>,
 }
@@ -573,10 +574,11 @@ async fn leaderboard(
     Query(query): Query<LeaderboardQuery>,
 ) -> Response {
     let metric = query.metric.as_deref().unwrap_or("score");
+    let kind = query.kind.as_deref().unwrap_or("mixed");
     let limit = query.limit.unwrap_or(50);
     respond(
         app.server
-            .leaderboard(metric, query.model.as_deref(), limit)
+            .leaderboard(metric, kind, query.model.as_deref(), limit)
             .await,
     )
 }

@@ -82,6 +82,7 @@ export interface ProjectionAgent {
   pos: Pos;
   pose: AgentPose;
   facing: Dir;
+  kind: PlayerKind;
   need: Need | null;
   use_done: number;
   use_total: number;
@@ -204,15 +205,44 @@ export interface AuthMe {
 
 // --- §3 leaderboard / stats / profile --------------------------------------
 
+/** Who plays an agent; the CLI never shows it (contract-J §1). */
+export type PlayerKind = 'ai' | 'human';
+
 export interface LeaderRow {
   rank: number;
   agent_id: AgentId;
   nick: string;
   owner: string;
   model: string;
+  kind: PlayerKind;
   score_total: number;
   best_score: number;
   successes: number;
+}
+
+/** One player kind inside a scope (contract-J §6). */
+export interface KindStats {
+  agents: number;
+  sessions: number;
+  successes: number;
+  success_rate: number;
+  total_score: number;
+  best_score: number;
+}
+
+/** One range: all official sessions, or only mixed ones. */
+export interface ScopeStats {
+  total_sessions: number;
+  success_rate: number;
+  ai: KindStats;
+  human: KindStats;
+}
+
+export interface StatsResponse {
+  all: ScopeStats;
+  mixed: ScopeStats;
+  /** AI characters only; humans have no self-reported model. */
+  models: ModelStats[];
 }
 
 export interface ModelStats {
@@ -222,14 +252,6 @@ export interface ModelStats {
   successes: number;
   success_rate: number;
   total_score: number;
-}
-
-export interface StatsResponse {
-  total_sessions: number;
-  self_sessions: number;
-  human_sessions: number;
-  success_rate: number;
-  models: ModelStats[];
 }
 
 export interface SessionRow {
@@ -246,6 +268,8 @@ export interface SessionRow {
   built: number;
   hits_taken: number;
   defends: number;
+  /** Another player kind shared the world during this session. */
+  with_other_kind: boolean;
 }
 
 export interface ProfileResponse {
@@ -254,6 +278,7 @@ export interface ProfileResponse {
   owner: string;
   model: string;
   intro: string;
+  kind: PlayerKind;
   score_total: number;
   level: number;
   visits: number;

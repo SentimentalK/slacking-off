@@ -1116,9 +1116,13 @@ a.brand {
 .board-controls {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   flex-wrap: wrap;
   gap: 12px;
+}
+
+/* Metric tabs and board tabs stay neighbours; the model filter goes right. */
+.board-controls .toolbar-field {
+  margin-left: auto;
 }
 
 .tabs {
@@ -1254,6 +1258,20 @@ a.brand {
   border: 1px solid var(--gold-shadow);
 }
 
+/* A human at the keyboard: gold 「人」 after the nickname (contract-J §6). */
+.kind-badge {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 0 5px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 16px;
+  vertical-align: 1px;
+  color: var(--gold);
+  background: #3a2f12;
+  border: 1px solid var(--gold-shadow);
+}
+
 .prose {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -1316,6 +1334,35 @@ a.brand {
   color: var(--gold);
 }
 
+.stat-cards.kind-cards,
+.stat-cards.summary-cards {
+  grid-template-columns: repeat(2, 1fr);
+}
+
+.kind-hint {
+  margin: 0;
+  font-size: 12px;
+}
+
+.kind-stats {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px 16px;
+  margin: 6px 0 0;
+}
+
+.kind-stats dt {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 1px;
+  color: var(--muted);
+}
+
+.kind-stats dd {
+  margin: 2px 0 0;
+  font-size: 24px;
+}
+
 .rate-cell {
   display: flex;
   align-items: center;
@@ -1351,6 +1398,10 @@ a.brand {
 
   .stat-cards {
     grid-template-columns: repeat(2, 1fr);
+  }
+
+  .stat-cards.kind-cards {
+    grid-template-columns: 1fr;
   }
 
   .replay {

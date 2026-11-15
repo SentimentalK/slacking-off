@@ -7,9 +7,9 @@
 
 use loo_core::{Event, EventKind, IntentKind, Snapshot, WorldState};
 use loo_proto::{
-    AccountTokenInfo, AgentId, EventTag, LeaderRow, ModelStats, Need, PlayerKind, ProfileResponse,
-    SentBy, SessionId, SessionOutcome, SessionRow, StatsResponse, Tick, TimelineMarker,
-    WorldSummary,
+    AccountTokenInfo, AgentId, EventTag, KindStats, LeaderRow, ModelStats, Need, PlayerKind,
+    ProfileResponse, ScopeStats, SentBy, SessionId, SessionOutcome, SessionRow, StatsResponse,
+    Tick, TimelineMarker, WorldSummary,
 };
 use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::Value;
@@ -1052,10 +1052,12 @@ impl Store {
         Ok(())
     }
 
-    /// Only official worlds with account-owned agents feed the boards.
+    /// Only official worlds with account-owned agents feed the boards. `kind`
+    /// is `ai`, `human` or `mixed`; the lib layer rejects anything else.
     pub fn leaderboard(
         &self,
         metric: &str,
+        kind: &str,
         model: Option<&str>,
         limit: usize,
     ) -> Result<Vec<LeaderRow>, StoreError> {
@@ -1065,7 +1067,7 @@ impl Store {
             _ => "a.score_total DESC, a.id ASC",
         };
         let sql = format!(
-            "SELECT a.id, a.nick, COALESCE(u.username, ''), a.model, a.score_total, \
+            "SELECT a.id, a.nick, COALESCE(u.username, ''), a.model, a.kind, a.score_total, \
              COALESCE(MAX(s.score), 0) AS best_score, \
              COALESCE(SUM(CASE WHEN s.outcome = 'success' THEN 1 ELSE 0 END), 0) AS successes \
              FROM agents a \
@@ -1073,55 +1075,97 @@ impl Store {
              LEFT JOIN users u ON u.id = a.user_id \
              LEFT JOIN sessions s ON s.agent = a.id AND s.world_id = a.world_id \
              WHERE a.user_id IS NOT NULL AND (?1 IS NULL OR a.model = ?1) \
-             GROUP BY a.id, a.nick, u.username, a.model, a.score_total \
-             ORDER BY {order} LIMIT ?2"
+               AND (?2 = 'mixed' OR a.kind = ?2) \
+             GROUP BY a.id, a.nick, u.username, a.model, a.kind, a.score_total \
+             ORDER BY {order} LIMIT ?3"
         );
         let conn = self.conn()?;
         let mut stmt = conn.prepare(&sql)?;
-        let rows = stmt.query_map(params![model, limit as i64], |row| {
-            Ok(LeaderRow {
-                rank: 0,
-                agent_id: row.get::<_, i64>(0)? as AgentId,
-                nick: row.get(1)?,
-                owner: row.get(2)?,
-                model: row.get(3)?,
-                score_total: row.get::<_, i64>(4)? as u32,
-                best_score: row.get::<_, i64>(5)? as u32,
-                successes: row.get::<_, i64>(6)? as u32,
-            })
+        let rows = stmt.query_map(params![model, kind, limit as i64], |row| {
+            let kind: String = row.get(4)?;
+            Ok((
+                row.get::<_, i64>(0)? as AgentId,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                kind,
+                row.get::<_, i64>(5)? as u32,
+                row.get::<_, i64>(6)? as u32,
+                row.get::<_, i64>(7)? as u32,
+            ))
         })?;
         let mut out = Vec::new();
         for row in rows {
-            let mut row = row?;
-            row.rank = out.len() + 1;
-            out.push(row);
+            let (agent_id, nick, owner, model, kind, score_total, best_score, successes) = row?;
+            out.push(LeaderRow {
+                rank: out.len() + 1,
+                agent_id,
+                nick,
+                owner,
+                model,
+                kind: player_kind_from_name(&kind)?,
+                score_total,
+                best_score,
+                successes,
+            });
         }
         Ok(out)
     }
 
+    /// Two ranges (`all`, `mixed`) split by player kind, then the AI-only model
+    /// table. A session can be in both ranges, so the range is a join row, not
+    /// a partition.
     pub fn stats(&self) -> Result<StatsResponse, StoreError> {
         let conn = self.conn()?;
-        let (total_sessions, self_sessions, human_sessions, successes, ended) = conn.query_row(
-            "SELECT COUNT(s.id), \
-             COALESCE(SUM(CASE WHEN s.sent_by = 'self' THEN 1 ELSE 0 END), 0), \
-             COALESCE(SUM(CASE WHEN s.sent_by = 'human' THEN 1 ELSE 0 END), 0), \
-             COALESCE(SUM(CASE WHEN s.outcome = 'success' THEN 1 ELSE 0 END), 0), \
-             COALESCE(SUM(CASE WHEN s.outcome IS NOT NULL THEN 1 ELSE 0 END), 0) \
-             FROM sessions s \
-             JOIN agents a ON a.id = s.agent AND a.world_id = s.world_id \
-             JOIN worlds w ON w.id = s.world_id AND w.official = 1 \
-             WHERE a.user_id IS NOT NULL",
-            [],
-            |row| {
+        let mut scopes = [ScopeStats::default(); 2];
+        let mut ended = [0u64; 2];
+        {
+            let mut stmt = conn.prepare(
+                "SELECT r.mixed, a.kind, COUNT(DISTINCT a.id), COUNT(s.id), \
+                 COALESCE(SUM(CASE WHEN s.outcome = 'success' THEN 1 ELSE 0 END), 0), \
+                 COALESCE(SUM(CASE WHEN s.outcome IS NOT NULL THEN 1 ELSE 0 END), 0), \
+                 COALESCE(SUM(s.score), 0), COALESCE(MAX(s.score), 0) \
+                 FROM (SELECT 0 AS mixed UNION ALL SELECT 1) r \
+                 JOIN sessions s ON r.mixed = 0 OR s.with_other_kind = 1 \
+                 JOIN agents a ON a.id = s.agent AND a.world_id = s.world_id \
+                 JOIN worlds w ON w.id = s.world_id AND w.official = 1 \
+                 WHERE a.user_id IS NOT NULL \
+                 GROUP BY r.mixed, a.kind",
+            )?;
+            let rows = stmt.query_map([], |row| {
                 Ok((
-                    row.get::<_, i64>(0)?,
-                    row.get::<_, i64>(1)?,
+                    row.get::<_, i64>(0)? != 0,
+                    row.get::<_, String>(1)?,
                     row.get::<_, i64>(2)?,
                     row.get::<_, i64>(3)?,
                     row.get::<_, i64>(4)?,
+                    row.get::<_, i64>(5)?,
+                    row.get::<_, i64>(6)?,
+                    row.get::<_, i64>(7)?,
                 ))
-            },
-        )?;
+            })?;
+            for row in rows {
+                let (mixed, kind, agents, sessions, successes, ended_rows, total, best) = row?;
+                let index = usize::from(mixed);
+                let stats = match player_kind_from_name(&kind)? {
+                    PlayerKind::Ai => &mut scopes[index].ai,
+                    PlayerKind::Human => &mut scopes[index].human,
+                };
+                *stats = KindStats {
+                    agents: agents as u64,
+                    sessions: sessions as u64,
+                    successes: successes as u64,
+                    success_rate: rate(successes as u64, ended_rows as u64),
+                    total_score: total as u64,
+                    best_score: best as u32,
+                };
+                ended[index] += ended_rows as u64;
+            }
+        }
+        for (index, scope) in scopes.iter_mut().enumerate() {
+            scope.total_sessions = scope.ai.sessions + scope.human.sessions;
+            scope.success_rate = rate(scope.ai.successes + scope.human.successes, ended[index]);
+        }
 
         #[derive(Default)]
         struct ModelAcc {
@@ -1136,7 +1180,7 @@ impl Store {
             let mut stmt = conn.prepare(
                 "SELECT a.model, COUNT(*), COALESCE(SUM(a.score_total), 0) \
                  FROM agents a JOIN worlds w ON w.id = a.world_id AND w.official = 1 \
-                 WHERE a.user_id IS NOT NULL GROUP BY a.model",
+                 WHERE a.user_id IS NOT NULL AND a.kind = 'ai' GROUP BY a.model",
             )?;
             let rows = stmt.query_map([], |row| {
                 Ok((
@@ -1160,7 +1204,7 @@ impl Store {
                  FROM sessions s \
                  JOIN agents a ON a.id = s.agent AND a.world_id = s.world_id \
                  JOIN worlds w ON w.id = s.world_id AND w.official = 1 \
-                 WHERE a.user_id IS NOT NULL GROUP BY a.model",
+                 WHERE a.user_id IS NOT NULL AND a.kind = 'ai' GROUP BY a.model",
             )?;
             let rows = stmt.query_map([], |row| {
                 Ok((
@@ -1171,11 +1215,11 @@ impl Store {
                 ))
             })?;
             for row in rows {
-                let (model, sessions, successes, ended) = row?;
+                let (model, sessions, successes, ended_rows) = row?;
                 let acc = models.entry(model).or_default();
                 acc.sessions = sessions as u64;
                 acc.successes = successes as u64;
-                acc.ended = ended as u64;
+                acc.ended = ended_rows as u64;
             }
         }
         let mut model_stats: Vec<ModelStats> = models
@@ -1196,10 +1240,8 @@ impl Store {
         });
 
         Ok(StatsResponse {
-            total_sessions: total_sessions as u64,
-            self_sessions: self_sessions as u64,
-            human_sessions: human_sessions as u64,
-            success_rate: rate(successes as u64, ended as u64),
+            all: scopes[0],
+            mixed: scopes[1],
             models: model_stats,
         })
     }
