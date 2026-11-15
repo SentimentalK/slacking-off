@@ -1,11 +1,24 @@
 import { getJSON } from './api';
 import type { Projection, Terrain } from './types';
-import { AutoQuality, chooseQuality, createWorldView, rendererName, type Quality, type UiState, type WorldView } from './world3d';
+import { AutoQuality, chooseQuality, createWorldView, rendererName, type Quality, type UiState, type VisionGrid, type WorldView } from './world3d';
 
 interface Fixture {
   terrain: Terrain;
   prev: Projection | null;
   cur: Projection;
+}
+
+function playVision(cur: Projection, width: number, height: number, id: number): VisionGrid | null {
+  const me = cur.agents.find((a) => a.id === id);
+  if (!me) return null;
+  const values = new Uint8Array(width * height);
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const d = Math.max(Math.abs(x - me.pos.x), Math.abs(y - me.pos.y));
+      values[y * width + x] = d <= 4 ? 255 : d <= 12 ? 110 : 30;
+    }
+  }
+  return { width, height, values };
 }
 
 declare global {
@@ -36,6 +49,8 @@ const hoverParts = (q.get('hover') ?? '').split(',').map(Number);
 const hoverToilet = hoverParts.length === 2 && hoverParts.every(Number.isFinite) ? { x: hoverParts[0], y: hoverParts[1] } : null;
 const visionParam = q.get('vision');
 const visionOf = visionParam !== null && /^\d+$/.test(visionParam) ? Number(visionParam) : null;
+const playParam = q.get('play');
+const playId = playParam !== null && /^\d+$/.test(playParam) ? Number(playParam) : null;
 const ui: UiState = { selected: null, hoverToilet, dusk: q.get('dusk') === '1', duskT: 0, visionOf };
 const paramQuality = q.get('quality');
 const quality: Quality = chooseQuality(paramQuality, readStored(), innerWidth, navigator.hardwareConcurrency || 8, rendererName());
@@ -71,6 +86,7 @@ async function loadApi(): Promise<Fixture> {
 }
 
 const data = api ? await loadApi() : await loadFixture();
+if (playId !== null) ui.vision = playVision(data.cur, data.terrain.width, data.terrain.height, playId);
 const view = createWorldView(canvas, { quality, still });
 if (focus || zoom !== undefined) view.setView({ focus, zoom });
 const auto = new AutoQuality(!still && paramQuality === null && readStored() === null);
