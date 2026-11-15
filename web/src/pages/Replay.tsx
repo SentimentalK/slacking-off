@@ -64,7 +64,10 @@ export function Replay() {
   const reduceMotionRef = useRef(false);
   const cacheRef = useRef(new Map<number, Projection>());
   const seqRef = useRef(0);
+  const inFlightRef = useRef<{ tick: number } | null>(null);
+  const pendingRef = useRef<number | null>(null);
   const scrubbingRef = useRef(false);
+  const prefetchEpochRef = useRef(0);
 
   const select = (id: number | null) => {
     selectedRef.current = id;
@@ -86,32 +89,77 @@ export function Replay() {
     setFrame(next);
   }, []);
 
+  const trimCache = useCallback(() => {
+    while (cacheRef.current.size > 64) {
+      const oldest = cacheRef.current.keys().next().value;
+      if (oldest === undefined) break;
+      cacheRef.current.delete(oldest);
+    }
+  }, []);
+
+  const cacheProjection = useCallback(
+    (key: number, projection: Projection) => {
+      cacheRef.current.set(key, projection);
+      cacheRef.current.set(projection.tick, projection);
+      trimCache();
+    },
+    [trimCache],
+  );
+
+  const finishFlight = useCallback(
+    (loadFrameFn: (target: number) => void) => {
+      inFlightRef.current = null;
+      const pending = pendingRef.current;
+      if (pending !== null && frameRef.current?.tick !== pending) {
+        pendingRef.current = null;
+        loadFrameFn(pending);
+      } else if (pending !== null) {
+        pendingRef.current = null;
+      }
+    },
+    [],
+  );
+
   const loadFrame = useCallback(
     (target: number) => {
       const cached = cacheRef.current.get(target);
       if (cached) {
+        if (inFlightRef.current) {
+          seqRef.current += 1;
+          inFlightRef.current = null;
+        }
         present(cached);
         setLoadError(false);
+        pendingRef.current = null;
         return;
       }
+      if (inFlightRef.current) {
+        if (inFlightRef.current.tick !== target) pendingRef.current = target;
+        return;
+      }
+      inFlightRef.current = { tick: target };
       const seq = seqRef.current + 1;
       seqRef.current = seq;
       getJSON<Projection>(`/api/projection?tick=${target}`)
         .then((next) => {
-          cacheRef.current.set(target, next);
-          cacheRef.current.set(next.tick, next);
-          if (seq !== seqRef.current) return;
+          cacheProjection(target, next);
+          if (seq !== seqRef.current) {
+            finishFlight(loadFrame);
+            return;
+          }
           present(next);
           setLoadError(false);
+          finishFlight(loadFrame);
         })
         .catch(() => {
+          finishFlight(loadFrame);
           if (seq !== seqRef.current) return;
           // The previous frame stays on the canvas; the toolbar offers a retry.
           setLoadError(true);
           setPlaying(false);
         });
     },
-    [present],
+    [present, cacheProjection, finishFlight],
   );
 
   // Map and world list.
@@ -188,6 +236,7 @@ export function Replay() {
 
   useEffect(() => {
     if (tick < 0) return;
+    prefetchEpochRef.current += 1;
     loadFrame(tick);
   }, [tick, loadFrame, retryToken]);
 
@@ -256,21 +305,39 @@ export function Replay() {
     return () => window.clearTimeout(timer);
   }, [playing, tick, speed, frame?.tick_seconds, nextHighlight]);
 
+  const prefetchProjection = useCallback(
+    (target: number) => {
+      if (target < 0 || cacheRef.current.has(target)) return;
+      getJSON<Projection>(`/api/projection?tick=${target}`)
+        .then((projection) => cacheProjection(target, projection))
+        .catch(() => {});
+    },
+    [cacheProjection],
+  );
+
   // Playback warms the next highlight so the switch is instant.
   useEffect(() => {
     if (!playing || !frame) return;
     const next = nextHighlight(frame.tick);
     if (next === null) return;
-    if (cacheRef.current.has(next)) return;
-    getJSON<Projection>(`/api/projection?tick=${next}`)
-      .then((projection) => {
-        cacheRef.current.set(next, projection);
-        cacheRef.current.set(projection.tick, projection);
-      })
-      .catch(() => {
-        // The due tick will surface the failure with the retry affordance.
-      });
-  }, [playing, frame, nextHighlight]);
+    prefetchProjection(next);
+  }, [playing, frame, nextHighlight, prefetchProjection]);
+
+  // After a frame is shown, warm adjacent highlights when the UI fetch queue is idle.
+  useEffect(() => {
+    if (!frame || inFlightRef.current || pendingRef.current !== null) return;
+    const tickNow = frame.tick;
+    const nh = nextHighlight(tickNow);
+    const ph = prevHighlight(tickNow);
+    const epoch = prefetchEpochRef.current;
+    window.setTimeout(() => {
+      if (epoch !== prefetchEpochRef.current) return;
+      if (inFlightRef.current || pendingRef.current !== null) return;
+      if (frameRef.current?.tick !== tickNow) return;
+      if (nh !== null) prefetchProjection(nh);
+      if (ph !== null) prefetchProjection(ph);
+    }, 50);
+  }, [frame, nextHighlight, prevHighlight, prefetchProjection]);
 
   useEffect(() => {
     let raf = 0;
@@ -537,6 +604,7 @@ export function Replay() {
           }}
           onPointerDown={(event) => {
             if (event.button !== 0) return;
+            prefetchEpochRef.current += 1;
             scrubbingRef.current = true;
             event.currentTarget.setPointerCapture(event.pointerId);
             seek(event.clientX, event.currentTarget.getBoundingClientRect());
