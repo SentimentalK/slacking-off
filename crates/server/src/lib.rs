@@ -45,8 +45,10 @@ pub struct Server {
     official: bool,
     /// Dev identities: `agents.token` -> agent. Only read in dev mode.
     dev_tokens: std::sync::Mutex<HashMap<String, AgentId>>,
-    /// Fixed one-second command windows per agent (`limits.requests_per_second`).
-    rate: std::sync::Mutex<BTreeMap<AgentId, (Instant, u32)>>,
+    /// Token bucket per agent: `limits.requests_per_second` refills it and
+    /// `limits.requests_burst` is its depth. One entry per agent that has ever
+    /// sent a command, never one per request.
+    rate: std::sync::Mutex<BTreeMap<AgentId, RateBucket>>,
     /// Open long-poll connections, capped by `limits.wait_connections`.
     wait_active: AtomicUsize,
     /// Open SSE connections, capped by `limits.watch_connections`.
@@ -124,6 +126,41 @@ fn take_slot(counter: &AtomicUsize, limit: usize) -> bool {
         false
     } else {
         true
+    }
+}
+
+/// Design §9 (v1.2): one token bucket per agent, so a shell that fires a batch
+/// of commands back to back is not swallowed while a sustained flood still
+/// meets the configured rate. The bucket holds `burst` commands; it refills at
+/// `requests_per_second` and never above its depth. No queue: a refused command
+/// is answered at once with the seconds until the next token.
+struct RateBucket {
+    tokens: f64,
+    filled_at: Instant,
+}
+
+impl RateBucket {
+    /// A bucket for an agent that has not spent anything yet: full depth, so a
+    /// fresh agent's first batch is never swallowed.
+    fn full(burst: u32) -> Self {
+        Self {
+            tokens: f64::from(burst.max(1)),
+            filled_at: Instant::now(),
+        }
+    }
+
+    /// Spends one token, or returns the whole seconds until one is available.
+    fn take(&mut self, now: Instant, per_second: u32, burst: u32) -> Result<(), u32> {
+        let depth = f64::from(burst.max(1));
+        let elapsed = now.saturating_duration_since(self.filled_at).as_secs_f64();
+        self.tokens = (self.tokens + elapsed * f64::from(per_second)).min(depth);
+        self.filled_at = now;
+        if self.tokens >= 1.0 {
+            self.tokens -= 1.0;
+            return Ok(());
+        }
+        let wait = (1.0 - self.tokens) / f64::from(per_second.max(1));
+        Err(wait.ceil().max(1.0) as u32)
     }
 }
 
@@ -695,33 +732,38 @@ impl Server {
         self.cfg.wait_default_seconds()
     }
 
-    /// Fixed one-second window per agent (`limits.requests_per_second = 0`
-    /// disables the check). The first `rps` calls in a window pass.
+    /// Whole seconds in one tick, never less than one: the retry hint for a
+    /// connection slot that frees when the running wait ends.
+    fn tick_seconds_ceil(&self) -> u32 {
+        self.cfg.tick_seconds.ceil().max(1.0) as u32
+    }
+
+    /// Token bucket per agent (`limits.requests_per_second = 0` disables the
+    /// check): `limits.requests_burst` commands pass back to back, then the
+    /// sustained rate applies. A refusal carries the retry delay in seconds.
     fn check_rate(&self, agent: AgentId) -> Result<(), ApiError> {
-        let limit = self.cfg.limits.requests_per_second;
-        if limit == 0 {
+        let per_second = self.cfg.limits.requests_per_second;
+        if per_second == 0 {
             return Ok(());
         }
-        let now = Instant::now();
-        let mut windows = self
+        let burst = self.cfg.limits.requests_burst;
+        let mut buckets = self
             .rate
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        match windows.get_mut(&agent) {
-            Some((started, count)) if now.duration_since(*started) < Duration::from_secs(1) => {
-                if *count >= limit {
-                    return Err(ApiError::new(
-                        ErrorCode::RateLimited,
-                        "too many requests; try again shortly",
-                    ));
-                }
-                *count += 1;
-            }
-            _ => {
-                windows.insert(agent, (now, 1));
-            }
-        }
-        Ok(())
+        let bucket = buckets
+            .entry(agent)
+            .or_insert_with(|| RateBucket::full(burst));
+        bucket
+            .take(Instant::now(), per_second, burst)
+            .map_err(|retry_after_seconds| {
+                ApiError::rate_limited(
+                    format!(
+                        "too many requests: at most {per_second} per second per agent, with a burst of {burst}"
+                    ),
+                    retry_after_seconds,
+                )
+            })
     }
 
     fn wait_slot(&self) -> Option<WaitSlot<'_>> {
@@ -733,9 +775,9 @@ impl Server {
     pub fn watch_slot(self: &Arc<Self>) -> Result<WatchSlot, ApiError> {
         let limit = self.cfg.limits.watch_connections;
         if !take_slot(&self.watch_active, limit) {
-            return Err(ApiError::new(
-                ErrorCode::RateLimited,
+            return Err(ApiError::rate_limited(
                 format!("too many open watch connections (limit {limit})"),
+                self.tick_seconds_ceil(),
             ));
         }
         Ok(WatchSlot {
@@ -1522,6 +1564,12 @@ impl Server {
             wait_effective_default_seconds: cfg.wait_default_seconds(),
             wait_max_seconds: cfg.wait.max_seconds,
             snapshot_interval_ticks: cfg.persist.snapshot_interval_ticks,
+            max_on_field: cfg.max_on_field,
+            deadline_ticks_min: cfg.need.deadline_ticks_min,
+            deadline_ticks_max: cfg.need.deadline_ticks_max,
+            time_bonus_percent: cfg.need.time_bonus_percent,
+            windup_ticks: cfg.combat.windup_ticks,
+            defend_ticks: cfg.combat.defend_ticks,
         };
         let env = Envelope::ok(result, Vec::new(), None);
         self.finish("config", None, tick, env, started, "timings", None)
@@ -2023,7 +2071,7 @@ impl Server {
                 None,
             );
         }
-        let label = format!("defend {target} this tick");
+        let label = format!("defend {target} for {} ticks", self.cfg.combat.defend_ticks);
         let intent = IntentKind::Defend { target };
         let intent_json = serde_json::to_value(&intent).ok();
         queue_intent(&mut inner, agent, intent);
@@ -2186,7 +2234,7 @@ impl Server {
             }
         };
         let target = absolute_target(pos, req.target);
-        if let Err(message) = loo_core::validate_downgrade(&inner.world, agent, target) {
+        if let Err(message) = loo_core::validate_downgrade(&inner.world, agent, target, &self.cfg) {
             let env = failed_env(&self.cfg, &mut inner, Some(agent), ApiError::rule(message));
             drop(inner);
             return self.finish(
@@ -2479,9 +2527,13 @@ impl Server {
         };
         let Some(_slot) = self.wait_slot() else {
             let limit = self.cfg.limits.wait_connections;
-            let env = error_envelope::<WaitResponse>(
-                ErrorCode::RateLimited,
-                format!("too many open wait connections (limit {limit})"),
+            let env = Envelope::<WaitResponse>::failed(
+                ApiError::rate_limited(
+                    format!("too many open wait connections (limit {limit})"),
+                    self.tick_seconds_ceil(),
+                ),
+                Vec::new(),
+                None,
             );
             return self.finish(
                 "wait",
@@ -2845,6 +2897,14 @@ fn rules_text(cfg: &Config, map_width: i32, map_height: i32, official: bool) -> 
         .map(|threshold| threshold.to_string())
         .collect::<Vec<_>>()
         .join("/");
+    let rate_fact = if cfg.limits.requests_per_second == 0 {
+        "This server sets no command rate limit.".to_string()
+    } else {
+        format!(
+            "The server accepts {} commands per second per agent with a burst of {}; a command over that is answered as rate limited, not as a rule rejection, and states how many seconds to wait.",
+            cfg.limits.requests_per_second, cfg.limits.requests_burst
+        )
+    };
     let (mode, identity) = if official {
         (
             "official",
@@ -2878,13 +2938,13 @@ Commands
   loo move <N|E|S|W> [steps]   |   loo move <path, e.g. NNEE>
       Queue a move. One cell per tick. It stops at the first wall, closed door, other agent or map edge, and tells you where and why.
   loo attack <N|E|S|W>
-      Commit an attack on the unstunned agent in that adjacent cell. The windup is {windup} ticks; the hit resolves on the landing tick, and a target that stepped away is missed. A hit removes {penalty} ticks from the target's deadline, stuns it for {stun} ticks and then leaves it immune for {immunity} ticks. The attack cooldown is {attack_cooldown} ticks from the commit. A defended cell blocks the hit and stuns the attacker.
+      Commit an attack on the unstunned agent in that adjacent cell. The windup is {windup} ticks; the hit resolves on the landing tick, and a target that stepped away inside the windup is missed. A hit removes {penalty} ticks from the target's deadline, stuns it for {stun} ticks and then leaves it immune for {immunity} ticks. The attack cooldown is {attack_cooldown} ticks from the commit. A defended cell blocks the hit and stuns the attacker.
   loo defend <N|E|S|W>
-      Shield one adjacent cell for one tick. Attacks and every demolition aimed at that cell are blocked; the attacker is stunned for {stun} ticks. A defending tick cannot build, move or attack; a use is paused, not interrupted. The defend cooldown is {defend_cooldown} ticks. Your own cell cannot be defended.
+      Shield one adjacent cell for {defend} ticks, starting with the tick the defence settles in. Attacks and every demolition aimed at that cell while the shield holds are blocked; the attacker is stunned for {stun} ticks. On the tick a defence starts you cannot build, move or attack; a use is paused, not interrupted. The defend cooldown is {defend_cooldown} ticks. Your own cell cannot be defended.
   loo build wall|door|toilet <dir|here>
       Queue work on a cell: your own cell (here) or one step away. A wall needs {wall_work} work points, a door {door_work}, a level 1 toilet {toilet_work}; each work tick adds 1 point, so several agents build faster. A new door starts closed.
   loo upgrade <dir|here>
-      Work a toilet up one level. Each worker adds 1 work point per tick; levels 1 to 4 need {upgrade_work} points. Your agent level must be at least the target level; agent levels are cumulative score {levels} for levels 1 to 5. At most 5 agents work one toilet, and a toilet with non-zero progress is not usable.
+      Work a toilet up one level. Each worker adds 1 work point per tick; levels 1 to 4 need {upgrade_work} points. Your agent level must be at least the target level; agent levels are cumulative score {levels} for levels 1 to 5. At most {max_toilet_workers} agents work one toilet, and a toilet with non-zero progress is not usable.
   loo demolish <dir|here>
       Queue demolition of the object on a cell. A wall or door loses {wall_door_demolish} work per tick until it is gone (a wall has {wall_work} work, a door {door_work}); an unfinished site goes in {site_demolish} tick. A toilet is downgraded continuously at {toilet_demolish} per tick; while its progress is not 0 it cannot be used.
   loo downgrade <dir|here>
@@ -2892,7 +2952,7 @@ Commands
   loo door open|close <N|E|S|W>
       Queue a door state change. Only an agent standing on a toilet cell next to the door may do it. At the end of a tick a closed door with nobody on an adjacent toilet cell opens by itself.
   loo use
-      Start using the toilet under your feet. It must be at a complete level and its four sides must be finished walls or closed doors. The rules are re-checked every tick; an interruption keeps the progress but opens a {recovery}s recovery window. A completed use scores.
+      Start using the toilet under your feet. It must be at a complete level and its four sides must be finished walls or closed doors. The rules are re-checked every tick; an interruption keeps the progress and opens a recovery window of {recovery} ticks (never past your deadline). A completed use scores.
   loo cancel
       Queue a cancel of the running action. The tick settles it; a cancelled use keeps its progress and opens the recovery window.
   loo leave
@@ -2903,6 +2963,18 @@ Commands
   loo rules
       This text.
 
+Need, deadline and score
+- Joining assigns one need at random: urine or feces. `status` shows which one.
+- A use needs {urine_use} ticks for urine and {feces_use} ticks for feces. Each use tick counts with the multiplier of the toilet level it was spent on.
+- Joining also sets a deadline {deadline_min} to {deadline_max} ticks after joining, chosen at random. `status` shows the ticks left; one warning arrives when {deadline_warning} ticks or fewer remain.
+- Reaching your deadline ends the session at that tick: the outcome is failed, the score is 0, and you are out of the world at once (you may join again). Missing the {recovery}-tick recovery window after an interruption ends it the same way.
+- A completed use scores round(base x weighted multiplier, half up) + round(base x {time_bonus_percent}% x remaining / deadline_span).
+  - base: {base_urine} for urine, {base_feces} for feces.
+  - weighted multiplier: the mean of the multiplier of the toilet level on each use tick; levels 1 to 5 carry {multipliers}.
+  - remaining: the ticks left on your deadline when the use completes. deadline_span: the length of the deadline you drew at join ({deadline_min} to {deadline_max} ticks). Finishing at once pays the full {time_bonus_percent}% of base; finishing on the deadline pays no time bonus.
+- After a completed use you stay up to {linger} more ticks; then the session ends as a success and keeps its score.
+- Agent level is your cumulative score across sessions: levels 1 to 5 start at {levels}. A toilet can only be worked up to a level no higher than the worker's agent level.
+
 World facts
 - Every agent occupies one cell; two agents never share a cell.
 - Dirs: N north (y-1), E east (x+1), S south (y+1), W west (x-1).
@@ -2912,7 +2984,8 @@ World facts
 - View symbols: # wall, + closed door, ' open door, 1-5 toilet level, x unfinished site, @ you, a-z other agents, . buildable floor, : no-build floor, ? not seen or outside the map.
 - You cannot see or receive events from outside your view; you get the full map size, the entrance, the toilets and the no-build areas once, when you join.
 - The grid includes outside queue lanes. If the field is full or the entrance is occupied, you wait on a queue cell: no need, no deadline, and a command at least every 60 seconds keeps you there. The entrance admits at most one agent per tick; a queue cell can be left, or you can fight your way forward.
-- Exit codes: 0 the command succeeded, 1 the rules rejected it, 2 network, authentication or usage problem.",
+- {rate_fact}
+- Exit codes: 0 the command succeeded, 1 the rules rejected it, 2 network, authentication or usage problem, 3 rate limited (wait the stated seconds, then retry the same command).",
         w = map_width,
         h = map_height,
         tick = cfg.tick_seconds,
@@ -2925,12 +2998,31 @@ World facts
         site_demolish = cfg.build.site_demolish_per_tick,
         toilet_demolish = cfg.build.toilet_demolish_per_tick,
         recovery = cfg.need.interrupt_recovery_ticks,
+        urine_use = cfg.need.urine_use_ticks,
+        feces_use = cfg.need.feces_use_ticks,
+        base_urine = cfg.need.base_score_urine,
+        base_feces = cfg.need.base_score_feces,
+        time_bonus_percent = cfg.need.time_bonus_percent,
+        deadline_min = cfg.need.deadline_ticks_min,
+        deadline_max = cfg.need.deadline_ticks_max,
+        deadline_warning = cfg.need.deadline_warning_ticks,
+        multipliers = cfg
+            .toilet
+            .multiplier
+            .iter()
+            .map(|multiplier| multiplier.to_string())
+            .collect::<Vec<_>>()
+            .join("/"),
+        linger = cfg.need.linger_ticks,
+        rate_fact = rate_fact,
         windup = cfg.combat.windup_ticks,
         penalty = cfg.combat.penalty_ticks,
         stun = cfg.combat.stun_ticks,
         immunity = cfg.combat.immunity_ticks,
         attack_cooldown = cfg.combat.attack_cooldown_ticks,
+        defend = cfg.combat.defend_ticks,
         defend_cooldown = cfg.combat.defend_cooldown_ticks,
+        max_toilet_workers = cfg.build.max_toilet_workers,
         wait_default = cfg.wait.default_seconds,
         wait_max = cfg.wait.max_seconds,
     )
@@ -2940,3 +3032,102 @@ pub mod auth;
 pub mod http;
 pub mod projection;
 pub mod store;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rate_bucket_passes_a_batch_then_holds_the_sustained_rate() {
+        let start = Instant::now();
+        let mut bucket = RateBucket::full(12);
+        for _ in 0..12 {
+            assert_eq!(
+                bucket.take(start, 2, 12),
+                Ok(()),
+                "a batch of 12 commands passes in the same instant"
+            );
+        }
+        let retry = bucket
+            .take(start, 2, 12)
+            .expect_err("the 13th command in that second is refused");
+        assert_eq!(retry, 1, "at two tokens a second, one is a second away");
+        let after_a_second = start + Duration::from_secs(1);
+        assert_eq!(bucket.take(after_a_second, 2, 12), Ok(()));
+        assert_eq!(bucket.take(after_a_second, 2, 12), Ok(()));
+        assert!(
+            bucket.take(after_a_second, 2, 12).is_err(),
+            "the refill is two per second, not the whole burst"
+        );
+    }
+
+    #[test]
+    fn rate_bucket_never_refills_past_its_burst() {
+        let start = Instant::now();
+        let mut bucket = RateBucket::full(4);
+        let an_hour_later = start + Duration::from_secs(3600);
+        for _ in 0..4 {
+            assert_eq!(bucket.take(an_hour_later, 2, 4), Ok(()));
+        }
+        assert!(
+            bucket.take(an_hour_later, 2, 4).is_err(),
+            "idle time cannot bank more than the burst"
+        );
+    }
+
+    #[test]
+    fn rules_text_states_the_facts_from_the_config() {
+        let mut cfg = Config::default();
+        let text = rules_text(&cfg, 100, 100, false);
+        for expected in [
+            "A use needs 4 ticks for urine and 8 ticks for feces",
+            "levels 1 to 5 carry 1/2/3/5/10",
+            "round(base x weighted multiplier, half up)",
+            "base x 50% x remaining / deadline_span",
+            "a deadline 36 to 60 ticks after joining",
+            "recovery window of 12 ticks",
+            "stay up to 36 more ticks",
+            "levels 1 to 5 start at 0/1000/3000/8000/20000",
+            "The windup is 6 ticks",
+            "Shield one adjacent cell for 6 ticks",
+            "At most 5 agents work one toilet",
+            "2 commands per second per agent with a burst of 12",
+        ] {
+            assert!(
+                text.contains(expected),
+                "rules text is missing {expected:?}"
+            );
+        }
+        assert!(
+            !text.contains("12s"),
+            "the recovery window is stated in ticks, not seconds"
+        );
+
+        cfg.need.urine_use_ticks = 5;
+        cfg.need.linger_ticks = 40;
+        cfg.need.interrupt_recovery_ticks = 15;
+        cfg.need.time_bonus_percent = 25;
+        cfg.toilet.multiplier = [1, 2, 4, 8, 16];
+        cfg.limits.requests_burst = 20;
+        cfg.combat.windup_ticks = 9;
+        cfg.combat.defend_ticks = 4;
+        cfg.build.max_toilet_workers = 3;
+        let changed = rules_text(&cfg, 100, 100, false);
+        for expected in [
+            "A use needs 5 ticks for urine",
+            "levels 1 to 5 carry 1/2/4/8/16",
+            "recovery window of 15 ticks",
+            "stay up to 40 more ticks",
+            "with a burst of 20",
+            "base x 25% x remaining / deadline_span",
+            "The windup is 9 ticks",
+            "Shield one adjacent cell for 4 ticks",
+            "At most 3 agents work one toilet",
+        ] {
+            assert!(
+                changed.contains(expected),
+                "a config change did not reach the rules text: {expected:?}"
+            );
+        }
+    }
+}

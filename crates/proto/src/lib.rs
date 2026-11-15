@@ -547,6 +547,17 @@ pub struct ConfigResponse {
     pub wait_effective_default_seconds: f64,
     pub wait_max_seconds: f64,
     pub snapshot_interval_ticks: u32,
+    /// Agents allowed inside the world at once.
+    pub max_on_field: usize,
+    /// Shortest and longest deadline a session can draw, in ticks.
+    pub deadline_ticks_min: u32,
+    pub deadline_ticks_max: u32,
+    /// Maximum time bonus, as a percent of the base score.
+    pub time_bonus_percent: u32,
+    /// Ticks between committing an attack and its landing.
+    pub windup_ticks: u32,
+    /// Ticks a defend shields its adjacent cell.
+    pub defend_ticks: u32,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -601,6 +612,7 @@ pub enum ErrorCode {
     NotAuthenticated,
     NoSession,
     QueueFull,
+    /// Too many commands per second. Machine-readable retry hint, CLI exit 3.
     RateLimited,
     BadRequest,
     Internal,
@@ -610,6 +622,10 @@ pub enum ErrorCode {
 pub struct ApiError {
     pub code: ErrorCode,
     pub message: String,
+    /// Seconds to wait before this command is worth retrying. Only rate
+    /// limiting sets it; the CLI prints it as-is (design §10, v1.2).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry_after_seconds: Option<u32>,
 }
 
 impl ApiError {
@@ -617,11 +633,21 @@ impl ApiError {
         Self {
             code,
             message: message.into(),
+            retry_after_seconds: None,
         }
     }
 
     pub fn rule(message: impl Into<String>) -> Self {
         Self::new(ErrorCode::RuleRejected, message)
+    }
+
+    /// The server's own answer to "how long is too short": at least one second.
+    pub fn rate_limited(message: impl Into<String>, retry_after_seconds: u32) -> Self {
+        Self {
+            code: ErrorCode::RateLimited,
+            message: message.into(),
+            retry_after_seconds: Some(retry_after_seconds.max(1)),
+        }
     }
 
     /// HTTP status the server pairs with this error.

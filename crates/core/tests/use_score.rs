@@ -125,6 +125,8 @@ fn armed(world: &WorldState, agent: u64, at: Pos, need: Need, deadline: Tick) ->
     entry.status = SessionStatus::Inside;
     entry.need = Some(need);
     entry.deadline = deadline;
+    // These scenarios join at tick 0, so the drawn deadline is the span.
+    entry.deadline_span = deadline;
     next.entry_queue.retain(|queued| *queued != session);
     next
 }
@@ -274,6 +276,10 @@ fn needs_are_assigned_at_join_and_at_admission_inside_the_configured_window() {
         (min..=max).contains(&deadline_a),
         "deadline {deadline_a} is inside {min}..={max}"
     );
+    assert_eq!(
+        after_a.sessions[&session_a].deadline_span, deadline_a,
+        "a join at tick 0 draws a span equal to the deadline"
+    );
     assert!(matches!(need_a, Need::Urine | Need::Feces));
     let assigned = find(&a_events, |kind| {
         matches!(kind, EventKind::NeedAssigned { .. })
@@ -311,6 +317,11 @@ fn needs_are_assigned_at_join_and_at_admission_inside_the_configured_window() {
         (2 + min..=2 + max).contains(&entry.deadline),
         "admission at tick 2 assigns inside the window: {}",
         entry.deadline
+    );
+    assert_eq!(
+        entry.deadline_span,
+        entry.deadline - 2,
+        "the span is measured from the admission tick"
     );
     let assigned = find(&events, |kind| {
         matches!(kind, EventKind::NeedAssigned { session: 20, .. })
@@ -491,7 +502,7 @@ fn score_weights_each_tick_by_its_toilet_level_and_pays_the_time_bonus() {
     let session = end.session_of(1).expect("session");
     assert_eq!(session.use_levels, vec![5, 5, 5, 5, 5, 5, 1, 1]);
     assert_eq!(session.outcome, Some(SessionOutcome::Success));
-    assert_eq!(session.score, 1550 + (1000 - 9));
+    assert_eq!(session.score, 1550 + 99, "50% of 200 scaled to 991/1000");
     assert_eq!(session.score, session_score(session, &cfg, 9));
     assert!(matches!(
         find(&events, |kind| matches!(
@@ -500,7 +511,7 @@ fn score_weights_each_tick_by_its_toilet_level_and_pays_the_time_bonus() {
         ))
         .kind,
         EventKind::UseSucceeded {
-            score: 2541,
+            score: 1649,
             success_tick: 9,
             linger_until: 45,
             ..
