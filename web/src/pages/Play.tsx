@@ -511,7 +511,12 @@ export function Play() {
                   />
                 ))}
               </div>
-              <button class="button play-submit" type="submit" disabled={busy}>
+              <button
+                class="button play-submit"
+                type="submit"
+                disabled={busy}
+                data-testid="play-create"
+              >
                 {busy ? '创建中…' : '创建角色'}
               </button>
             </form>
@@ -535,14 +540,26 @@ export function Play() {
         <section class="play-main">
           <div class="play-board-column">
             <div class="play-board-head">
-              <span class="play-tick mono" data-play-tick={state?.tick ?? ''}>
+              <span
+                class="play-tick mono"
+                data-play-tick={state?.tick ?? ''}
+                data-testid="play-tick"
+              >
                 TICK {state?.tick ?? '—'}
               </span>
               <span class="play-countdown-label">下一结算</span>
-              <span class="play-countdown mono" data-play-countdown={Math.round(msLeft)}>
+              <span
+                class="play-countdown mono"
+                data-play-countdown={Math.round(msLeft)}
+                data-testid="play-countdown"
+              >
                 {countdown}
               </span>
-              <span class="play-place" data-play-joined={state?.joined ? 'true' : 'false'}>
+              <span
+                class="play-place"
+                data-play-joined={state?.joined ? 'true' : 'false'}
+                data-testid="play-placement"
+              >
                 {state?.placement === 'inside'
                   ? '在场'
                   : state?.placement === 'waiting'
@@ -556,6 +573,7 @@ export function Play() {
                 <canvas
                   ref={canvasRef}
                   class="play-board"
+                  data-testid="play-board"
                   onClick={(event) => handleBoardClick(event as unknown as MouseEvent)}
                   aria-label="9×9 视野棋盘，点自己或相邻格选择"
                 />
@@ -571,6 +589,7 @@ export function Play() {
                   class="play-key"
                   type="button"
                   aria-label="向北移动（W / ↑）"
+                  data-testid="play-move-n"
                   disabled={!canMove}
                   onClick={() => void doMove('N')}
                 >
@@ -581,6 +600,7 @@ export function Play() {
                   class="play-key"
                   type="button"
                   aria-label="向西移动（A / ←）"
+                  data-testid="play-move-w"
                   disabled={!canMove}
                   onClick={() => void doMove('W')}
                 >
@@ -591,6 +611,7 @@ export function Play() {
                   class="play-key"
                   type="button"
                   aria-label="向东移动（D / →）"
+                  data-testid="play-move-e"
                   disabled={!canMove}
                   onClick={() => void doMove('E')}
                 >
@@ -601,6 +622,7 @@ export function Play() {
                   class="play-key"
                   type="button"
                   aria-label="向南移动（S / ↓）"
+                  data-testid="play-move-s"
                   disabled={!canMove}
                   onClick={() => void doMove('S')}
                 >
@@ -621,6 +643,7 @@ export function Play() {
                 <button
                   class="button button-secondary play-wide"
                   type="button"
+                  data-testid="play-leave"
                   disabled={!state?.joined || busy}
                   onClick={() => void doLeave()}
                 >
@@ -630,6 +653,7 @@ export function Play() {
                   <button
                     class="button play-wide play-use"
                     type="button"
+                    data-testid="play-use"
                     disabled={busy || offer.reason !== null}
                     onClick={() => void runAction(offer.action)}
                   >
@@ -655,11 +679,17 @@ export function Play() {
           <aside class="play-side">
             {resultTitle ? (
               <Panel label="本局结果" class="play-result">
-                <p class="play-outcome">{resultTitle}</p>
+                <p class="play-outcome" data-testid="play-outcome">{resultTitle}</p>
                 {outcome?.score !== null && outcome?.score !== undefined ? (
                   <p class="muted">得分 {outcome.score}</p>
                 ) : null}
-                <button class="button play-wide" type="button" disabled={busy} onClick={() => void doJoin()}>
+                <button
+                  class="button play-wide"
+                  type="button"
+                  data-testid="play-again"
+                  disabled={busy}
+                  onClick={() => void doJoin()}
+                >
                   再玩一次
                 </button>
               </Panel>
@@ -680,6 +710,7 @@ export function Play() {
                   <button
                     class="button play-wide"
                     type="button"
+                    data-testid="play-join"
                     disabled={busy}
                     onClick={() => void doJoin()}
                   >
@@ -687,7 +718,7 @@ export function Play() {
                   </button>
                 </>
               ) : (
-                <dl class="play-stats">
+                <dl class="play-stats" data-testid="play-stats">
                   <div>
                     <dt>位置</dt>
                     <dd class="mono">
@@ -754,6 +785,9 @@ export function Play() {
                           key={action.id}
                           class="button button-secondary play-action"
                           type="button"
+                          data-testid={
+                            action.id === 'door-close' ? 'play-close-door' : `play-action-${action.id}`
+                          }
                           disabled={busy}
                           onClick={() => void runAction(action)}
                         >
@@ -772,7 +806,7 @@ export function Play() {
               {events.length === 0 ? (
                 <p class="muted">还没有事件。</p>
               ) : (
-                <ol class="play-events">
+                <ol class="play-events" data-testid="play-events">
                   {events.map((event) => (
                     <li key={`${event.tick}:${event.seq}`} class="play-event">
                       <span class="play-event-tick mono">T{event.tick}</span>
