@@ -71,6 +71,21 @@ async function shoot(browser, shot) {
       const card = await page.$('.ui-card');
       check(card !== null, `${shot.name}: missing .ui-card`);
     }
+    if (shot.viewport.width === PHONE.width) {
+      await page.waitForSelector('.ui-card.sel', { timeout: 30000 });
+      const geometry = await page.evaluate(() => {
+        const box = (el) => {
+          const r = el.getBoundingClientRect();
+          return { left: r.left, right: r.right, top: r.top, bottom: r.bottom, height: r.height };
+        };
+        return { card: box(document.querySelector('.ui-card')), bar: box(document.querySelector('.ui-bottom')) };
+      });
+      const { card, bar } = geometry;
+      check(card.height <= 56, `${shot.name}: .ui-card height ${card.height.toFixed(1)} > 56`);
+      check(bar.height <= 96, `${shot.name}: .ui-bottom height ${bar.height.toFixed(1)} > 96`);
+      const overlap = card.left < bar.right && card.right > bar.left && card.top < bar.bottom && card.bottom > bar.top;
+      check(!overlap, `${shot.name}: .ui-card and .ui-bottom bounding boxes overlap`);
+    }
   }
   if (shot.route === '/leaderboard') {
     const win = await page.$('.win[data-window="leaderboard"]');
@@ -83,28 +98,65 @@ async function shoot(browser, shot) {
   console.log(`shot ${file}`);
 }
 
+async function cardToggleFlow(browser) {
+  const page = await openPage(browser, '/', PHONE);
+  await page.waitForSelector('.ui-card.sel', { timeout: 30000 });
+  const archiveVisible = () =>
+    page.evaluate(() =>
+      Array.from(document.querySelectorAll('.ui-card button')).some(
+        (b) => b.textContent.trim() === '看档案' && b.getBoundingClientRect().height > 0,
+      ),
+    );
+  check(!(await archiveVisible()), 'card toggle: 看档案 visible before expanding');
+  await page.click('[data-card-toggle]');
+  await page.waitForFunction(
+    () =>
+      Array.from(document.querySelectorAll('.ui-card button')).some(
+        (b) => b.textContent.trim() === '看档案' && b.getBoundingClientRect().height > 0,
+      ),
+    { timeout: 5000 },
+  );
+  check(await archiveVisible(), 'card toggle: 看档案 not visible after expanding');
+  await page.close();
+}
+
 async function windowFlow(browser) {
   const page = await openPage(browser, '/', DESKTOP);
   await page.evaluate(() => {
     window.__canvasRef = document.querySelector('canvas');
   });
   const sameCanvas = () => page.evaluate(() => document.querySelector('canvas') === window.__canvasRef);
+  const stepAt = async (label, fn) => {
+    try {
+      return await fn();
+    } catch (error) {
+      throw new Error(`${label}: ${error.message}`);
+    }
+  };
 
-  await page.click('[data-open="leaderboard"]');
-  await page.waitForSelector('.win[data-window="leaderboard"]', { timeout: 10000 });
+  await stepAt('open', () => page.click('[data-open="leaderboard"]'));
+  await stepAt('open waits for window', () =>
+    page.waitForSelector('.win[data-window="leaderboard"]', { timeout: 10000 }),
+  );
   check((await page.evaluate(() => location.pathname)) === '/leaderboard', 'flow: URL is not /leaderboard after open');
   check(await sameCanvas(), 'flow: canvas replaced on open');
 
-  await page.click('.win-close');
-  await page.waitForFunction(() => location.pathname === '/' && !document.querySelector('.win'), { timeout: 10000 });
+  await stepAt('close click', () => page.click('.win-close'));
+  await stepAt('close waits for root', () =>
+    page.waitForFunction(() => location.pathname === '/' && !document.querySelector('.win'), { timeout: 10000 }),
+  );
   check(await sameCanvas(), 'flow: canvas replaced on close');
 
-  await page.goBack();
-  await page.waitForSelector('.win[data-window="leaderboard"]', { timeout: 10000 });
+  await stepAt('back', () => page.goBack());
+  await stepAt('back waits for window', () =>
+    page.waitForSelector('.win[data-window="leaderboard"]', { timeout: 10000 }),
+  );
   check(await sameCanvas(), 'flow: canvas replaced on back');
 
-  await page.keyboard.press('Escape');
-  await page.waitForFunction(() => !document.querySelector('.win'), { timeout: 10000 });
+  await stepAt('esc', () => page.keyboard.press('Escape'));
+  await stepAt('esc waits for close', () =>
+    page.waitForFunction(() => !document.querySelector('.win'), { timeout: 10000 }),
+  );
   check(await sameCanvas(), 'flow: canvas replaced on Esc');
   await page.close();
 }
@@ -130,6 +182,11 @@ try {
     } catch (error) {
       failures.push(`${shot.name}: ${error.message}`);
     }
+  }
+  try {
+    await cardToggleFlow(browser);
+  } catch (error) {
+    failures.push(`card toggle flow: ${error.message}`);
   }
   try {
     await windowFlow(browser);

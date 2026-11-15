@@ -21,6 +21,7 @@ function meterColor(fraction: number): string {
 
 export function Card({ agent, tick, top3, onVision }: Props) {
   const [visionOn, setVisionOn] = useState(true);
+  const [expanded, setExpanded] = useState(false);
 
   if (!agent) {
     return (
@@ -56,21 +57,30 @@ export function Card({ agent, tick, top3, onVision }: Props) {
   };
 
   return (
-    <div class="ui-card panel sel">
+    <div class={expanded ? 'ui-card panel sel expanded' : 'ui-card panel sel'}>
       <div class="who">
         <div class="dot" style={{ background: agentColor(agent.color) }} />
-        <div>
+        <div class="card-id">
           <div class="nick">
             {agent.nick}
             {agent.kind === 'human' ? <span class="tag h">人</span> : <span class="tag">AI</span>}
           </div>
-          <div class="sub">
+          <div class="sub card-level">
             等级 {agent.level} · 累计 {formatNumber(agent.score_total)} 分
           </div>
         </div>
+        <button
+          type="button"
+          class="card-toggle"
+          data-card-toggle
+          aria-expanded={expanded ? 'true' : 'false'}
+          onClick={() => setExpanded(!expanded)}
+        >
+          {expanded ? '收起' : '展开'}
+        </button>
       </div>
 
-      <div class="kv">
+      <div class="kv card-need">
         <b>{agent.need ? `${NEED_LABEL[agent.need]}${urgent ? ' · 快憋不住了' : ''}` : '没有需求'}</b>
         <span class="sub">{agent.need ? `还能憋 ${remaining} 回合` : '—'}</span>
       </div>
@@ -78,31 +88,33 @@ export function Card({ agent, tick, top3, onVision }: Props) {
         <i style={{ width: `${agent.need ? fraction * 100 : 0}%`, background: meterColor(fraction) }} />
       </div>
 
-      <div class="kv">
-        <span class="sub">如厕进度 {agent.use_done}/{agent.use_total}</span>
-      </div>
-      <div class="pips">
-        {agent.use_total === 0
-          ? <span class="sub">—</span>
-          : Array.from({ length: agent.use_total }, (_, index) => (
+      <div class="card-body">
+        <div class="kv">
+          <span class="sub">如厕进度 {agent.use_done}/{agent.use_total}</span>
+        </div>
+        <div class="pips">
+          {agent.use_total === 0 ? (
+            <span class="sub">—</span>
+          ) : (
+            Array.from({ length: agent.use_total }, (_, index) => (
               <i key={index} class={index < agent.use_done ? 'f' : undefined} />
-            ))}
-      </div>
+            ))
+          )}
+        </div>
 
-      <div class="kv">
-        <span class="sub">来由（自报）</span>
-        <span>
-          {agent.kind === 'human' ? '自己上场' : agent.sent_by ? SENT_BY_LABEL[agent.sent_by] : '—'}
-        </span>
-      </div>
+        <div class="kv">
+          <span class="sub">来由（自报）</span>
+          <span>{agent.kind === 'human' ? '自己上场' : agent.sent_by ? SENT_BY_LABEL[agent.sent_by] : '—'}</span>
+        </div>
 
-      <div class="kv">
-        <button type="button" onClick={() => navigate(`/agent/${agent.id}`)}>
-          看档案
-        </button>
-        <button type="button" aria-pressed={visionOn ? 'true' : 'false'} onClick={toggleVision}>
-          看它的视野
-        </button>
+        <div class="kv">
+          <button type="button" onClick={() => navigate(`/agent/${agent.id}`)}>
+            看档案
+          </button>
+          <button type="button" aria-pressed={visionOn ? 'true' : 'false'} onClick={toggleVision}>
+            看它的视野
+          </button>
+        </div>
       </div>
     </div>
   );

@@ -9,7 +9,7 @@
   --ok: #4cc964;
   --bad: #f0554d;
   --blue: #58b7ff;
-  --bottom-h: 200px;
+  --bottom-h: 96px;
   position: fixed;
   inset: 0;
   overflow: hidden;
@@ -297,6 +297,13 @@
   max-width: calc(100vw - 32px);
   white-space: nowrap;
 }
+.shell .bottom-queue,
+.shell .bottom-actions {
+  display: contents;
+}
+.shell .card-toggle {
+  display: none;
+}
 .shell .chip {
   padding: 4px 9px;
   border-radius: 9px;
@@ -495,13 +502,104 @@
   .shell:has(.ui-card.sel) .ui-feed {
     display: none;
   }
+  .shell .ui-card {
+    display: grid;
+    grid-template-columns: 28px minmax(0, 1fr) auto;
+    grid-template-areas:
+      'dot who tog'
+      'dot need need'
+      'dot bar bar'
+      'body body body';
+    column-gap: 8px;
+    row-gap: 2px;
+    align-items: center;
+    padding: 5px 10px;
+  }
+  .shell .ui-card .who {
+    display: contents;
+  }
+  .shell .ui-card .dot {
+    grid-area: dot;
+    width: 28px;
+    height: 28px;
+    border-radius: 9px;
+  }
+  .shell .ui-card .card-id {
+    grid-area: who;
+    min-width: 0;
+  }
+  .shell .ui-card .nick {
+    font-size: 15px;
+    line-height: 1.2;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .shell .ui-card:not(.expanded) .card-level {
+    display: none;
+  }
+  .shell .ui-card .card-toggle {
+    grid-area: tog;
+    display: inline-block;
+    padding: 2px 8px;
+    font-size: 11px;
+    line-height: 1.2;
+  }
+  .shell .ui-card .card-need {
+    grid-area: need;
+    margin: 0;
+    font-size: 12px;
+    line-height: 1.2;
+  }
+  .shell .ui-card .bar {
+    grid-area: bar;
+    margin: 0;
+    height: 4px;
+  }
+  .shell .ui-card .card-body {
+    grid-area: body;
+    display: none;
+  }
+  .shell .ui-card.expanded .card-body {
+    display: block;
+  }
   .shell .ui-bottom {
     left: 8px;
     right: 8px;
     transform: none;
+    display: flex;
     flex-wrap: wrap;
+    gap: 6px 8px;
+    padding: 6px 10px;
     white-space: normal;
     bottom: 8px;
+  }
+  .shell .ui-bottom .sep,
+  .shell .ui-bottom .hint {
+    display: none;
+  }
+  .shell .ui-bottom .bottom-queue {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex: 0 0 100%;
+    min-width: 0;
+    white-space: nowrap;
+  }
+  .shell .ui-bottom .bottom-queue .chip {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .shell .ui-bottom .bottom-actions {
+    display: flex;
+    gap: 8px;
+    flex: 0 0 100%;
+  }
+  .shell .ui-bottom .bottom-actions button {
+    flex: 1;
+    padding: 5px 8px;
   }
   .shell .win {
     width: calc(100vw - 16px);
