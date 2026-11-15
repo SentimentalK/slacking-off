@@ -2169,3 +2169,19 @@ a.brand {
   border-color: var(--panel-border);
   color: var(--muted);
 }
+
+/* --- replay badge -------------------------------------------------------- */
+
+.replay-badge {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  padding: 4px 10px;
+  background: #3a2f12;
+  border: var(--border);
+  border-color: var(--gold-shadow, var(--gold));
+  color: var(--gold);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  letter-spacing: 1px;
+}
