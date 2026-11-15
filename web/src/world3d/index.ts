@@ -7,9 +7,9 @@ import { createForest } from './forest';
 import { createObjectsLayer } from './objects';
 import { createVisionBoxLayer } from './visionbox';
 import { createGround } from './ground';
-import { createLighting } from './lighting';
-import { installLegacyPointFalloff } from './legacylights';
-import { applyVision, installVisionShader } from './vision';
+import { createLighting, duskK } from './lighting';
+import { applyLamps, applyVision, installVisionShader } from './vision';
+import { allLampSources } from './lamplight';
 import type { FrameInput, Layer, Quality, SceneCtx } from './types';
 
 export type { FrameInput, Layer, Quality, SceneCtx, UiState, VisionGrid } from './types';
@@ -59,7 +59,6 @@ const projectToPage = (v: THREE.Vector3, canvas: HTMLCanvasElement): { x: number
 };
 
 export function createWorldView(canvas: HTMLCanvasElement, opts: WorldViewOptions): WorldView {
-  installLegacyPointFalloff();
   const vision = installVisionShader();
   let quality: Quality = opts.quality;
   const renderer = new THREE.WebGLRenderer({ canvas, antialias: quality !== 'low' });
@@ -117,6 +116,16 @@ export function createWorldView(canvas: HTMLCanvasElement, opts: WorldViewOption
     builtFor = { terrain, worldId, quality };
   };
 
+  const syncLamps = (input: FrameInput): void => {
+    const toggled = applyLamps(vision, allLampSources(), duskK(input.ui, input.clock), input.terrain.width, input.terrain.height);
+    if (!toggled) return;
+    scene.traverse((o) => {
+      const m = (o as THREE.Mesh).material;
+      if (!m) return;
+      for (const mat of ([] as THREE.Material[]).concat(m)) mat.needsUpdate = true;
+    });
+  };
+
   const cellAt = (clientX: number, clientY: number, camera: THREE.Camera): Pos | null => {
     if (!last) return null;
     const r = canvas.getBoundingClientRect();
@@ -170,6 +179,7 @@ export function createWorldView(canvas: HTMLCanvasElement, opts: WorldViewOption
       lighting.update(input, quality);
       cam.apply();
       applyVision(vision, input.ui.vision);
+      syncLamps(input);
       renderer.render(scene, cam.camera);
     },
     pick(x, y) {
@@ -189,6 +199,7 @@ export function createWorldView(canvas: HTMLCanvasElement, opts: WorldViewOption
       lighting.update(last, quality);
       controls.apply();
       applyVision(vision, last.ui.vision);
+      syncLamps(last);
       renderer.render(scene, controls.camera);
       const info = renderer.info.render;
       return {

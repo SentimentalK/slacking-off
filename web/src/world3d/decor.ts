@@ -16,56 +16,21 @@ import {
   place,
 } from './models';
 import { duskK } from './lighting';
+import { clearLampSources, setLampSources, type LampSource } from './lamplight';
 import { rand01 } from './rng';
 import type { Layer, SceneCtx } from './types';
 
 const PI = Math.PI;
-const LAMP_GAIN = 0.55;
-const POOL_HALF = 7;
-const POOL_PX = 128;
-const POOL_H = 1.35;
-const POOL_COLOR = 0xffa850;
+const LAMP_BULB_Y = 1.45;
 const LAMP_LIGHT_DIST = 7;
 const LAMP_LIGHT_INTENSITY = 3.0;
-const LAMP_BULB_Y = 1.45;
+const LAMP_COLOR = new THREE.Color(0xffa850);
+const LAMP_OWNER = 'lamp-posts';
 
 interface Item {
   x: number;
   y: number;
   mats: THREE.Matrix4[];
-}
-
-let poolMap: THREE.CanvasTexture | null = null;
-
-function poolF(r: number): number {
-  const R = Math.sqrt(r * r + POOL_H * POOL_H);
-  return (Math.max(0, 1 - R / POOL_HALF) ** 2 * POOL_H) / R;
-}
-
-function lampPoolMap(): THREE.CanvasTexture {
-  if (poolMap) return poolMap;
-  const c = document.createElement('canvas');
-  c.width = POOL_PX;
-  c.height = POOL_PX;
-  const g = c.getContext('2d');
-  if (!g) throw new Error('2d canvas context unavailable');
-  const img = g.createImageData(POOL_PX, POOL_PX);
-  const f0 = poolF(0);
-  const half = POOL_PX / 2;
-  for (let py = 0; py < POOL_PX; py++) {
-    for (let px = 0; px < POOL_PX; px++) {
-      const d = (Math.hypot(px + 0.5 - half, py + 0.5 - half) * POOL_HALF) / half;
-      const v = Math.round((255 * poolF(d)) / f0);
-      const i = (py * POOL_PX + px) * 4;
-      img.data[i] = v;
-      img.data[i + 1] = v;
-      img.data[i + 2] = v;
-      img.data[i + 3] = 255;
-    }
-  }
-  g.putImageData(img, 0, 0);
-  poolMap = new THREE.CanvasTexture(c);
-  return poolMap;
 }
 
 export function createDecor(ctx: SceneCtx): Layer {
@@ -143,33 +108,6 @@ export function createDecor(ctx: SceneCtx): Layer {
   const crateI = makeInst(CRATE_PARTS, crates, root);
   const lampI = makeInst(LAMP_PARTS, lamps, root);
 
-  const poolMat = new THREE.MeshBasicMaterial({
-    map: lampPoolMap(),
-    color: POOL_COLOR,
-    transparent: true,
-    blending: THREE.AdditiveBlending,
-    depthWrite: false,
-    opacity: 0,
-  });
-  const poolGeo = new THREE.PlaneGeometry(POOL_HALF * 2, POOL_HALF * 2);
-  poolGeo.rotateX(-PI / 2);
-  const pool = new THREE.InstancedMesh(poolGeo, poolMat, lamps.length);
-  pool.frustumCulled = false;
-  pool.visible = false;
-  const poolAt = lamps.map((l) => new THREE.Matrix4().makeTranslation(l.x + 0.5 + 0.34, 0.03, l.y + 0.5));
-  const zero = new THREE.Matrix4().makeScale(0, 0, 0);
-  lamps.forEach((_, i) => pool.setMatrixAt(i, poolAt[i]));
-  pool.instanceMatrix.needsUpdate = true;
-  root.add(pool);
-
-  const lampLights = ctx.quality === 'low'
-    ? []
-    : lamps.map((l) => {
-        const light = new THREE.PointLight(POOL_COLOR, 0, LAMP_LIGHT_DIST, 2);
-        light.position.set(l.x + 0.5 + 0.34, LAMP_BULB_Y, l.y + 0.5);
-        return light;
-      });
-  let lampLightsOn = false;
 
   const groups: Array<{ inst: Instancer; items: Item[] }> = [
     { inst: pineI, items: pines },
@@ -191,29 +129,27 @@ export function createDecor(ctx: SceneCtx): Layer {
           items.forEach((it, i) => inst.show(i, !occ.has(cellKey(it.x, it.y))));
           inst.flush();
         }
-        lamps.forEach((l, i) => pool.setMatrixAt(i, occ.has(cellKey(l.x, l.y)) ? zero : poolAt[i]));
-        pool.instanceMatrix.needsUpdate = true;
+        setLampSources(LAMP_OWNER, lamps.filter((l) => !occ.has(cellKey(l.x, l.y))).map(lampSource));
       }
       const k = duskK(input.ui, input.clock);
-      const on = k > 0;
-      if (on !== lampLightsOn) {
-        lampLightsOn = on;
-        for (const light of lampLights) {
-          if (on) root.add(light);
-          else light.removeFromParent();
-        }
-      }
-      for (const light of lampLights) light.intensity = k * LAMP_LIGHT_INTENSITY * PI;
       LAMP_BULB_MAT.emissiveIntensity = 0.2 + 2.2 * k;
-      poolMat.opacity = k * LAMP_GAIN;
-      pool.visible = on && ctx.quality === 'low';
     },
     dispose() {
       for (const { inst } of groups) inst.remove();
-      poolGeo.dispose();
-      poolMat.dispose();
+      clearLampSources(LAMP_OWNER);
       root.removeFromParent();
     },
+  };
+}
+
+function lampSource(l: Item): LampSource {
+  return {
+    x: l.x + 0.5 + 0.34,
+    z: l.y + 0.5,
+    y: LAMP_BULB_Y,
+    color: [LAMP_COLOR.r, LAMP_COLOR.g, LAMP_COLOR.b],
+    intensity: LAMP_LIGHT_INTENSITY,
+    distance: LAMP_LIGHT_DIST,
   };
 }
 

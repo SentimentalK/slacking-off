@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import type { ProjectionAgent, ProjectionObject, Terrain } from '../types';
 import { cellAt, cellKey } from './grid';
 import { duskK } from './lighting';
+import { clearLampSources, setLampSources, type LampSource } from './lamplight';
 import {
   ACCENT,
   barrier,
@@ -56,7 +57,8 @@ const BADGE_SHOWN = 0.5;
 const SHACK_LIGHT_Y = 1.0;
 const SHACK_LIGHT_DIST = 5;
 const SHACK_LIGHT_INTENSITY = 2.2;
-const SHACK_LIGHT_COLOR = new THREE.Color().setRGB(0xff / 255, 0xb0 / 255, 0x60 / 255, THREE.LinearSRGBColorSpace);
+const SHACK_LIGHT_COLOR: [number, number, number] = [1, 0xb0 / 255, 0x60 / 255];
+const SHACK_OWNER = 'shack-lamps';
 
 const SIDES = [
   { dx: 0, dy: -1, rot: 0 },
@@ -177,24 +179,13 @@ export function createObjectsLayer(ctx: SceneCtx): Layer {
   const root = new THREE.Group();
   ctx.world.add(root);
   const reg = new Registry(root);
-  const shackLights = new Map<string, THREE.PointLight>();
-  const shackLightsEnabled = ctx.quality !== 'low';
-  let shackLightsOn = false;
 
   function frame(input: FrameInput): void {
     const { cur, prev, phase, clock, ui } = input;
     const terrain: Terrain = input.terrain;
     const e = phase * phase * (3 - 2 * phase);
     const k = duskK(ui, clock);
-    const lightOn = k > 0 && shackLightsEnabled;
-    if (lightOn !== shackLightsOn) {
-      shackLightsOn = lightOn;
-      for (const light of shackLights.values()) {
-        if (lightOn) root.add(light);
-        else light.removeFromParent();
-      }
-    }
-    const litShacks = new Set<string>();
+    const shackSources: LampSource[] = [];
     const cIdx = indexObjects(cur.objects);
     const pIdx = prev ? indexObjects(prev.objects) : null;
     const curAgents = cur.agents;
@@ -273,16 +264,8 @@ export function createObjectsLayer(ctx: SceneCtx): Layer {
         }
       }
 
-      if (t.site !== 'toilet' && t.level >= 1 && shackLightsEnabled) {
-        let light = shackLights.get(tk);
-        if (!light) {
-          light = new THREE.PointLight(SHACK_LIGHT_COLOR, 0, SHACK_LIGHT_DIST, 2);
-          shackLights.set(tk, light);
-          if (shackLightsOn) root.add(light);
-        }
-        light.position.set(tx, SHACK_LIGHT_Y, tz);
-        light.intensity = k * SHACK_LIGHT_INTENSITY * PI;
-        litShacks.add(tk);
+      if (t.site !== 'toilet' && t.level >= 1) {
+        shackSources.push({ x: tx, z: tz, y: SHACK_LIGHT_Y, color: SHACK_LIGHT_COLOR, intensity: SHACK_LIGHT_INTENSITY, distance: SHACK_LIGHT_DIST });
       }
 
       const prevT = pIdx ? sameKind(pIdx.get(cellKey(t.pos.x, t.pos.y)), t) : undefined;
@@ -444,11 +427,7 @@ export function createObjectsLayer(ctx: SceneCtx): Layer {
       }
     }
 
-    for (const [key, light] of shackLights) {
-      if (litShacks.has(key)) continue;
-      light.removeFromParent();
-      shackLights.delete(key);
-    }
+    setLampSources(SHACK_OWNER, shackSources);
 
     for (const obj of cur.objects) {
       const ck = cellKey(obj.pos.x, obj.pos.y);
@@ -507,6 +486,7 @@ export function createObjectsLayer(ctx: SceneCtx): Layer {
     },
     dispose() {
       reg.dispose();
+      clearLampSources(SHACK_OWNER);
       root.removeFromParent();
     },
   };
