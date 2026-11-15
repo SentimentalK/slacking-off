@@ -122,7 +122,7 @@ async fn healthz() -> impl IntoResponse {
 /// `/api/*` and the installer/download prefixes stay API-shaped even when no
 /// route matched: JSON 404, never the SPA. Everything else falls back to
 /// `index.html` so a deep link such as `/agent/7` survives a reload.
-async fn static_site(uri: Uri, method: Method) -> Response {
+async fn static_site(uri: Uri, method: Method, headers: HeaderMap) -> Response {
     let path = uri.path();
     let api_like = path == "/api"
         || path.starts_with("/api/")
@@ -136,14 +136,15 @@ async fn static_site(uri: Uri, method: Method) -> Response {
         );
     }
 
+    let gzip_ok = accepts_gzip(&headers);
     let relative = path.trim_start_matches('/');
     if !relative.is_empty() {
         if let Some(file) = WEB_DIST.get_file(relative) {
-            return serve_embedded(file);
+            return serve_embedded(file, relative, gzip_ok);
         }
     }
     match WEB_DIST.get_file("index.html") {
-        Some(file) => serve_embedded(file),
+        Some(file) => serve_embedded(file, "index.html", gzip_ok),
         None => respond_status(
             StatusCode::INTERNAL_SERVER_ERROR,
             error_envelope::<()>(ErrorCode::Internal, "the embedded web app is missing"),
@@ -151,7 +152,54 @@ async fn static_site(uri: Uri, method: Method) -> Response {
     }
 }
 
-fn serve_embedded(file: &'static include_dir::File<'static>) -> Response {
+/// Whether the client accepts `gzip` per `Accept-Encoding` (case-insensitive).
+/// Missing header → false. `gzip;q=0` → false. Bare `*` → true.
+fn accepts_gzip(headers: &HeaderMap) -> bool {
+    let Some(value) = headers.get(header::ACCEPT_ENCODING) else {
+        return false;
+    };
+    let Ok(text) = value.to_str() else {
+        return false;
+    };
+    for part in text.split(',') {
+        let part = part.trim();
+        if part.is_empty() {
+            continue;
+        }
+        let (coding, q) = match part.split_once(';') {
+            Some((coding, params)) => {
+                let coding = coding.trim();
+                let q = params
+                    .split(';')
+                    .find_map(|p| {
+                        let p = p.trim();
+                        p.strip_prefix("q=")
+                            .or_else(|| p.strip_prefix("Q="))
+                            .and_then(|q| q.trim().parse::<f32>().ok())
+                    })
+                    .unwrap_or(1.0);
+                (coding, q)
+            }
+            None => (part, 1.0),
+        };
+        if q <= 0.0 {
+            continue;
+        }
+        if coding == "*" {
+            return true;
+        }
+        if coding.eq_ignore_ascii_case("gzip") {
+            return true;
+        }
+    }
+    false
+}
+
+fn serve_embedded(
+    file: &'static include_dir::File<'static>,
+    relative: &str,
+    gzip_ok: bool,
+) -> Response {
     // Vite hashes every asset filename, so those never change under the same
     // URL; index.html must be revalidated to pick up the next build.
     let immutable = file.path().to_string_lossy().starts_with("assets/");
@@ -160,13 +208,29 @@ fn serve_embedded(file: &'static include_dir::File<'static>) -> Response {
     } else {
         "no-cache"
     };
-    let mut response = Response::new(Body::from(file.contents()));
+    let gz_path = format!("{relative}.gz");
+    let (body, encoding) = if gzip_ok {
+        WEB_DIST
+            .get_file(&gz_path)
+            .map(|gz| (Body::from(gz.contents()), Some("gzip")))
+            .unwrap_or_else(|| (Body::from(file.contents()), None))
+    } else {
+        (Body::from(file.contents()), None)
+    };
+    let mut response = Response::new(body);
     let headers = response.headers_mut();
     headers.insert(
         header::CONTENT_TYPE,
         HeaderValue::from_static(content_type(file.path())),
     );
     headers.insert(header::CACHE_CONTROL, HeaderValue::from_static(cache));
+    headers.insert(header::VARY, HeaderValue::from_static("Accept-Encoding"));
+    if let Some(encoding) = encoding {
+        headers.insert(
+            header::CONTENT_ENCODING,
+            HeaderValue::from_static(encoding),
+        );
+    }
     response
 }
 
@@ -1120,5 +1184,24 @@ mod tests {
         assert!(clear_cookies(true)
             .iter()
             .all(|cookie| cookie.contains("; Secure")));
+    }
+
+    fn accept_encoding(value: Option<&str>) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        if let Some(value) = value {
+            headers.insert(header::ACCEPT_ENCODING, value.parse().expect("encoding"));
+        }
+        headers
+    }
+
+    #[test]
+    fn accepts_gzip_boundary_cases() {
+        assert!(accepts_gzip(&accept_encoding(Some("gzip"))));
+        assert!(accepts_gzip(&accept_encoding(Some("br, gzip;q=0.8"))));
+        assert!(!accepts_gzip(&accept_encoding(Some("identity"))));
+        assert!(!accepts_gzip(&accept_encoding(None)));
+        assert!(!accepts_gzip(&accept_encoding(Some("gzip;q=0"))));
+        assert!(accepts_gzip(&accept_encoding(Some("*"))));
+        assert!(accepts_gzip(&accept_encoding(Some("GZIP"))));
     }
 }
