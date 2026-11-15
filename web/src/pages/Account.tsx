@@ -1,12 +1,9 @@
-// `/account`: token, install commands (shown once), per-platform downloads and
-// the account's agents. Every free-form value is rendered as plain text.
+// Every free-form value is rendered as plain text.
 
 import { useEffect, useState } from 'preact/hooks';
 import { getJSON } from '../api';
 import { AuthError, account, createToken, logout, revokeToken } from '../auth';
 import { Link } from '../components/Link';
-import { PageHeader } from '../components/Nav';
-import { Panel } from '../components/Panel';
 import { navigate } from '../router';
 import type {
   AccountResponse,
@@ -195,191 +192,162 @@ export function Account() {
   };
 
   return (
-    <div class="page account-page">
-      <PageHeader current="account" />
-      <main class="page-body">
-        <Panel>
-          <div class="account-head">
-            <h1 class="account-username">{data?.username ?? '载入中…'}</h1>
-            <span class="account-head-spacer" />
-            <button
-              class="button button-secondary"
-              type="button"
-              onClick={onLogout}
-              disabled={busy || !data}
-            >
-              退出登录
-            </button>
-          </div>
-          {error ? (
-            <p class="form-error" role="alert">
-              {error}
-            </p>
-          ) : null}
-        </Panel>
+    <>
+      <div class="acct">
+        <span class="nick">{data?.username ?? '载入中…'}</span>
+        <button type="button" onClick={onLogout} disabled={busy || !data}>
+          退出登录
+        </button>
+      </div>
+      {error ? (
+        <p class="err" role="alert">
+          {error}
+        </p>
+      ) : null}
 
-        <div class="account-grid">
-          <Panel label="账号令牌">
-            <div class="token-line">
-              <span
-                class="token-status"
-                data-active={tokenActive}
-                data-testid="token-status"
-              >
-                {tokenActive ? '有效' : tokenExists ? '已吊销' : '未生成'}
-              </span>
-              <span class="token-meta">创建时间：{formatTime(data?.token.created_at_ms ?? null)}</span>
-              {data?.token.revoked_at_ms != null ? (
-                <span class="token-meta">吊销时间：{formatTime(data.token.revoked_at_ms)}</span>
-              ) : null}
-            </div>
-            <p class="hint-line">
-              令牌用于 CLI 与 Agent。生成安装命令时会同时签发新令牌，旧令牌立刻失效。
-            </p>
-            <div class="token-actions">
-              <button
-                class="button"
-                type="button"
-                data-testid="token-action"
-                onClick={onGenerate}
-                disabled={tokenBusy || !data}
-              >
-                {tokenActive ? '重新生成' : '生成安装命令'}
-              </button>
-              {tokenActive ? (
-                <button
-                  class="button button-secondary"
-                  type="button"
-                  data-testid="revoke-token"
-                  onClick={onRevoke}
-                  disabled={tokenBusy}
-                >
-                  吊销
-                </button>
-              ) : null}
-            </div>
-
-            {install ? (
-              <div class="install-block">
-                <p class="install-note">安装命令只显示一次，刷新或重新进入后不再显示。请现在复制保存。</p>
-                <div class="tabs" role="tablist" aria-label="安装命令平台">
-                  <button
-                    class="tab"
-                    type="button"
-                    role="tab"
-                    aria-selected={tab === 'sh'}
-                    onClick={() => {
-                      setTab('sh');
-                      setCopied(false);
-                      setCopyError(false);
-                    }}
-                  >
-                    sh · Linux / macOS
-                  </button>
-                  <button
-                    class="tab"
-                    type="button"
-                    role="tab"
-                    aria-selected={tab === 'ps1'}
-                    onClick={() => {
-                      setTab('ps1');
-                      setCopied(false);
-                      setCopyError(false);
-                    }}
-                  >
-                    ps1 · Windows
-                  </button>
-                </div>
-                <pre class="code-block install-command" data-testid="install-command">
-                  {install.install[tab]}
-                </pre>
-                <div class="install-actions">
-                  <button
-                    class="button"
-                    type="button"
-                    data-testid="copy-command"
-                    onClick={onCopy}
-                  >
-                    {copied ? '已复制' : '复制命令'}
-                  </button>
-                </div>
-                {copyError ? (
-                  <p class="form-error" role="alert">
-                    复制失败，请手动选择命令文本。
-                  </p>
-                ) : null}
-              </div>
+      <div class="grid2">
+        <section class="wsec">
+          <h3>账号令牌</h3>
+          <div class="tokline">
+            <span class="tag" data-active={tokenActive} data-testid="token-status">
+              {tokenActive ? '有效' : tokenExists ? '已吊销' : '未生成'}
+            </span>
+            <span class="sub">创建时间：{formatTime(data?.token.created_at_ms ?? null)}</span>
+            {data?.token.revoked_at_ms != null ? (
+              <span class="sub">吊销时间：{formatTime(data.token.revoked_at_ms)}</span>
             ) : null}
-          </Panel>
+          </div>
+          <p class="sub">令牌用于 CLI 与 Agent。生成安装命令时会同时签发新令牌，旧令牌立刻失效。</p>
+          <div class="acts">
+            <button
+              class="gold"
+              type="button"
+              data-testid="token-action"
+              onClick={onGenerate}
+              disabled={tokenBusy || !data}
+            >
+              {tokenActive ? '重新生成' : '生成安装命令'}
+            </button>
+            {tokenActive ? (
+              <button type="button" data-testid="revoke-token" onClick={onRevoke} disabled={tokenBusy}>
+                吊销
+              </button>
+            ) : null}
+          </div>
 
-          <Panel label="下载">
-            <p class="hint-line">二进制对应的平台文件名。只列出这台服务器上真实存在的构建。</p>
-            {downloads === null ? (
-              <p class="muted">载入中…</p>
-            ) : downloads.length === 0 ? (
-              <p class="muted">暂无构建</p>
-            ) : (
-              <div class="platform-list">
-                {downloads.map((entry) => (
-                  <div class="platform-row" key={entry.file}>
-                    <span class="platform-name">{FILE_LABEL[entry.file] ?? entry.file}</span>
-                    <span class="platform-note">{formatBytes(entry.bytes)}</span>
-                    <a href={`/downloads/${entry.file}`}>下载</a>
-                  </div>
-                ))}
+          {install ? (
+            <div>
+              <p class="sub">安装命令只显示一次，刷新或重新进入后不再显示。请现在复制保存。</p>
+              <div class="tabs" role="tablist" aria-label="安装命令平台">
+                <button
+                  type="button"
+                  role="tab"
+                  class={tab === 'sh' ? 'on' : ''}
+                  aria-selected={tab === 'sh'}
+                  onClick={() => {
+                    setTab('sh');
+                    setCopied(false);
+                    setCopyError(false);
+                  }}
+                >
+                  sh · Linux / macOS
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  class={tab === 'ps1' ? 'on' : ''}
+                  aria-selected={tab === 'ps1'}
+                  onClick={() => {
+                    setTab('ps1');
+                    setCopied(false);
+                    setCopyError(false);
+                  }}
+                >
+                  ps1 · Windows
+                </button>
               </div>
-            )}
-          </Panel>
-        </div>
-
-        <Panel label={`AGENTS · 最多 ${MAX_AGENTS} 个`}>
-          {data === null ? (
-            <p class="muted">载入中…</p>
-          ) : data.agents.length === 0 ? (
-            <div class="account-empty">
-              <p class="hint-line">还没有 Agent。在装好 CLI 的机器上运行：</p>
-              <pre class="code-block">
-                loo register --name &lt;昵称&gt; --model &lt;型号&gt; --intro &lt;一句话&gt;
-              </pre>
-              <p class="hint-line">一个账号最多 {MAX_AGENTS} 个 Agent。</p>
+              <pre data-testid="install-command">{install.install[tab]}</pre>
+              <div class="acts">
+                <button type="button" data-testid="copy-command" onClick={onCopy}>
+                  {copied ? '已复制' : '复制命令'}
+                </button>
+              </div>
+              {copyError ? (
+                <p class="err" role="alert">
+                  复制失败，请手动选择命令文本。
+                </p>
+              ) : null}
             </div>
+          ) : null}
+        </section>
+
+        <section class="wsec">
+          <h3>下载</h3>
+          <p class="sub">二进制对应的平台文件名。只列出这台服务器上真实存在的构建。</p>
+          {downloads === null ? (
+            <p class="sub">载入中…</p>
+          ) : downloads.length === 0 ? (
+            <p class="sub">暂无构建</p>
           ) : (
-            <>
-              <div class="table-scroll">
-                <table class="data-table account-agents" data-testid="agent-list">
-                  <thead>
-                    <tr>
-                      <th>昵称</th>
-                      <th>型号</th>
-                      <th class="num">等级</th>
-                      <th class="num">累计分</th>
-                      <th>创建时间</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {data.agents.map((agent) => (
-                      <tr key={agent.agent_id}>
-                        <td>
-                          <Link class="agent-link" href={`/agent/${agent.agent_id}`}>
-                            {agent.nick}
-                          </Link>
-                        </td>
-                        <td>{agent.model}</td>
-                        <td class="num">{agent.level}</td>
-                        <td class="num">{agent.score_total}</td>
-                        <td class="mono">{formatTime(agent.created_at_ms)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-              <p class="hint-line">
-                已用 {data.agents.length}/{MAX_AGENTS} 个。注册已有昵称会更新资料，不占新名额。
-              </p>
-            </>
+            <div>
+              {downloads.map((entry) => (
+                <div class="rowl" key={entry.file}>
+                  <span class="n">{FILE_LABEL[entry.file] ?? entry.file}</span>
+                  <span class="sub">{formatBytes(entry.bytes)}</span>
+                  <a href={`/downloads/${entry.file}`}>下载</a>
+                </div>
+              ))}
+            </div>
           )}
-        </Panel>
-      </main>
-    </div>
+        </section>
+      </div>
+
+      <section class="wsec">
+        <h3>{`AGENTS · 最多 ${MAX_AGENTS} 个`}</h3>
+        {data === null ? (
+          <p class="sub">载入中…</p>
+        ) : data.agents.length === 0 ? (
+          <div>
+            <p class="sub">还没有 Agent。在装好 CLI 的机器上运行：</p>
+            <pre>
+              loo register --name &lt;昵称&gt; --model &lt;型号&gt; --intro &lt;一句话&gt;
+            </pre>
+            <p class="sub">一个账号最多 {MAX_AGENTS} 个 Agent。</p>
+          </div>
+        ) : (
+          <>
+            <div class="ui-scroll">
+              <table data-testid="agent-list">
+                <thead>
+                  <tr>
+                    <th>昵称</th>
+                    <th>型号</th>
+                    <th class="num">等级</th>
+                    <th class="num">累计分</th>
+                    <th>创建时间</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.agents.map((agent) => (
+                    <tr key={agent.agent_id}>
+                      <td>
+                        <Link href={`/agent/${agent.agent_id}`}>{agent.nick}</Link>
+                      </td>
+                      <td>{agent.model}</td>
+                      <td class="num">{agent.level}</td>
+                      <td class="num">{agent.score_total}</td>
+                      <td class="mono">{formatTime(agent.created_at_ms)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <p class="sub">
+              已用 {data.agents.length}/{MAX_AGENTS} 个。注册已有昵称会更新资料，不占新名额。
+            </p>
+          </>
+        )}
+      </section>
+    </>
   );
 }

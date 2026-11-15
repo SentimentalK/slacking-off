@@ -1,10 +1,5 @@
-// `/stats`: two scopes (all sessions / sessions another player kind shared),
-// each split into an AI and a human card, plus the AI-only model table.
-
 import { useEffect, useMemo, useState } from 'preact/hooks';
 import { getJSON } from '../api';
-import { PageHeader } from '../components/Nav';
-import { Panel } from '../components/Panel';
 import { formatNumber, formatPercent } from '../labels';
 import type { KindStats, StatsResponse } from '../types';
 
@@ -32,35 +27,36 @@ function KindCard({
   stats: KindStats;
 }) {
   return (
-    <Panel label={label} class="stat-card kind-card">
-      <p class="muted kind-hint">{hint}</p>
-      <dl class="kind-stats">
-        <div>
-          <dt>角色</dt>
-          <dd class="mono">{formatNumber(stats.agents)}</dd>
+    <section class="wsec">
+      <h3>{label}</h3>
+      <p class="sub">{hint}</p>
+      <div class="tiles six">
+        <div class="tile">
+          <b class="mono">{formatNumber(stats.agents)}</b>
+          角色
         </div>
-        <div>
-          <dt>会话</dt>
-          <dd class="mono">{formatNumber(stats.sessions)}</dd>
+        <div class="tile">
+          <b class="mono">{formatNumber(stats.sessions)}</b>
+          会话
         </div>
-        <div>
-          <dt>成功</dt>
-          <dd class="mono">{formatNumber(stats.successes)}</dd>
+        <div class="tile">
+          <b class="mono">{formatNumber(stats.successes)}</b>
+          成功
         </div>
-        <div>
-          <dt>成功率</dt>
-          <dd class="mono">{formatPercent(stats.success_rate)}</dd>
+        <div class="tile">
+          <b class="mono">{formatPercent(stats.success_rate)}</b>
+          成功率
         </div>
-        <div>
-          <dt>累计分</dt>
-          <dd class="mono">{formatNumber(stats.total_score)}</dd>
+        <div class="tile">
+          <b class="mono">{formatNumber(stats.total_score)}</b>
+          累计分
         </div>
-        <div>
-          <dt>单次最高</dt>
-          <dd class="mono">{formatNumber(stats.best_score)}</dd>
+        <div class="tile">
+          <b class="mono">{formatNumber(stats.best_score)}</b>
+          单次最高
         </div>
-      </dl>
-    </Panel>
+      </div>
+    </section>
   );
 }
 
@@ -91,125 +87,106 @@ export function Stats() {
 
   const current = stats ? stats[scope] : null;
 
-  return (
-    <div class="page">
-      <PageHeader current="stats" />
-      <main class="page-body">
-        {error ? (
-          <Panel class="empty-card">
-            <h1 class="empty-title">统计没取到</h1>
-            <p class="muted">服务端可能没开，或者这是 dev 模式（没有正式数据）。</p>
-          </Panel>
-        ) : !stats || !current ? (
-          <Panel class="empty-card">
-            <p class="muted">载入中…</p>
-          </Panel>
+  return error ? (
+    <section class="wsec">
+      <p class="note">统计没取到</p>
+      <p class="sub">服务端可能没开，或者这是 dev 模式（没有正式数据）。</p>
+    </section>
+  ) : !stats || !current ? (
+    <p class="sub">载入中…</p>
+  ) : (
+    <>
+      <div class="tabs" role="tablist" aria-label="统计范围">
+        {SCOPES.map((entry) => (
+          <button
+            key={entry.key}
+            type="button"
+            role="tab"
+            class={entry.key === scope ? 'on' : ''}
+            data-scope={entry.key}
+            aria-selected={entry.key === scope}
+            onClick={() => setScope(entry.key)}
+          >
+            {entry.label}
+          </button>
+        ))}
+      </div>
+
+      <div class="tabs" role="tablist" aria-label="摸鱼提示切分">
+        {PROMPT_FILTERS.map((entry) => (
+          <button
+            key={entry.key}
+            type="button"
+            role="tab"
+            class={entry.key === prompt ? 'on' : ''}
+            data-prompt={entry.key}
+            aria-selected={entry.key === prompt}
+            onClick={() => setPrompt(entry.key)}
+          >
+            {entry.label}
+          </button>
+        ))}
+      </div>
+
+      <div class="tiles two">
+        <div class="tile">
+          <b class="mono">{formatNumber(current.total_sessions)}</b>
+          总会话
+        </div>
+        <div class="tile">
+          <b class="mono">{formatPercent(current.success_rate)}</b>
+          总成功率
+        </div>
+      </div>
+
+      <div class="even">
+        <KindCard label="AI · 接口来的" hint="通过 loo CLI 注册的 Agent" stats={current.ai} />
+        <KindCard label="人 · 网页里玩的" hint="账号在观战页亲手操作的人类角色" stats={current.human} />
+      </div>
+
+      <section class="wsec">
+        <h3>BY MODEL · 按型号（仅 AI）</h3>
+        {models.length === 0 ? (
+          <p class="sub">暂无数据</p>
         ) : (
-          <>
-            <div class="tabs" role="tablist" aria-label="统计范围">
-              {SCOPES.map((entry) => (
-                <button
-                  key={entry.key}
-                  type="button"
-                  role="tab"
-                  class="tab"
-                  data-scope={entry.key}
-                  aria-selected={entry.key === scope}
-                  onClick={() => setScope(entry.key)}
-                >
-                  {entry.label}
-                </button>
-              ))}
-            </div>
-
-            <div class="tabs" role="tablist" aria-label="摸鱼提示切分">
-              {PROMPT_FILTERS.map((entry) => (
-                <button
-                  key={entry.key}
-                  type="button"
-                  role="tab"
-                  class="tab"
-                  data-prompt={entry.key}
-                  aria-selected={entry.key === prompt}
-                  onClick={() => setPrompt(entry.key)}
-                >
-                  {entry.label}
-                </button>
-              ))}
-            </div>
-
-            <div class="stat-cards summary-cards">
-              <Panel class="stat-card">
-                <div class="stat-label">总会话</div>
-                <div class="stat-value mono">{formatNumber(current.total_sessions)}</div>
-              </Panel>
-              <Panel class="stat-card">
-                <div class="stat-label">总成功率</div>
-                <div class="stat-value mono">{formatPercent(current.success_rate)}</div>
-              </Panel>
-            </div>
-
-            <div class="stat-cards kind-cards">
-              <KindCard
-                label="AI · 接口来的"
-                hint="通过 loo CLI 注册的 Agent"
-                stats={current.ai}
-              />
-              <KindCard
-                label="人 · 网页里玩的"
-                hint="账号在观战页亲手操作的人类角色"
-                stats={current.human}
-              />
-            </div>
-
-            <Panel label="BY MODEL · 按型号（仅 AI）">
-              {models.length === 0 ? (
-                <p class="muted" style={{ margin: 0 }}>
-                  暂无数据
-                </p>
-              ) : (
-                <div class="table-scroll">
-                  <table class="data-table">
-                    <thead>
-                      <tr>
-                        <th>型号</th>
-                        <th class="num">Agent 数</th>
-                        <th class="num">会话数</th>
-                        <th>成功率</th>
-                        <th class="num">总分</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {models.map((entry) => (
-                        <tr key={entry.model}>
-                          <td class="mono">{entry.model}</td>
-                          <td class="mono num">{formatNumber(entry.agents)}</td>
-                          <td class="mono num">{formatNumber(entry.sessions)}</td>
-                          <td>
-                            <div class="rate-cell">
-                              <div class="bar-track">
-                                <div
-                                  class="bar-fill"
-                                  style={{
-                                    width: `${Math.min(100, Math.max(0, entry.success_rate * 100))}%`,
-                                    background: 'var(--success)',
-                                  }}
-                                />
-                              </div>
-                              <span class="mono">{formatPercent(entry.success_rate)}</span>
-                            </div>
-                          </td>
-                          <td class="mono num">{formatNumber(entry.total_score)}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </Panel>
-          </>
+          <div class="ui-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>型号</th>
+                  <th class="num">Agent 数</th>
+                  <th class="num">会话数</th>
+                  <th>成功率</th>
+                  <th class="num">总分</th>
+                </tr>
+              </thead>
+              <tbody>
+                {models.map((entry) => (
+                  <tr key={entry.model}>
+                    <td class="mono">{entry.model}</td>
+                    <td class="num mono">{formatNumber(entry.agents)}</td>
+                    <td class="num mono">{formatNumber(entry.sessions)}</td>
+                    <td>
+                      <div class="hb">
+                        <div class="bar">
+                          <i
+                            style={{
+                              width: `${Math.min(100, Math.max(0, entry.success_rate * 100))}%`,
+                              background: 'var(--ok)',
+                            }}
+                          />
+                        </div>
+                        <b class="mono">{formatPercent(entry.success_rate)}</b>
+                      </div>
+                    </td>
+                    <td class="num mono">{formatNumber(entry.total_score)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         )}
-      </main>
-    </div>
+      </section>
+    </>
   );
 }
