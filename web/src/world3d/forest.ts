@@ -1,27 +1,22 @@
 import * as THREE from 'three';
 import type { Pos, Terrain } from '../types';
 import { MG, cellAt, cellKey, forEachCell, signature, wallKeys } from './grid';
-import { Instancer, type PartDef } from './instancer';
+import { Instancer } from './instancer';
 import { PINE_PARTS, STUMP_PARTS, pineMatrices, place, local } from './models';
-import { DEEP_WOOD, S } from './materials';
+import { S } from './materials';
 import { rand01 } from './rng';
 import type { Layer, SceneCtx } from './types';
 
 const PI = Math.PI;
 const FIELD_DIRS: Array<[number, number]> = [[1, 0], [-1, 0], [0, 1], [0, -1]];
-
-const SHRUB_GEO = (() => {
-  const g = new THREE.IcosahedronGeometry(0.32, 0);
-  g.scale(1.05, 0.4, 0.9);
-  g.translate(0, 0.1, 0);
-  return g;
-})();
-const SHRUB_PARTS: PartDef[] = [{ geo: SHRUB_GEO, mat: S(0x41612a), shadow: true }];
+const CAST_RING = 3;
+const NO_SHADOW_PINE_PARTS = PINE_PARTS.map((p) => ({ ...p, shadow: false }));
 
 interface PineRec {
   x: number;
   y: number;
   wild: boolean;
+  far: boolean;
   mats: THREE.Matrix4[];
   shades: number[];
 }
@@ -99,7 +94,14 @@ function buildPines(terrain: Terrain, worldId: number, quality: SceneCtx['qualit
   const pineAt = (x: number, y: number, j: number, lo: number, span: number, px: number, pz: number) => {
     const s = lo + span * r(x, y, j * 16 + 12);
     const root = place(px, 0, pz, r(x, y, j * 16 + 3) * 2 * PI, s);
-    pines.push({ x, y, wild: true, mats: pineMatrices(root, (i) => r(x, y, j * 16 + 4 + i) * 2 * PI), shades: shadesOf(x, y, j) });
+    pines.push({
+      x,
+      y,
+      wild: true,
+      far: false,
+      mats: pineMatrices(root, (i) => r(x, y, j * 16 + 4 + i) * 2 * PI),
+      shades: shadesOf(x, y, j),
+    });
   };
 
   forEachCell(terrain, (x, y, ch) => {
@@ -134,33 +136,47 @@ function buildPines(terrain: Terrain, worldId: number, quality: SceneCtx['qualit
   for (let y = -MG; y < H + MG; y++) {
     for (let x = -MG; x < W + MG; x++) {
       if (x >= 0 && x < W && y >= 0 && y < H) continue;
-      if (x < 0 && y >= ey - 3 && y <= ey + 4) continue;
+      if (x < 0 && (y === ey || y === ey + 1)) continue;
+      const out = Math.max(-x, x - (W - 1), -y, y - (H - 1));
       const n = whole + (r(x, y, 1) < frac ? 1 : 0);
       for (let j = 0; j < n; j++) {
         const px = x + 0.5 + (r(x, y, j * 16 + 2) - 0.5) * 0.9;
         const pz = y + 0.5 + (r(x, y, j * 16 + 3) - 0.5) * 0.9;
         const s = 0.8 + r(x, y, j * 16 + 4) * 1.1;
         const root = place(px, 0, pz, r(x, y, j * 16 + 5) * 2 * PI, s);
-        pines.push({ x, y, wild: false, mats: pineMatrices(root, (i) => r(x, y, j * 16 + 6 + i) * 2 * PI), shades: shadesOf(x, y, j) });
+        pines.push({
+          x,
+          y,
+          wild: false,
+          far: out > CAST_RING,
+          mats: pineMatrices(root, (i) => r(x, y, j * 16 + 6 + i) * 2 * PI),
+          shades: shadesOf(x, y, j),
+        });
       }
     }
   }
   return { pines, stumps };
 }
 
-function clearing(terrain: Terrain, worldId: number): { stumps: StumpRec[]; shrubs: THREE.Matrix4[] } {
-  const ey = terrain.entrance.y;
-  const c = (k: number, salt: number) => rand01(worldId, -500, k, salt);
-  const stumps: StumpRec[] = [];
-  const shrubs: THREE.Matrix4[] = [];
-  const n = 6 + Math.floor(c(0, 1) * 5);
-  for (let k = 1; k <= n; k++) {
-    const px = -MG + 0.5 + c(k, 2) * (MG - 1);
-    const pz = ey - 3 + c(k, 3) * 8;
-    if (c(k, 4) < 0.5) stumps.push({ x: Math.floor(px), y: Math.floor(pz), mats: [local(px, 0.125, pz)] });
-    else shrubs.push(place(px, 0, pz, c(k, 5) * 2 * PI, 0.8 + c(k, 6) * 0.7));
+function paintShades(inst: Instancer, i: number, shades: number[]): void {
+  shades.forEach((s, t) => inst.meshes[t + 1].setColorAt(i, new THREE.Color().setScalar(s)));
+}
+
+function checkpoint(root: THREE.Group, ex: number, ey: number): void {
+  const bx = ex + 0.5;
+  const bz = ey - 0.5;
+  boxMesh(0.8, 1.0, 0.8, S(0x7a5a3c), bx, 0.5, bz, root);
+  boxMesh(0.96, 0.1, 0.96, S(0x58808a), bx, 1.05, bz, root);
+  const sign = new THREE.Mesh(
+    new THREE.PlaneGeometry(1.4, 0.3),
+    new THREE.MeshStandardMaterial({ map: signText('COMPANY TIME', '#7a5a3c', '#f4ead2', 256, 52), roughness: 1 }),
+  );
+  sign.position.set(bx, 1.25, bz);
+  root.add(sign);
+  const start = bz + 0.4;
+  for (let i = 0; i < 5; i++) {
+    boxMesh(0.1, 0.1, 0.44, S(i % 2 ? 0xe9e4da : 0xb8402f), bx, 1.0, start + 0.22 + i * 0.44, root);
   }
-  return { stumps, shrubs };
 }
 
 export function createForest(ctx: SceneCtx): Layer {
@@ -170,46 +186,31 @@ export function createForest(ctx: SceneCtx): Layer {
   const ex = terrain.entrance.x;
   const ey = terrain.entrance.y;
 
-  const built = buildPines(terrain, worldId, quality);
-  const clear = clearing(terrain, worldId);
-  const pines = built.pines;
-  const stumps = [...built.stumps, ...clear.stumps];
+  const { pines, stumps } = buildPines(terrain, worldId, quality);
+  const nearPines = pines.filter((p) => !p.far);
+  const farPines = pines.filter((p) => p.far);
 
-  const pineInst = new Instancer(PINE_PARTS, pines.length, root);
-  pines.forEach((p, i) => {
+  const pineInst = new Instancer(PINE_PARTS, nearPines.length, root);
+  nearPines.forEach((p, i) => {
     pineInst.set(i, p.mats);
-    p.shades.forEach((s, t) => pineInst.meshes[t + 1].setColorAt(i, new THREE.Color().setScalar(s)));
+    paintShades(pineInst, i, p.shades);
   });
-  for (const m of pineInst.meshes) {
-    if (m.instanceColor) m.instanceColor.needsUpdate = true;
+  const farInst = new Instancer(NO_SHADOW_PINE_PARTS, farPines.length, root);
+  farPines.forEach((p, i) => {
+    farInst.set(i, p.mats);
+    paintShades(farInst, i, p.shades);
+  });
+  for (const inst of [pineInst, farInst]) {
+    for (const m of inst.meshes) {
+      if (m.instanceColor) m.instanceColor.needsUpdate = true;
+    }
   }
+  farInst.flush();
+
   const stumpInst = new Instancer(STUMP_PARTS, stumps.length, root);
   stumps.forEach((s, i) => stumpInst.set(i, s.mats));
-  const shrubInst = new Instancer(SHRUB_PARTS, clear.shrubs.length, root);
-  clear.shrubs.forEach((m, i) => shrubInst.set(i, [m]));
-  shrubInst.flush();
 
-  const gate = new THREE.Group();
-  gate.position.set(ex + 0.5, 0, ey + 0.5);
-  gate.rotation.y = -PI / 2;
-  root.add(gate);
-  const post = S(DEEP_WOOD);
-  [-0.95, 0.95].forEach((dx) => boxMesh(0.14, 2.0, 0.14, post, dx, 1.0, 0, gate));
-  boxMesh(2.2, 0.5, 0.08, S(0x7a5a3c), 0, 2.0, 0, gate).rotation.z = -0.03;
-  const sign = new THREE.Mesh(
-    new THREE.PlaneGeometry(2.0, 0.4),
-    new THREE.MeshStandardMaterial({ map: signText('COMPANY TIME', '#7a5a3c', '#f4ead2', 256, 52), roughness: 1 }),
-  );
-  sign.position.set(0, 2.0, 0.05);
-  sign.rotation.z = -0.03;
-  gate.add(sign);
-  const arm = new THREE.Group();
-  arm.position.set(-0.95, 0.9, 0.12);
-  arm.rotation.z = 1.05;
-  gate.add(arm);
-  for (let i = 0; i < 5; i++) {
-    boxMesh(0.38, 0.07, 0.07, S(i % 2 ? 0xe9e4da : 0xb8402f), 0.19 + i * 0.38, 0, 0, arm);
-  }
+  checkpoint(root, ex, ey);
 
   let sig: string | null = null;
   return {
@@ -218,15 +219,15 @@ export function createForest(ctx: SceneCtx): Layer {
       const s = signature(walls);
       if (s === sig) return;
       sig = s;
-      pines.forEach((p, i) => pineInst.show(i, !p.wild || walls.has(cellKey(p.x, p.y))));
+      nearPines.forEach((p, i) => pineInst.show(i, !p.wild || walls.has(cellKey(p.x, p.y))));
       stumps.forEach((st, i) => stumpInst.show(i, !walls.has(cellKey(st.x, st.y))));
       pineInst.flush();
       stumpInst.flush();
     },
     dispose() {
       pineInst.remove();
+      farInst.remove();
       stumpInst.remove();
-      shrubInst.remove();
       root.removeFromParent();
     },
   };

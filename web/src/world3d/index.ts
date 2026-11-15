@@ -78,7 +78,7 @@ export function createWorldView(canvas: HTMLCanvasElement, opts: WorldViewOption
   const applyRenderer = (q: Quality): void => {
     renderer.setPixelRatio(q === 'high' ? Math.min(window.devicePixelRatio, 2) : 1);
     renderer.shadowMap.enabled = q === 'high';
-    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    renderer.shadowMap.type = THREE.PCFShadowMap;
     resize();
   };
 

@@ -4,7 +4,9 @@ import type { FrameInput, Quality, UiState } from './types';
 const SUN_DAY = new THREE.Color(0xffdfae);
 const SUN_DUSK = new THREE.Color(0xff7a3a);
 const HEM_DAY = new THREE.Color(0xa9c4ff);
-const HEM_DUSK = new THREE.Color(0x4a50a8);
+const HEM_DUSK = new THREE.Color(0x7a6a9a);
+const GND_DAY = new THREE.Color(0x2f3d1c);
+const GND_DUSK = new THREE.Color(0x4a3a1c);
 
 export function duskK(ui: UiState, clock: number): number {
   if (ui.duskT <= 0) return ui.dusk ? 1 : 0;
@@ -21,7 +23,7 @@ export function createLighting(scene: THREE.Scene): Lighting {
   const hemi = new THREE.HemisphereLight(0xa9c4ff, 0x2f3d1c, 0.42 * Math.PI);
   const sun = new THREE.DirectionalLight(0xffdfae, 2.6 * Math.PI);
   scene.add(hemi, sun, sun.target);
-  sun.shadow.mapSize.set(4096, 4096);
+  sun.shadow.mapSize.set(2048, 2048);
   sun.shadow.radius = 3;
   sun.shadow.bias = -0.0006;
   sun.shadow.normalBias = 0.08;
@@ -39,13 +41,14 @@ export function createLighting(scene: THREE.Scene): Lighting {
       sun.color.copy(SUN_DAY).lerp(SUN_DUSK, k);
       sun.intensity = (2.6 - 1.3 * k) * Math.PI;
       hemi.color.copy(HEM_DAY).lerp(HEM_DUSK, k);
+      hemi.groundColor.copy(GND_DAY).lerp(GND_DUSK, k);
       hemi.intensity = (0.42 - 0.04 * k) * Math.PI;
-      sun.position.set(cx - 26 - 10 * k, 28 - 10 * k, cz + 11);
+      sun.position.set(cx - 20 - 10 * k, 32 - 14 * k, cz + 12);
       sun.target.position.set(cx, 0, cz);
       sun.target.updateMatrixWorld();
 
       sun.castShadow = quality === 'high';
-      const r = Math.max(W, H) / 2 + 8;
+      const r = Math.max(W, H) / 2 + 3;
       const cam = sun.shadow.camera;
       cam.left = -r;
       cam.right = r;
