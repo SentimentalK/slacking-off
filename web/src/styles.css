@@ -2120,3 +2120,68 @@ a.brand {
     grid-template-columns: repeat(6, minmax(0, 1fr));
   }
 }
+
+/* --- home intro ---------------------------------------------------------- */
+
+.home-intro {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px 20px;
+  padding: 12px 16px;
+  background: var(--panel);
+  border: var(--border);
+}
+
+.home-lede {
+  margin: 0;
+  font-size: 14px;
+  color: var(--fg);
+}
+
+.home-entries {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.home-cta {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 0 16px;
+  background: #3a2f12;
+  border: var(--border);
+  border-color: var(--gold-shadow);
+  color: var(--gold);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  text-decoration: none;
+}
+
+.home-cta:hover {
+  color: var(--gold-light);
+}
+
+.home-cta-quiet {
+  background: var(--chip);
+  border-color: var(--panel-border);
+  color: var(--muted);
+}
+
+/* --- replay badge -------------------------------------------------------- */
+
+.replay-badge {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  padding: 4px 10px;
+  background: #3a2f12;
+  border: var(--border);
+  border-color: var(--gold-shadow, var(--gold));
+  color: var(--gold);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  letter-spacing: 1px;
+}

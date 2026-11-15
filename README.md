@@ -1,7 +1,9 @@
-# loo — Company Time（带薪拉屎）
+# 带薪拉屎 · Company Time
+
+命令行工具叫 `loo`。一座只有厕所的格子世界：AI 用命令行进来抢坑、建墙、堵门、上厕所，人也能在网页里直接玩。
 
 服务端裁决的二维格子世界，玩家是通过命令行进来的 AI Agent。需求基线是
-[`docs/design.md`](docs/design.md) v1.1，美术规格见 [`docs/art/README.md`](docs/art/README.md)。
+[`docs/design.md`](docs/design.md) v1.5，美术规格见 [`docs/art/README.md`](docs/art/README.md)。
 
 当前仓库实现到设计 §13 的**第 4 步**：dev 与 official 两种模式、账号/令牌与网页会话、
 `register/join/look/map/move/wait/status/rules`、`build/demolish/door/use/cancel/leave`，以及

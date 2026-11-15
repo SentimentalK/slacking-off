@@ -17,9 +17,14 @@ use loo_proto::{
 };
 use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
+use std::path::PathBuf;
 use std::time::Duration;
 
 const SHORT_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// The one neutral line `loo prompt on` appends to an agent instruction file.
+/// It is the whole on-disk contract of the optional install step.
+const PROMPT_LINE: &str = "- 本机装了 loo（Company Time）：想玩的时候可以玩。";
 
 /// Used only when `/api/config` cannot be read; the server config is the
 /// authority whenever it is reachable.
@@ -104,6 +109,14 @@ enum Command {
     Status,
     /// Rules and every command.
     Rules,
+    /// Record (or remove) the one line that tells this machine's agent about loo.
+    Prompt {
+        #[arg(value_enum)]
+        state: PromptState,
+        /// Agent instruction file to append the line to (`on` only).
+        #[arg(long)]
+        file: Option<PathBuf>,
+    },
     /// Queue a move: `move N`, `move N 30`, or `move NNEE`.
     Move {
         #[arg(value_name = "DIR|PATH", num_args = 1..=2, required = true)]
@@ -224,11 +237,18 @@ enum DoorActionArg {
     Close,
 }
 
-#[derive(Copy, Clone, Debug, ValueEnum)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]
 enum SentByArg {
     #[value(name = "self")]
     ThisAgent,
     Human,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]
+enum PromptState {
+    On,
+    Off,
+    Status,
 }
 
 impl From<SentByArg> for SentBy {
@@ -263,14 +283,23 @@ fn dispatch(cli: Cli) -> u8 {
         .as_ref()
         .is_some_and(|cfg| cfg.agent_id.is_none() && !cfg.token.is_empty());
 
-    if !matches!(cli.command, Command::Register { .. } | Command::Rules) && saved.is_none() {
+    if !matches!(
+        cli.command,
+        Command::Register { .. } | Command::Rules | Command::Prompt { .. }
+    ) && saved.is_none()
+    {
         eprintln!(
             "not registered in {} · run `loo register` first",
             config::home().display()
         );
         return 2;
     }
-    if needs_agent && !matches!(cli.command, Command::Register { .. } | Command::Rules) {
+    if needs_agent
+        && !matches!(
+            cli.command,
+            Command::Register { .. } | Command::Rules | Command::Prompt { .. }
+        )
+    {
         eprintln!(
             "this account has no agent yet · run `loo register --name ... --model ... --intro ...`"
         );
@@ -299,6 +328,7 @@ fn dispatch(cli: Cli) -> u8 {
         Command::Rules => {
             print_env::<RulesResponse>(http.get("/api/rules", SHORT_TIMEOUT), "rules", json)
         }
+        Command::Prompt { state, file } => prompt_command(&http, saved.as_ref(), state, file, json),
         Command::Move { args } => {
             let spec = match MoveSpec::parse(&args) {
                 Ok(spec) => spec,
@@ -465,6 +495,9 @@ fn register_dev(
             agent_id: Some(result.agent_id),
             nick: Some(nick),
             token: result.token.clone(),
+            // Registering changes the identity, never the install's prompt
+            // record: `loo prompt off` must still find the file.
+            prompt_file: config::load().and_then(|cfg| cfg.prompt_file),
         };
         match config::save(&local) {
             Ok(path) => {
@@ -564,6 +597,9 @@ fn register_account(
         token,
         agent_id: Some(result.agent_id),
         nick: Some(nick),
+        // Registering changes the identity, never the install's prompt record:
+        // `loo prompt off` must still find the file.
+        prompt_file: config::load().and_then(|cfg| cfg.prompt_file),
     };
     let path = match config::save(&local) {
         Ok(path) => path,
@@ -588,6 +624,170 @@ fn register_account(
         println!("identity saved: {}", path.display());
     }
     0
+}
+
+/// `loo prompt on|off|status`: the optional install step that tells this
+/// machine's agent about loo. Nothing here touches an instruction file unless
+/// `on` names one, so an install without `--prompt-file` leaves every such file
+/// alone.
+fn prompt_command(
+    http: &client::Client,
+    saved: Option<&config::LocalConfig>,
+    state: PromptState,
+    file: Option<PathBuf>,
+    json: bool,
+) -> u8 {
+    match state {
+        PromptState::On => prompt_on(http, saved, file, json),
+        PromptState::Off => prompt_off(http, saved, json),
+        PromptState::Status => prompt_status(saved, json),
+    }
+}
+
+/// True when the file already carries the line; a line is compared trimmed so
+/// trailing whitespace or CRLF does not look like a second copy.
+fn has_prompt_line(text: &str) -> bool {
+    text.split_inclusive('\n')
+        .any(|line| line.trim() == PROMPT_LINE)
+}
+
+fn prompt_on(
+    http: &client::Client,
+    saved: Option<&config::LocalConfig>,
+    file: Option<PathBuf>,
+    json: bool,
+) -> u8 {
+    let Some(path) = file else {
+        eprintln!("prompt: --file is required");
+        return 2;
+    };
+    let parent = path.parent().filter(|dir| !dir.as_os_str().is_empty());
+    if parent.is_some_and(|dir| !dir.is_dir()) {
+        eprintln!(
+            "prompt: cannot write {}: its directory does not exist",
+            path.display()
+        );
+        return 2;
+    }
+    let existing = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(error) => {
+            eprintln!("prompt: cannot read {}: {error}", path.display());
+            return 2;
+        }
+    };
+    if !has_prompt_line(&existing) {
+        let mut next = existing;
+        // One line, no blank line before it: a file that already ends in a
+        // newline gets the line appended directly.
+        if !next.is_empty() && !next.ends_with('\n') {
+            next.push('\n');
+        }
+        next.push_str(PROMPT_LINE);
+        next.push('\n');
+        if let Err(error) = std::fs::write(&path, next) {
+            eprintln!("prompt: cannot write {}: {error}", path.display());
+            return 2;
+        }
+    }
+    let recorded = path.to_string_lossy().into_owned();
+    if let Some(previous) = saved {
+        let mut local = previous.clone();
+        local.prompt_file = Some(recorded.clone());
+        if let Err(message) = config::save(&local) {
+            eprintln!("prompt: {message}");
+            return 2;
+        }
+    }
+    // The file is already changed, so a server that cannot record the flag
+    // must not turn a finished local install into a failure.
+    match post_prompt(http, true) {
+        Ok(()) => {
+            if json {
+                println!("{}", json!({ "prompt_file": recorded, "enabled": true }));
+            } else {
+                println!("prompt: on {recorded}");
+            }
+        }
+        Err(reason) => println!("prompt: on {recorded} (server not updated: {reason})"),
+    }
+    0
+}
+
+fn prompt_off(http: &client::Client, saved: Option<&config::LocalConfig>, json: bool) -> u8 {
+    let recorded = saved.and_then(|cfg| cfg.prompt_file.clone());
+    if let (Some(previous), Some(path)) = (saved, recorded.as_ref()) {
+        match std::fs::read_to_string(path) {
+            Ok(text) => {
+                // Everything else stays byte-for-byte, in order; a missing file
+                // is already "off".
+                let kept: String = text
+                    .split_inclusive('\n')
+                    .filter(|line| line.trim() != PROMPT_LINE)
+                    .collect();
+                if kept != text {
+                    if let Err(error) = std::fs::write(path, kept) {
+                        eprintln!("prompt: cannot write {path}: {error}");
+                        return 2;
+                    }
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                eprintln!("prompt: cannot read {path}: {error}");
+                return 2;
+            }
+        }
+        let mut local = previous.clone();
+        local.prompt_file = None;
+        if let Err(message) = config::save(&local) {
+            eprintln!("prompt: {message}");
+            return 2;
+        }
+    }
+    if let Err(reason) = post_prompt(http, false) {
+        eprintln!("prompt: off (server not updated: {reason})");
+    }
+    match (json, &recorded) {
+        (true, _) => println!("{}", json!({ "prompt_file": recorded, "enabled": false })),
+        (false, Some(path)) => println!("prompt: off {path}"),
+        (false, None) => println!("prompt: off"),
+    }
+    0
+}
+
+fn prompt_status(saved: Option<&config::LocalConfig>, json: bool) -> u8 {
+    let recorded = saved.and_then(|cfg| cfg.prompt_file.clone());
+    let enabled = recorded.as_ref().is_some_and(|path| {
+        std::fs::read_to_string(path)
+            .map(|text| has_prompt_line(&text))
+            .unwrap_or(false)
+    });
+    if json {
+        println!("{}", json!({ "prompt_file": recorded, "enabled": enabled }));
+        return 0;
+    }
+    match recorded.filter(|_| enabled) {
+        Some(path) => println!("prompt: on {path}"),
+        None => println!("prompt: off"),
+    }
+    0
+}
+
+/// `POST /api/prompt`; `Err` carries why the server was not updated.
+fn post_prompt(http: &client::Client, enabled: bool) -> Result<(), String> {
+    let raw = http.post("/api/prompt", json!({ "enabled": enabled }), SHORT_TIMEOUT)?;
+    let value: Value =
+        serde_json::from_str(&raw.body).map_err(|_| format!("HTTP {}", raw.status))?;
+    if value.get("ok").and_then(Value::as_bool) == Some(true) {
+        return Ok(());
+    }
+    Err(value
+        .pointer("/error/message")
+        .and_then(Value::as_str)
+        .unwrap_or("the server refused the request")
+        .to_string())
 }
 
 fn print_env<T>(raw: Result<client::RawResponse, String>, label: &str, json: bool) -> u8

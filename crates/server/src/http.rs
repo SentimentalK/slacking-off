@@ -5,6 +5,7 @@
 //! accounts, cookie sessions and CSRF (contract §1).
 
 use crate::auth::{new_token, sha256_hex};
+use crate::store::PromptFilter;
 use crate::{error_envelope, Server};
 use axum::body::Body;
 use axum::extract::{Path, Query, State};
@@ -18,9 +19,9 @@ use include_dir::{include_dir, Dir};
 use loo_proto::{
     ActionQueued, AgentId, ApiError, AttackRequest, AuthLoginRequest, AuthMeResponse,
     AuthRegisterRequest, BuildRequest, ConfigResponse, DefendRequest, DemolishRequest, DoorRequest,
-    DowngradeRequest, Envelope, ErrorCode, JoinRequest, JoinResponse, LeaveResponse, MoveRequest,
-    PlayAgentRequest, PlayAgentResponse, Projection, RegisterRequest, SentBy, Tick, UpgradeRequest,
-    WaitRequest,
+    DowngradeRequest, DownloadEntry, Envelope, ErrorCode, JoinRequest, JoinResponse, LeaveResponse,
+    MoveRequest, PlayAgentRequest, PlayAgentResponse, Projection, PromptResponse, RegisterRequest,
+    SentBy, Tick, UpgradeRequest, WaitRequest,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
@@ -80,9 +81,11 @@ pub fn router_with(server: Arc<Server>, options: HttpOptions) -> Router {
         .route("/api/account", get(account))
         .route("/api/account/token", post(account_token))
         .route("/api/account/token/revoke", post(account_token_revoke))
+        .route("/api/prompt", post(prompt))
         .route("/install.sh", get(install_sh))
         .route("/install.ps1", get(install_ps1))
         .route("/downloads/{name}", get(download))
+        .route("/api/downloads", get(downloads))
         .route("/api/join", post(join))
         .route("/api/look", get(look))
         .route("/api/map", get(map_view))
@@ -443,6 +446,31 @@ async fn account_token(State(app): State<Arc<AppState>>, headers: HeaderMap) -> 
     respond(app.server.create_account_token(user_id, &base))
 }
 
+/// `POST /api/prompt` — the install records whether it wrote the loo line into
+/// an agent instruction file. Token-authenticated like `/api/join`: it is a CLI
+/// call, so it carries no browser session and no CSRF header.
+#[derive(Deserialize)]
+struct PromptRequest {
+    enabled: bool,
+}
+
+async fn prompt(
+    State(app): State<Arc<AppState>>,
+    headers: HeaderMap,
+    body: Option<Json<PromptRequest>>,
+) -> Response {
+    if !app.server.official() {
+        return not_found();
+    }
+    let Some(Json(req)) = body else {
+        return respond::<PromptResponse>(bad_request("body must be {enabled}"));
+    };
+    let Some(token) = bearer(&headers) else {
+        return unauthorized("Authorization: Bearer <token> is required");
+    };
+    respond(app.server.set_prompt_enabled(&token, req.enabled))
+}
+
 async fn account_token_revoke(State(app): State<Arc<AppState>>, headers: HeaderMap) -> Response {
     if !app.server.official() {
         return not_found();
@@ -477,18 +505,48 @@ async fn install_ps1() -> impl IntoResponse {
 }
 
 /// Contract §1: six download names, each backed by a file of the same name.
-/// A missing file is a 404 with `暂无构建`; there is no fallback to another
-/// platform's binary.
+/// The order is the order `GET /api/downloads` and the account page use.
+pub const PLATFORM_FILES: [&str; 6] = [
+    "loo-linux-x64",
+    "loo-linux-arm64",
+    "loo-macos-x64",
+    "loo-macos-arm64",
+    "loo-windows-x64.exe",
+    "loo-windows-arm64.exe",
+];
+
 fn platform_file(name: &str) -> Option<&str> {
-    match name {
-        "loo-linux-x64"
-        | "loo-linux-arm64"
-        | "loo-macos-x64"
-        | "loo-macos-arm64"
-        | "loo-windows-x64.exe"
-        | "loo-windows-arm64.exe" => Some(name),
-        _ => None,
+    PLATFORM_FILES
+        .iter()
+        .copied()
+        .find(|candidate| *candidate == name)
+}
+
+/// The subset of [`PLATFORM_FILES`] that exists as a regular file in `dir`,
+/// in the constant's order. A missing file is simply absent from the list;
+/// there is no fallback to another platform's binary.
+fn list_downloads(dir: &FsPath) -> Vec<DownloadEntry> {
+    let mut listed = Vec::new();
+    for file in PLATFORM_FILES {
+        if let Ok(meta) = std::fs::metadata(dir.join(file)) {
+            if meta.is_file() {
+                listed.push(DownloadEntry {
+                    file: file.to_string(),
+                    bytes: meta.len(),
+                });
+            }
+        }
     }
+    listed
+}
+
+/// `GET /api/downloads`: the real on-disk platform binaries. Static, so no auth.
+async fn downloads(State(app): State<Arc<AppState>>) -> Response {
+    respond(Envelope::ok(
+        list_downloads(&app.options.downloads_dir),
+        Vec::new(),
+        None,
+    ))
 }
 
 async fn download(State(app): State<Arc<AppState>>, Path(name): Path<String>) -> Response {
@@ -583,8 +641,18 @@ async fn leaderboard(
     )
 }
 
-async fn stats(State(app): State<Arc<AppState>>) -> Response {
-    respond(app.server.stats().await)
+#[derive(Deserialize)]
+struct StatsQuery {
+    prompt: Option<String>,
+}
+
+async fn stats(State(app): State<Arc<AppState>>, Query(query): Query<StatsQuery>) -> Response {
+    let filter = match query.prompt.as_deref() {
+        Some("on") => PromptFilter::On,
+        Some("off") => PromptFilter::Off,
+        _ => PromptFilter::Any,
+    };
+    respond(app.server.stats(filter).await)
 }
 
 async fn agent_profile(State(app): State<Arc<AppState>>, Path(id): Path<String>) -> Response {
@@ -1499,5 +1567,40 @@ mod tests {
         assert!(!accepts_gzip(&accept_encoding(Some("gzip;q=0"))));
         assert!(accepts_gzip(&accept_encoding(Some("*"))));
         assert!(accepts_gzip(&accept_encoding(Some("GZIP"))));
+    }
+
+    fn downloads_dir(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("loo-downloads-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("temp downloads dir");
+        dir
+    }
+
+    #[test]
+    fn downloads_lists_only_existing_files_in_platform_order() {
+        let dir = downloads_dir("some");
+        std::fs::write(dir.join("loo-macos-arm64"), b"abc").expect("write macos");
+        std::fs::write(dir.join("loo-windows-x64.exe"), b"12345").expect("write windows");
+        assert_eq!(
+            list_downloads(&dir),
+            vec![
+                DownloadEntry {
+                    file: "loo-macos-arm64".to_string(),
+                    bytes: 3,
+                },
+                DownloadEntry {
+                    file: "loo-windows-x64.exe".to_string(),
+                    bytes: 5,
+                },
+            ]
+        );
+        std::fs::remove_dir_all(&dir).expect("remove temp downloads dir");
+    }
+
+    #[test]
+    fn downloads_lists_nothing_from_an_empty_directory() {
+        let dir = downloads_dir("empty");
+        assert!(list_downloads(&dir).is_empty());
+        std::fs::remove_dir_all(&dir).expect("remove temp downloads dir");
     }
 }

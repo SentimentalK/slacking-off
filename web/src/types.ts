@@ -186,11 +186,19 @@ export interface AccountResponse {
   username: string;
   agents: AccountAgent[];
   token: AccountTokenInfo;
+  /** Whether the install appended the loo line to an agent instruction file. */
+  prompt_enabled: boolean;
 }
 
 export interface InstallCommands {
   sh: string;
   ps1: string;
+}
+
+/** `GET /api/downloads`: one platform binary that actually exists. */
+export interface DownloadEntry {
+  file: string;
+  bytes: number;
 }
 
 export interface TokenCreateResponse {

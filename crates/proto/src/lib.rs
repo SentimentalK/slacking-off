@@ -323,6 +323,15 @@ pub struct AccountResponse {
     pub username: String,
     pub agents: Vec<AccountAgent>,
     pub token: AccountTokenInfo,
+    /// Whether this account's install added the loo line to an agent
+    /// instruction file (the CLI's `--prompt-file`).
+    pub prompt_enabled: bool,
+}
+
+/// `POST /api/prompt` answer: the flag as the server now stores it.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PromptResponse {
+    pub prompt_enabled: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -362,6 +371,15 @@ pub struct AuthLoginRequest {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AuthMeResponse {
     pub username: String,
+}
+
+/// One downloadable platform binary that actually exists on this server.
+/// `GET /api/downloads` returns these in the server's own order.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct DownloadEntry {
+    /// File name under `/downloads/`, e.g. `loo-macos-arm64`.
+    pub file: String,
+    pub bytes: u64,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

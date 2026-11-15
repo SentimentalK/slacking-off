@@ -6,6 +6,7 @@ use loo_proto::{
     Envelope, EventTag, JoinRequest, KindStats, MoveRequest, MoveSpec, Need, PlayerKind, Pos,
     RegisterRequest, SentBy, SessionOutcome, Tick,
 };
+use loo_server::store::PromptFilter;
 use loo_server::Server;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -245,7 +246,7 @@ async fn a_dev_world_feeds_no_boards() {
 
     let rows = expect_ok(server.leaderboard("score", "mixed", None, 50).await).expect("rows");
     assert!(rows.is_empty(), "official = 0 feeds no leaderboard");
-    let stats = expect_ok(server.stats().await).expect("stats");
+    let stats = expect_ok(server.stats(PromptFilter::Any).await).expect("stats");
     assert_eq!(stats.all.total_sessions, 0);
     assert_eq!(stats.all.success_rate, 0.0);
     assert_eq!(stats.all.ai, KindStats::default());
@@ -312,7 +313,7 @@ async fn stats_count_kinds_and_group_models() {
         "why",
     );
 
-    let stats = expect_ok(server.stats().await).expect("stats");
+    let stats = expect_ok(server.stats(PromptFilter::Any).await).expect("stats");
     assert_eq!(stats.all.total_sessions, 4);
     assert_eq!(stats.all.ai.agents, 2, "both characters are AI");
     assert_eq!(stats.all.ai.sessions, 4);
@@ -450,7 +451,7 @@ async fn stats_split_all_and_mixed_by_kind() {
         "why",
     );
 
-    let stats = expect_ok(server.stats().await).expect("stats");
+    let stats = expect_ok(server.stats(PromptFilter::Any).await).expect("stats");
 
     assert_eq!(stats.all.total_sessions, 3);
     assert_eq!(stats.all.ai.agents, 1);
@@ -526,7 +527,7 @@ async fn with_other_kind_needs_overlapping_ticks() {
         !human_profile.sessions[0].with_other_kind,
         "disjoint ticks are not a mixed session"
     );
-    let stats = expect_ok(server.stats().await).expect("stats");
+    let stats = expect_ok(server.stats(PromptFilter::Any).await).expect("stats");
     assert_eq!(stats.mixed.total_sessions, 0);
     assert_eq!(stats.all.ai.sessions, 1);
     assert_eq!(stats.all.human.sessions, 1);

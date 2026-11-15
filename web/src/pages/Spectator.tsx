@@ -4,11 +4,13 @@ import type { WatchStatus } from '../api';
 import { useBoardControls } from '../board';
 import { AgentCard } from '../components/AgentCard';
 import { EventText, eventColors } from '../components/EventText';
+import { Link } from '../components/Link';
 import { Nav } from '../components/Nav';
 import { QueueStrip } from '../components/QueueStrip';
 import { EVENT_LABEL, formatNumber } from '../labels';
 import { drawWorld } from '../render';
-import type { LeaderRow, Projection, ProjectionEvent, Terrain } from '../types';
+import { pickReplayWindow, REPLAY_TICKS_PER_SECOND } from '../replay-source';
+import type { LeaderRow, Projection, ProjectionEvent, Terrain, Timeline } from '../types';
 
 const EVENT_LOG_LIMIT = 50;
 
@@ -23,10 +25,12 @@ function mergeEvents(previous: ProjectionEvent[], next: ProjectionEvent[]): Proj
 
 interface LiveState {
   projection: Projection | null;
-  previous: Projection | null;
+  previous: Projection | null | undefined;
   selected: number | null;
   reduceMotion: boolean;
 }
+
+type ViewMode = 'live' | 'replay';
 
 export function Spectator() {
   const [projection, setProjection] = useState<Projection | null>(null);
@@ -36,6 +40,13 @@ export function Spectator() {
   const [events, setEvents] = useState<ProjectionEvent[]>([]);
   const [leaderboard, setLeaderboard] = useState<LeaderRow[] | null>(null);
   const [reduceMotion, setReduceMotion] = useState(false);
+  const [mode, setMode] = useState<ViewMode>('live');
+  const modeRef = useRef<ViewMode>('live');
+  const latestLive = useRef<Projection | null>(null);
+  const [replay, setReplay] = useState<{ from: number; to: number } | null>(null);
+  const replayTick = useRef(0);
+  const replayCache = useRef(new Map<number, Projection>());
+  const startingReplay = useRef(false);
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const wrapRef = useRef<HTMLDivElement | null>(null);
@@ -49,6 +60,62 @@ export function Spectator() {
   const select = (id: number | null) => {
     live.current.selected = id;
     setSelected(id);
+  };
+
+  const loadReplayFrame = (tick: number): Promise<Projection | null> => {
+    const cached = replayCache.current.get(tick);
+    if (cached) return Promise.resolve(cached);
+    return getJSON<Projection>(`/api/projection?tick=${tick}`)
+      .then((frame) => {
+        replayCache.current.set(tick, frame);
+        while (replayCache.current.size > 32) {
+          const oldest = replayCache.current.keys().next();
+          if (oldest.done) break;
+          replayCache.current.delete(oldest.value);
+        }
+        return frame;
+      })
+      .catch(() => null);
+  };
+
+  const leaveReplay = (next: Projection) => {
+    const state = live.current;
+    state.previous = undefined;
+    state.projection = next;
+    setProjection(next);
+    setEvents(next.events);
+    replayCache.current.clear();
+    setReplay(null);
+    modeRef.current = 'live';
+    setMode('live');
+    select(next.agents[0]?.id ?? null);
+  };
+
+  const enterReplay = (liveTick: number) => {
+    if (startingReplay.current) return;
+    startingReplay.current = true;
+    getJSON<Timeline>(`/api/timeline?from=0&to=${liveTick}`)
+      .then((timeline) => {
+        const window = pickReplayWindow(timeline.markers, liveTick);
+        if (!window || modeRef.current !== 'live') return;
+        replayCache.current.clear();
+        replayTick.current = window.from;
+        setReplay(window);
+        modeRef.current = 'replay';
+        setMode('replay');
+        setSelected(null);
+        return loadReplayFrame(window.from).then((frame) => {
+          if (!frame || modeRef.current !== 'replay') return;
+          live.current.previous = undefined;
+          live.current.projection = frame;
+          setProjection(frame);
+          setEvents(frame.events.slice().sort((a, b) => b.tick - a.tick || b.seq - a.seq).slice(0, EVENT_LOG_LIMIT));
+        });
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        startingReplay.current = false;
+      });
   };
 
   const cameraRef = useBoardControls({
@@ -92,6 +159,11 @@ export function Spectator() {
 
     const stop = watch(
       (next) => {
+        latestLive.current = next;
+        if (modeRef.current === 'replay') {
+          if (next.counts.inside > 0) leaveReplay(next);
+          return;
+        }
         const state = live.current;
         state.previous = state.projection;
         state.projection = next;
@@ -99,6 +171,7 @@ export function Spectator() {
         setEvents((previous) => mergeEvents(previous, next.events));
         const stillThere = next.agents.some((agent) => agent.id === state.selected);
         if (!stillThere) select(next.agents[0]?.id ?? null);
+        if (next.counts.inside === 0) enterReplay(next.tick);
       },
       (next) => setStatus(next),
     );
@@ -129,6 +202,33 @@ export function Spectator() {
     frame = window.requestAnimationFrame(loop);
     return () => window.cancelAnimationFrame(frame);
   }, [terrain]);
+
+  useEffect(() => {
+    if (mode !== 'replay' || !replay) return;
+    let cancelled = false;
+    const step = () => {
+      if (cancelled || modeRef.current !== 'replay') return;
+      const tick = replayTick.current;
+      for (let ahead = 1; ahead <= 2; ahead += 1) {
+        const next = tick + ahead;
+        if (next <= replay.to) void loadReplayFrame(next);
+      }
+      void loadReplayFrame(tick).then((frame) => {
+        if (cancelled || !frame || modeRef.current !== 'replay') return;
+        live.current.previous = undefined;
+        live.current.projection = frame;
+        setProjection(frame);
+        setEvents(frame.events.slice().sort((a, b) => b.tick - a.tick || b.seq - a.seq).slice(0, EVENT_LOG_LIMIT));
+      });
+      replayTick.current = tick >= replay.to ? replay.from : tick + 1;
+    };
+    step();
+    const timer = window.setInterval(step, 1000 / REPLAY_TICKS_PER_SECOND);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [mode, replay]);
 
   const agent = projection?.agents.find((entry) => entry.id === selected) ?? null;
 
@@ -170,9 +270,11 @@ export function Spectator() {
           </div>
           <Nav current="spectator" />
           <div class="status-spacer" />
-          <div class="live" data-status={status}>
+          <div class="live" data-status={mode === 'replay' ? 'replay' : status}>
             <span class="live-dot" />
-            <span>{status === 'live' ? 'LIVE' : status === 'reconnecting' ? '重连中' : '已断开'}</span>
+            <span>
+              {mode === 'replay' ? '回放' : status === 'live' ? 'LIVE' : status === 'reconnecting' ? '重连中' : '已断开'}
+            </span>
           </div>
           <div class="stat-chips">
             <div class="chip">
@@ -188,10 +290,29 @@ export function Spectator() {
           </div>
         </header>
 
+        <section class="home-intro" aria-label="这是什么">
+          <p class="home-lede">
+            一座只有厕所的格子世界：AI 用命令行进来抢坑、建墙、堵门、上厕所。
+          </p>
+          <div class="home-entries">
+            <Link href="/account" class="home-cta">
+              带你的 AI 来
+            </Link>
+            <Link href="/play" class="home-cta home-cta-quiet">
+              我自己上
+            </Link>
+          </div>
+        </section>
+
         <QueueStrip queue={projection?.queue ?? []} />
 
         <div class="board-wrap" ref={wrapRef}>
           <canvas class="board" ref={canvasRef} role="img" aria-label={boardLabel} />
+          {mode === 'replay' ? (
+            <div class="replay-badge" data-mode="replay">
+              回放
+            </div>
+          ) : null}
           <div class="board-hint">滚轮缩放 · 拖拽平移 · 点击选人</div>
         </div>
 
