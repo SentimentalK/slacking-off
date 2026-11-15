@@ -11,6 +11,7 @@ import type {
   Pos,
   ProjectionObject,
   TargetSpec,
+  Terrain,
 } from '../types';
 
 /** `Nick` (contract §3): the server decides, the page only hints. */
@@ -97,8 +98,15 @@ function canAct(state: PlayState, agent: AgentView | null): boolean {
  * Actions a clicked neighbour may offer. The caller's own cell gets none (the
  * use button lives in the status panel), non-neighbours get none, and objects
  * only expose the verbs their kind supports.
+ *
+ * `terrain` is the loaded `GET /api/terrain`; `null` (still loading) falls
+ * back to the terrain-blind menu.
  */
-export function menuFor(state: PlayState, cell: Pos): PlayAction[] {
+export function menuFor(
+  state: PlayState,
+  cell: Pos,
+  terrain: Terrain | null = null,
+): PlayAction[] {
   const me = ownPos(state);
   const agent = state.agent;
   if (!me || !canAct(state, agent)) return [];
@@ -107,31 +115,34 @@ export function menuFor(state: PlayState, cell: Pos): PlayAction[] {
 
   const target: TargetSpec = { dir };
   const object = objectAt(state, cell);
+  const occupant = agentAt(state, cell);
+  const noBuild = terrain?.rows[cell.y]?.[cell.x] === ':';
   const actions: PlayAction[] = [];
 
-  if (!object) {
-    for (const build of ['wall', 'door', 'toilet'] as const) {
-      actions.push({
-        id: `build-${build}`,
-        kind: 'build',
-        label: BUILD_LABEL[build],
-        build,
-        target,
-      });
+  if (!object || object.site) {
+    // An unfinished site can only be worked further with the same material.
+    const builds: BuildKind[] = object?.site ? [object.site] : ['wall', 'door', 'toilet'];
+    if (!noBuild) {
+      for (const build of builds) {
+        // A body on the cell blocks wall and door foundations (design §4.2);
+        // a toilet needs no empty cell, so it stays offerable.
+        if (occupant && build !== 'toilet') continue;
+        actions.push({
+          id: `build-${build}`,
+          kind: 'build',
+          label: BUILD_LABEL[build],
+          build,
+          target,
+        });
+      }
     }
-  } else if (object.site) {
-    // A site in progress can only be worked further with the same material.
-    actions.push({
-      id: `build-${object.site}`,
-      kind: 'build',
-      label: BUILD_LABEL[object.site],
-      build: object.site,
-      target,
-    });
-  } else {
-    if (object.kind === 'wall' || object.kind === 'door') {
+    if (object?.site) {
       actions.push({ id: 'demolish', kind: 'demolish', label: '拆', target });
     }
+  } else {
+    // Every finished object can be demolished, toilets included (design
+    // §4.6/§4.7).
+    actions.push({ id: 'demolish', kind: 'demolish', label: '拆', target });
     if (object.kind === 'door') {
       actions.push({
         id: object.open ? 'door-close' : 'door-open',
@@ -142,7 +153,8 @@ export function menuFor(state: PlayState, cell: Pos): PlayAction[] {
       });
     }
     if (object.kind === 'toilet') {
-      if (object.level < TOILET_MAX_LEVEL) {
+      // Working a toilet up needs at least the target level (design §4.7).
+      if (agent && object.level < TOILET_MAX_LEVEL && agent.level >= object.level + 1) {
         actions.push({ id: 'upgrade', kind: 'upgrade', label: '升级', target });
       }
       if (object.level > 1) {
@@ -151,7 +163,7 @@ export function menuFor(state: PlayState, cell: Pos): PlayAction[] {
     }
   }
 
-  if (agentAt(state, cell)) {
+  if (occupant) {
     actions.push({ id: 'attack', kind: 'attack', label: '打', dir });
   }
   if (!agent || state.tick >= agent.defend_cooldown_until) {

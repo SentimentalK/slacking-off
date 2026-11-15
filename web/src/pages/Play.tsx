@@ -419,8 +419,8 @@ export function Play() {
 
   // --- derived view ------------------------------------------------------
   const actions = useMemo(
-    () => (state && selected ? menuFor(state, selected) : []),
-    [state, selected],
+    () => (state && selected ? menuFor(state, selected, terrain) : []),
+    [state, selected, terrain],
   );
   const offer = state ? useOffer(state) : null;
   const agent = state?.joined ? state.agent : null;
