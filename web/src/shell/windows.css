@@ -1,0 +1,129 @@
+.shell .win .wsec {
+  margin-top: 14px;
+}
+.shell .win section.wsec {
+  display: block;
+}
+.shell .win .mono {
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+}
+.shell .win .field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 8px 0;
+}
+.shell .win .field > span {
+  color: var(--dim);
+  font-size: 12px;
+}
+.shell .win .field input,
+.shell .win select {
+  font: inherit;
+  color: inherit;
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 8px 10px;
+}
+.shell .win .err {
+  color: var(--bad);
+}
+.shell .win a {
+  color: var(--gold);
+}
+.shell .win .authbody {
+  max-width: 360px;
+  margin: 0 auto;
+}
+.shell .win .bctl {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px 12px;
+}
+.shell .win .bctl .tabs {
+  margin-bottom: 0;
+}
+.shell .win .bctl .field {
+  margin: 0;
+}
+.shell .win .acct {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+.shell .win .tokline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 14px;
+  margin: 10px 0 6px;
+}
+.shell .win .tag[data-active='true'] {
+  color: var(--ok);
+  border-color: var(--ok);
+}
+.shell .win .acts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 10px 0;
+}
+.shell .win .tiles.two {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.shell .win .tiles.six {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.shell .win .grid2,
+.shell .win .even {
+  align-items: start;
+}
+.shell .win .even {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 20px;
+}
+.shell .win .who {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 14px;
+}
+.shell .win .who .dot {
+  width: 56px;
+  height: 56px;
+  border-radius: 14px;
+}
+.shell .win .self dt {
+  color: var(--dim);
+  font-size: 12px;
+  margin-top: 8px;
+}
+.shell .win .self dd {
+  margin: 2px 0 0;
+}
+.shell .win td .hb {
+  min-width: 140px;
+  margin: 0;
+}
+.shell .win .hb b {
+  min-width: 56px;
+  text-align: right;
+}
+
+@media (max-width: 700px) {
+  .shell .win .tiles,
+  .shell .win .tiles.two,
+  .shell .win .tiles.six {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .shell .win .grid2,
+  .shell .win .even {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

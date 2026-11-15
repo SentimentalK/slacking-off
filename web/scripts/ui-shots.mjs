@@ -202,3 +202,116 @@ if (failures.length > 0) {
   process.exit(1);
 }
 console.log('all ui assertions passed');
+
+if (args.windows === '1') {
+  const windowFailures = [];
+  const winCheck = (ok, message) => {
+    if (!ok) windowFailures.push(message);
+  };
+  const winBrowser = await puppeteer.launch({
+    executablePath: CHROME,
+    headless: true,
+    args: [
+      '--headless=new',
+      '--no-sandbox',
+      '--use-angle=gl',
+      '--enable-gpu',
+      '--ignore-gpu-blocklist',
+      '--hide-scrollbars',
+    ],
+  });
+  const snapWindow = async (page, name) => {
+    const { scroll, inner } = await page.evaluate(() => ({
+      scroll: document.documentElement.scrollWidth,
+      inner: window.innerWidth,
+    }));
+    winCheck(scroll <= inner, `${name}: horizontal scroll (scrollWidth ${scroll} > ${inner})`);
+    await page.screenshot({ path: path.join(args.out, `${name}.png`), fullPage: true });
+    console.log(`shot ${name}`);
+  };
+  const openRoute = async (page, route) => {
+    await page.goto(new URL(route, args.base).href, { waitUntil: 'domcontentloaded', timeout: 60000 });
+  };
+  const settleWindow = (page, selector) =>
+    page.waitForFunction(
+      (sel) => {
+        const win = document.querySelector(sel);
+        return win !== null && !win.textContent.includes('载入中…');
+      },
+      { timeout: 30000 },
+      selector,
+    );
+  const runWindowRound = async (viewport, w, username) => {
+    const page = await winBrowser.newPage();
+    await page.setViewport({ ...viewport, deviceScaleFactor: 1 });
+    try {
+      await openRoute(page, '/register');
+      await page.waitForSelector('input[name="username"]', { timeout: 60000 });
+      await page.type('input[name="username"]', username);
+      await page.type('input[name="password"]', 'w3c-password-1');
+      await page.click('button[type="submit"]');
+      await page.waitForSelector('.win[data-window="account"]', { timeout: 30000 });
+      await page.waitForFunction(
+        (name) => document.querySelector('.acct .nick')?.textContent === name,
+        { timeout: 30000 },
+        username,
+      );
+      await settleWindow(page, '.win[data-window="account"]');
+      await snapWindow(page, `account-${w}`);
+
+      await page.click('[data-testid="token-action"]');
+      await page.waitForFunction(
+        () => (document.querySelector('[data-testid="install-command"]')?.textContent ?? '').trim().length > 0,
+        { timeout: 30000 },
+      );
+      await snapWindow(page, `account-token-${w}`);
+
+      await openRoute(page, '/leaderboard');
+      await page.waitForSelector('.win[data-window="leaderboard"]', { timeout: 30000 });
+      await settleWindow(page, '.win[data-window="leaderboard"]');
+      await snapWindow(page, `board-${w}`);
+
+      await openRoute(page, '/stats');
+      await page.waitForSelector('.win[data-window="stats"]', { timeout: 30000 });
+      await settleWindow(page, '.win[data-window="stats"]');
+      await snapWindow(page, `stats-${w}`);
+
+      await openRoute(page, '/agent/1');
+      await page.waitForSelector('.win[data-window="agent"]', { timeout: 30000 });
+      await settleWindow(page, '.win[data-window="agent"]');
+      await snapWindow(page, `profile-${w}`);
+
+      await openRoute(page, '/account');
+      await page.waitForSelector('.win[data-window="account"]', { timeout: 30000 });
+      await page.waitForFunction(
+        () => document.querySelector('.acct .nick')?.textContent !== '载入中…',
+        { timeout: 30000 },
+      );
+      await page.evaluate(() => {
+        const logout = [...document.querySelectorAll('.acct button')].find((button) =>
+          button.textContent.includes('退出登录'),
+        );
+        logout?.click();
+      });
+      await page.waitForFunction(() => location.pathname === '/login', { timeout: 30000 });
+      await page.waitForSelector('.win[data-window="login"]', { timeout: 30000 });
+      await snapWindow(page, `login-${w}`);
+    } catch (error) {
+      windowFailures.push(`window round ${w}: ${error.message}`);
+    } finally {
+      await page.close();
+    }
+  };
+  try {
+    mkdirSync(args.out, { recursive: true });
+    await runWindowRound(DESKTOP, '1440', 'w3c-user');
+    await runWindowRound(PHONE, '390', 'w3c-user2');
+  } finally {
+    await winBrowser.close();
+  }
+  if (windowFailures.length > 0) {
+    for (const failure of windowFailures) console.error(`FAIL ${failure}`);
+    process.exit(1);
+  }
+  console.log('window shots passed');
+}

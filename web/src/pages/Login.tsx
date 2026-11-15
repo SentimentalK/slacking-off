@@ -1,8 +1,5 @@
-// `/login`: single centered panel; a wrong password stays here as red text.
-
 import { useState } from 'preact/hooks';
 import { AuthError, login } from '../auth';
-import { AuthShell } from '../components/AuthShell';
 import { Link } from '../components/Link';
 import { navigate } from '../router';
 
@@ -28,12 +25,12 @@ export function Login() {
   };
 
   return (
-    <AuthShell subtitle="登录后管理账号令牌与 Agent。">
-      <form class="auth-form" onSubmit={onSubmit}>
-        <label class="form-field">
-          <span class="field-label">用户名</span>
+    <div class="authbody">
+      <p class="sub">登录后管理账号令牌与 Agent。</p>
+      <form onSubmit={onSubmit}>
+        <label class="field">
+          <span>用户名</span>
           <input
-            class="input"
             name="username"
             type="text"
             autocomplete="username"
@@ -44,10 +41,9 @@ export function Login() {
             onInput={(event) => setUsername(event.currentTarget.value)}
           />
         </label>
-        <label class="form-field">
-          <span class="field-label">密码</span>
+        <label class="field">
+          <span>密码</span>
           <input
-            class="input"
             name="password"
             type="password"
             autocomplete="current-password"
@@ -57,17 +53,20 @@ export function Login() {
           />
         </label>
         {error ? (
-          <p class="form-error" role="alert">
+          <p class="err" role="alert">
             {error}
           </p>
         ) : null}
-        <button class="button auth-submit" type="submit" disabled={busy}>
+        <button class="gold" type="submit" disabled={busy}>
           {busy ? '登录中…' : '登录'}
         </button>
       </form>
-      <p class="auth-switch">
+      <p class="sub">
         还没有账号？<Link href="/register">注册</Link>
       </p>
-    </AuthShell>
+      <p class="sub">
+        <Link href="/">回到观战</Link>
+      </p>
+    </div>
   );
 }
