@@ -39,8 +39,11 @@ export function createDecor(ctx: SceneCtx): Layer {
   const boulders: Item[] = [];
   const barrels: Item[] = [];
   const crates: Item[] = [];
+  const treeLine = (x: number, y: number): boolean =>
+    [[1, 0], [-1, 0], [0, 1], [0, -1]].some(([dx, dy]) => cellAt(terrain, x + dx, y + dy) === '~');
   forEachCell(terrain, (x, y, ch) => {
     if (ch !== '.' || (x === ex && y === ey) || Math.abs(x - ex) + Math.abs(y - ey) <= 2) return;
+    if (treeLine(x, y)) return;
     const v = r(x, y, 101);
     const cx = x + 0.5;
     const cz = y + 0.5;
@@ -81,7 +84,7 @@ export function createDecor(ctx: SceneCtx): Layer {
   if (quality === 'high') {
     const first = [...lamps].sort((a, b) => a.x - b.x || a.y - b.y).slice(0, 12);
     for (const l of first) {
-      const light = new THREE.PointLight(0xffa850, 0, 7, 2);
+      const light = new THREE.PointLight(0xffa850, 0, 10, 2);
       light.position.set(l.x + 0.5 + 0.34, 1.35, l.y + 0.5);
       root.add(light);
       lampLights.push({ light, cell: cellKey(l.x, l.y) });
