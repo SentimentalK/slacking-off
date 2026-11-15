@@ -3,7 +3,7 @@ import * as THREE from 'three';
 const FOV = 24;
 const NEAR = 1;
 const FAR = 400;
-const VIEW_DIR = new THREE.Vector3(0, 33, 16).normalize();
+const VIEW_DIR = new THREE.Vector3(0, 30, 19).normalize();
 const FRAME_LIMIT = 0.96;
 const CLICK_PX = 5;
 

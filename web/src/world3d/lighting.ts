@@ -23,8 +23,8 @@ export function createLighting(scene: THREE.Scene): Lighting {
   scene.add(hemi, sun, sun.target);
   sun.shadow.mapSize.set(4096, 4096);
   sun.shadow.radius = 3;
-  sun.shadow.bias = -0.0012;
-  sun.shadow.normalBias = 0.04;
+  sun.shadow.bias = -0.0006;
+  sun.shadow.normalBias = 0.08;
   sun.shadow.camera.near = 1;
   sun.shadow.camera.far = 140;
 
@@ -37,10 +37,10 @@ export function createLighting(scene: THREE.Scene): Lighting {
       const cz = H / 2;
 
       sun.color.copy(SUN_DAY).lerp(SUN_DUSK, k);
-      sun.intensity = (2.6 - 1.75 * k) * Math.PI;
+      sun.intensity = (2.6 - 1.3 * k) * Math.PI;
       hemi.color.copy(HEM_DAY).lerp(HEM_DUSK, k);
-      hemi.intensity = (0.42 - 0.14 * k) * Math.PI;
-      sun.position.set(cx - 26 - 13 * k, 28 - 17 * k, cz + 11);
+      hemi.intensity = (0.42 - 0.04 * k) * Math.PI;
+      sun.position.set(cx - 26 - 10 * k, 28 - 10 * k, cz + 11);
       sun.target.position.set(cx, 0, cz);
       sun.target.updateMatrixWorld();
 
