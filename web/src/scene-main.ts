@@ -29,7 +29,9 @@ const fixtureUrl = q.get('fixture');
 if (!fixtureUrl) throw new Error('missing ?fixture=');
 const still = q.get('still') === '1';
 const phase = Number(q.get('phase') ?? '1');
-const ui: UiState = { selected: null, hoverToilet: null, dusk: q.get('dusk') === '1', duskT: 0 };
+const hoverParts = (q.get('hover') ?? '').split(',').map(Number);
+const hoverToilet = hoverParts.length === 2 && hoverParts.every(Number.isFinite) ? { x: hoverParts[0], y: hoverParts[1] } : null;
+const ui: UiState = { selected: null, hoverToilet, dusk: q.get('dusk') === '1', duskT: 0 };
 const paramQuality = q.get('quality');
 const quality: Quality = chooseQuality(paramQuality, readStored(), innerWidth, navigator.hardwareConcurrency || 8);
 
