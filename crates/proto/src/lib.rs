@@ -12,6 +12,25 @@ pub type Tick = u64;
 pub type AgentId = u64;
 pub type SessionId = u64;
 
+/// Who plays an agent: an API client (`Ai`) or a person in the browser
+/// (`Human`). The CLI never shows it; only the profile and the spectator view
+/// carry it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PlayerKind {
+    Ai,
+    Human,
+}
+
+impl PlayerKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            PlayerKind::Ai => "ai",
+            PlayerKind::Human => "human",
+        }
+    }
+}
+
 /// What an agent has to get rid of during a session (design §4.8).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -724,6 +743,7 @@ pub struct ProjectionAgent {
     pub id: AgentId,
     pub nick: String,
     pub color: u8,
+    pub kind: PlayerKind,
     pub session_id: SessionId,
     pub pos: Pos,
     pub pose: AgentPose,
@@ -893,6 +913,8 @@ pub struct SessionRow {
     pub built: u32,
     pub hits_taken: u32,
     pub defends: u32,
+    /// Another player kind shared the world during this session.
+    pub with_other_kind: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -902,6 +924,7 @@ pub struct ProfileResponse {
     pub owner: String,
     pub model: String,
     pub intro: String,
+    pub kind: PlayerKind,
     pub score_total: u32,
     pub level: u8,
     pub visits: u32,
@@ -925,6 +948,70 @@ pub struct TimelineMarker {
     pub tick: Tick,
     pub kind: EventTag,
     pub text: String,
+}
+
+/// The account's human character, as the browser sees it (contract §3).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlayMe {
+    pub agent_id: AgentId,
+    pub nick: String,
+    pub color: u8,
+}
+
+/// `POST /api/play/agent`: `color` defaults to `agent_id % 12`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlayAgentRequest {
+    pub nick: String,
+    #[serde(default)]
+    pub color: Option<u8>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlayAgentResponse {
+    pub agent: Option<PlayMe>,
+}
+
+/// The visible 9×9 window, clipped to the map.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlayWindow {
+    pub origin: Pos,
+    pub width: i32,
+    pub height: i32,
+}
+
+/// One player the browser may draw: no kind, score, level or `sent_by`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlayAgent {
+    pub id: AgentId,
+    pub nick: String,
+    pub color: u8,
+    pub session_id: SessionId,
+    pub pos: Pos,
+    pub pose: AgentPose,
+    pub facing: Dir,
+    pub need: Option<Need>,
+    pub use_done: u32,
+    pub use_total: u32,
+    pub deadline_tick: Tick,
+    pub defending: Option<Pos>,
+    pub stun_until: Tick,
+    pub immunity_until: Tick,
+}
+
+/// `GET /api/play/state`: the browser's whole view of the world.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PlayState {
+    pub me: PlayMe,
+    pub tick: Tick,
+    pub tick_seconds: f64,
+    pub ms_to_next_tick: u64,
+    pub joined: bool,
+    pub placement: Option<PlacementKind>,
+    pub window: PlayWindow,
+    pub objects: Vec<ProjectionObject>,
+    pub agents: Vec<PlayAgent>,
+    pub agent: Option<AgentView>,
+    pub map: Option<MapResponse>,
 }
 
 /// Every response carries the same three things (design §10): this command's
