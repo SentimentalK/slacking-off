@@ -26,7 +26,7 @@ const SHOTS = [
   { name: 'using', fixture: 'using.json', query: 'focus=13,10&zoom=0.4', w: 1440, h: 900 },
   { name: 'windup', fixture: 'windup.json', query: 'focus=18,12&zoom=0.35', w: 1440, h: 900 },
   { name: 'queue', fixture: 'crowd.json', query: 'focus=6,15&zoom=0.45', w: 1440, h: 900 },
-  { name: 'states', fixture: 'states.json', query: '', w: 1440, h: 900 },
+  { name: 'states', fixture: 'states.json', query: 'focus=37.25,13.75&zoom=0.69', w: 1440, h: 900 },
   { name: 'overview-day', fixture: 'crowd.json', query: '', w: 1440, h: 900 },
   { name: 'overview-dusk', fixture: 'crowd.json', query: 'dusk=1', w: 1440, h: 900 },
   { name: 'closeup-day', fixture: 'crowd.json', query: 'focus=16,14&zoom=0.5', w: 1440, h: 900 },

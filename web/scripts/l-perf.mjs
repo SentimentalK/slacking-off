@@ -4,10 +4,11 @@ import path from 'node:path';
 import puppeteer from 'puppeteer-core';
 
 function parseArgs(argv) {
-  const args = { headed: false };
+  const args = { headed: false, gpu: false };
   for (let i = 0; i < argv.length; i += 1) {
     const key = argv[i];
     if (key === '--headed') args.headed = true;
+    else if (key === '--gpu') args.gpu = true;
     else args[key.replace(/^--/, '')] = argv[++i];
   }
   return args;
@@ -25,6 +26,7 @@ const WARM_MS = 5000;
 const MEASURE_MS = 20000;
 const CONFIGS = [
   { width: 1440, height: 900, quality: 'high' },
+  { width: 1440, height: 900, quality: 'low' },
   { width: 390, height: 844, quality: 'low' },
 ];
 
@@ -33,15 +35,23 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const executablePath = execSync('which google-chrome', { encoding: 'utf8' }).trim();
 const windowArgs = [`--window-size=1440,900`];
+const backgroundArgs = [
+  '--disable-background-timer-throttling',
+  '--disable-renderer-backgrounding',
+  '--disable-backgrounding-occluded-windows',
+];
 const headlessArgs = args.headed
-  ? []
-  : ['--headless=new', '--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader'];
+  ? backgroundArgs
+  : args.gpu
+    ? ['--headless=new', '--use-angle=gl', '--enable-gpu', '--ignore-gpu-blocklist', ...backgroundArgs]
+    : ['--headless=new', '--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader'];
 
 const results = [];
 let chromeVersion = '';
 let gpu = '';
 
-for (const config of CONFIGS) {
+const ONLY = process.env.L_PERF_ONLY;
+for (const config of CONFIGS.filter((c) => !ONLY || `${c.width}-${c.quality}` === ONLY)) {
   const browser = await puppeteer.launch({
     executablePath,
     headless: !args.headed,
@@ -96,7 +106,7 @@ for (const config of CONFIGS) {
 }
 
 const report = {
-  mode: args.headed ? 'headed-gpu' : 'headless-swiftshader',
+  mode: args.headed ? 'headed-gpu' : args.gpu ? 'headless-gpu' : 'headless-swiftshader',
   results,
   chrome: chromeVersion,
   gpu,
