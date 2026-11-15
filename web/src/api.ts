@@ -142,6 +142,17 @@ export function watch(
       onStatus('live');
       try {
         const frame = JSON.parse(message.data) as Projection;
+        if (frame.objects_mode === 'delta' && (!last || frame.tick !== last.tick + 1)) {
+          // The server only sends a delta on the tick after the one this
+          // connection already has. Without that base the board would silently
+          // lose objects, so force a fresh connection (whose first frame is
+          // always full) instead of rendering a partial world.
+          last = null;
+          es.close();
+          source = null;
+          scheduleRetry();
+          return;
+        }
         const merged = mergeFrame(last, frame);
         last = merged;
         onProjection(merged);

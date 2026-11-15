@@ -21,6 +21,7 @@ const meta = JSON.parse(readFileSync(args.meta, "utf8"));
 const port = Number(args.port ?? 18113);
 const debugPort = Number(args["debug-port"] ?? (tag === "after" ? 18114 : 18112));
 const bin = args.bin ?? join(ROOT, "target/release/loo-server");
+const map = args.map ?? null;
 const CHROME = process.env.CHROME_PATH ?? "/usr/bin/google-chrome";
 const base = `http://127.0.0.1:${port}`;
 const VIS = join(ROOT, ".conductor/perf/visual");
@@ -34,7 +35,7 @@ const configPath = join(VIS, `config-${tag}.json`);
 writeFileSync(configPath, `${JSON.stringify(meta.config ?? {})}\n`);
 
 const logFd = openSync(join(VIS, `server-${tag}.log`), "w");
-const server = spawn(bin, ["--dev", "--addr", `127.0.0.1:${port}`, "--tick-seconds", String(meta.visual_tick_seconds ?? 120), "--data-dir", extractDir, "--config", configPath], {
+const server = spawn(bin, ["--dev", "--addr", `127.0.0.1:${port}`, ...(map ? ["--map", map] : []), "--tick-seconds", String(meta.visual_tick_seconds ?? 120), "--data-dir", extractDir, "--config", configPath], {
   stdio: ["ignore", logFd, logFd],
 });
 let browser = null;

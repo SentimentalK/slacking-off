@@ -1,189 +1,167 @@
-# Web perf baseline (before)
+# 网页性能：测量与修复（PROJECT-126-H）
 
-> 由 `scripts/perf.sh run --tag before` 生成（`scripts/perf/write-report.mjs`）。每个数字后的括号是来源文件与字段；原始样本在 `.conductor/perf/before/raw/*.json`。
+测量脚本：`scripts/perf.sh`（一条命令重跑、前后两组数字）。
+原始输出：`.conductor/perf/{before,after}/`（JSON/CSV/cpuprofile/SSE 原始流/截图，gitignored）。
+本报告的每个数字都带 `(文件 :字段)`；重算见 §12。
 
-## 1. 测量环境
+## 1. 结论
 
-- 时间：2026-11-15T05:18:52Z → 2026-11-15T05:25:48.361Z（UTC）
-- 机器：Intel(R) Core(TM) i7-10750H CPU @ 2.60GHz，12 线程，内存 14.9 GB，Linux 7.0.0-43-generic (.conductor/perf/before/metrics.json :machine.cpu)
-- Chrome：Google Chrome 156.0.8078.79，有头（`DISPLAY=:0`，会话类型 wayland），视口 1440×900、DPR 1，`--ozone-platform=x11` (.conductor/perf/before/metrics.json :chrome_version)
-  - 为什么必须 x11：默认走 Wayland 时本窗口收不到帧回调，5 秒内 rAF 只触发 2 次（调试时用最小 rAF 计数页实测）；x11（Xwayland）下同一页面 5 秒 678 帧。
-  - 窗口节流是这台机器上的环境现象：Chrome 的 Xwayland 窗口会被合成器间歇性节流（页面几乎收不到帧回调，rAF 间隔 ≈1 s 甚至完全停摆，rAF 回调之外的定时器、DOM 更新也被一起推迟）。最小 rAF 探针（`rafprobe`，每次 run 重测，每种配置 3 个全新页面各 3 s）：vsync 开启 5 帧 / 3 s，间隔中位 1001.0 ms，最大 1001.1 ms；5 帧 / 3 s，间隔中位 1000.4 ms，最大 1001.5 ms；5 帧 / 3 s，间隔中位 1001.0 ms，最大 1001.1 ms，其中出现停摆的页面 3 (.conductor/perf/before/metrics.json :empty.rafProbe.vsyncOnThrottledPages) / 3 (.conductor/perf/before/metrics.json :empty.rafProbe.vsyncOn)；关闭 vsync 与帧率上限 1393 帧 / 3 s，间隔中位 1.9 ms，最大 17.0 ms；973 帧 / 3 s，间隔中位 2.5 ms，最大 13.5 ms；0 帧 / 3 s，间隔中位 未测到 ms，最大 5000.3 ms，出现停摆的页面 1 (.conductor/perf/before/metrics.json :empty.rafProbe.vsyncOffThrottledPages) / 3 (.conductor/perf/before/metrics.json :empty.rafProbe.vsyncOff)。（“停摆”= 探针期间没有拿到连续出帧；0 帧表示 5 s 内 rAF 一次都没触发。）
-  - 所以关 vsync **没有**消除节流，只能说明节流与 vsync 设置无关。处理办法是：每个正式阶段都记录停摆次数（帧间隔 > 500 ms）——本次 empty/ten/full 静置、拖拽、缩放阶段的停摆次数分别为 0 / 0 / 0 / 0 / 0 (.conductor/perf/before/metrics.json :full.fps.stalls)；回放拖动里被节流的样本单独标出并并列报告（§7）。
-  - 测量 Chrome 仍然关 vsync 与帧率上限（`--disable-gpu-vsync --disable-frame-rate-limit`）：为的是 fps 不被刷新率封顶、能随每帧成本变化。因此本报告的 **fps = 页面在无刷新率封顶时 rAF 每秒能跑多少帧**（越高说明每帧越便宜），不是屏幕实际显示帧率；前后对比同口径。frameScriptMs 不受这个影响。
-- 并发 / 干扰：load average 开始 3.58 4.23 4.11 1/3394 1510600 (.conductor/perf/before/machine.json :machine.loadavg)；各场景测量期间 empty: 3.58 4.23 4.11 7/3406 1510653 → 4.58 4.33 4.15 30/3337 1514059；ten: 3.76 4.15 4.09 1/3361 1515314 → 4.36 4.26 4.13 19/3330 1516746；full: 3.05 3.68 3.92 2/3460 1535044 → 4.97 4.38 4.16 1/3465 1547243 (.conductor/perf/before/metrics.json :full.loadavgStart)。
-  - loo-server、100 个脚本 Agent（full 场景每秒约 100 个 long-poll）、Chrome 同机；本机同时还有其他 Orca 工作区的 Agent/服务在跑（并行 Master G 等），CPU 占用前列：57.1 MainThread | 26.0 chrome | 11.7 orca-ide | 7.1 echolet (.conductor/perf/before/machine.json :machine.topCpu)。数字带这份干扰，前后对比必须同机同脚本。
-- 观战页路由是 `/`（`web/src/router.ts`），`/spectator` 在应用里只是“建设中”占位页；本报告里“spectator”指 `/`。截图文件名沿用契约的 `perf-before-spectator.png`。
-- dev 服务配置（`.conductor/perf/before/config.json`）：`{"need":{"deadline_ticks_min":1000000,"deadline_ticks_max":1000000},"session":{"idle_cleanup_ticks":100000,"queue_idle_seconds":100000},"limits":{"requests_per_second":2}}` (.conductor/perf/before/metrics.json :devConfig)
-  - 其中 `need.deadline_ticks_min/max=1000000`、`session.idle_cleanup_ticks=100000`、`session.queue_idle_seconds=100000` 只是把会话到期/清理时间推到测量窗口之外（否则默认 120–240 tick 的 deadline 会让场内 Agent 陆续结束、补不满 50/50）；`limits.requests_per_second=2` 是默认值。其余 dev 规则未改。tick = 1 秒。
-- 脚本 Agent：register → join → 循环 `/api/wait`（timeout 1 s）保活，不移动不攻击；`placement==null` 时重新 register + join。
-- 计时口径：`performance.now()` 在非跨源隔离页面里被 Chrome 粗化到 0.1 ms，所以 rAF 回调耗时 < 0.1 ms 的量级只能当上界看。
-
-## 2. 占用度校验（开始与结束各取一次 /api/projection）
-
-| 场景 | 开始 inside/queued | 结束 inside/queued | seed 退出时打印 | 来源 |
-| --- | --- | --- | --- | --- |
-| empty | 0/0（OK） | 0/0（OK） | —（无 seed） | (.conductor/perf/before/occupancy.json :empty.start / empty.end) |
-| ten | 10/0（OK） | 10/0（OK） | inside=10 queued=0 | (.conductor/perf/before/occupancy.json :ten.start / ten.end) |
-| full | 50/50（OK） | 50/50（OK） | inside=50 queued=50 | (.conductor/perf/before/occupancy.json :full.start / full.end) |
-
-满场容量：inside 50 (.conductor/perf/before/metrics.json :occupancy.start.capacity)，queue 50 (.conductor/perf/before/metrics.json :occupancy.start.queue_capacity)；满场校验 通过 (.conductor/perf/before/metrics.json :occupancy.ok)
-
-## 3. 首屏（冷缓存、禁用缓存 `/`）
-
-口径：`interactiveMs` = 从 navigationStart 到“首个 canvas 非空帧绘制完成”（首个发出 ≥20 次 canvas 绘制调用的 rAF 回调结束）的时间；TBT = FCP 到 interactiveMs 之间长任务超出 50 ms 的部分之和（`tbtAll` 为全部长任务）。传输体积含 HTML 文档本身。
-
-| 指标 | empty | ten | full |
+| 指标（满场 50 在场 + 50 排队，1440×900） | 修复前 | 修复后 | 变化 |
 | --- | --- | --- | --- |
-| 传输合计 (B) | 941711 | 1006187 | 1006187 |
-| decoded 合计 (B) | 934811 | 998687 | 998687 |
-| 请求数 | 23 | 25 | 25 |
-| interactiveMs (ms)，5 次冷加载的中位 | 291.2 | 331.9 | 298.4 |
-| interactiveMs 5 次的最小 – 最大 (ms) | 246.5 – 305.7 | 298.0 – 435.5 | 259.6 – 333.6 |
-| FCP (ms) | 284.0 | 284.0 | 256.0 |
-| LCP (ms) | 284.0 | 368.0 | 344.0 |
-| TBT (ms) | 0.0 | 0.0 | 0.0 |
-| tbtAll (ms) | 88.0 | 95.0 | 58.0 |
-| DOMContentLoaded (ms) | 104.0 | 170.7 | 126.4 |
-| load (ms) | 162.0 | 223.0 | 183.5 |
+| 首屏传输合计 | 1,006,187 B | 787,329 B | **−21.7%** |
+| 首屏可交互（首个 canvas 非空帧） | 395.4 ms | 244.3 ms | **−38.2%** |
+| FCP / LCP | 340 / 444 ms | 212 / 276 ms | −37.6% / −37.8% |
+| SSE 单条 `tick` 事件（中位） | 371,931 B | 16,715 B | **−95.5%** |
+| SSE JSON.parse（中位） | 4.22 ms | 0.19 ms | −95.4% |
+| 满场静置 rAF 中位 | 333.33 fps | 434.78 fps | +30.4% |
+| 满场拖拽 / 缩放 rAF 中位 | 344.83 / 526.32 fps | 416.67 / 588.24 fps | +20.8% / +11.8% |
+| 满场 rAF 回调耗时 p50 / p95 | 1.9 / 2.6 ms | 1.4 / 2.0 ms | −26% / −23% |
+| 回放拖动 p50 / p95 | 142.2 / 190.2 ms | 142.2 / 163.8 ms | 回放代码未改（§6），差异是同一实现的测量噪声 |
 
-来源：(.conductor/perf/before/metrics.json :empty.load.*) (.conductor/perf/before/metrics.json :ten.load.*) (.conductor/perf/before/metrics.json :full.load.*)
+来源：首屏 `(.conductor/perf/before/metrics.json :full.load.transferTotal / :full.load.interactiveMs / :full.load.fcp / :full.load.lcp)`、`(.conductor/perf/after/metrics.json :full.load.*)`；SSE `(:full.sse.bytesMedian / :full.sse.parseMsMedian)`；fps `(:full.fps.* / :full.fpsDrag.* / :full.fpsZoom.*)`；回放 `(:full.scrub.*)`。
 
-### 满场首屏按类型（transferSize / decodedBodySize）
+改动两处、跳过两处（见 §8–§10）：
 
-| 类型 | 请求数 | transfer | decoded | 来源 |
-| --- | --- | --- | --- | --- |
-| document | 1 (.conductor/perf/before/metrics.json :full.load.byKind.document.count) | 900 B (.conductor/perf/before/metrics.json :full.load.byKind.document.transfer) | 600 B (.conductor/perf/before/metrics.json :full.load.byKind.document.decoded) | |
-| script | 1 (.conductor/perf/before/metrics.json :full.load.byKind.script.count) | 82,605 B (.conductor/perf/before/metrics.json :full.load.byKind.script.transfer) | 82,305 B (.conductor/perf/before/metrics.json :full.load.byKind.script.decoded) | |
-| style | 1 (.conductor/perf/before/metrics.json :full.load.byKind.style.count) | 286,180 B (.conductor/perf/before/metrics.json :full.load.byKind.style.transfer) | 285,880 B (.conductor/perf/before/metrics.json :full.load.byKind.style.decoded) | |
-| font | 18 (.conductor/perf/before/metrics.json :full.load.byKind.font.count) | 621,296 B (.conductor/perf/before/metrics.json :full.load.byKind.font.transfer) | 615,896 B (.conductor/perf/before/metrics.json :full.load.byKind.font.decoded) | |
-| api | 3 (.conductor/perf/before/metrics.json :full.load.byKind.api.count) | 14,306 B (.conductor/perf/before/metrics.json :full.load.byKind.api.transfer) | 13,406 B (.conductor/perf/before/metrics.json :full.load.byKind.api.decoded) | |
-| image | 1 (.conductor/perf/before/metrics.json :full.load.byKind.image.count) | 900 B (.conductor/perf/before/metrics.json :full.load.byKind.image.transfer) | 600 B (.conductor/perf/before/metrics.json :full.load.byKind.image.decoded) | |
+1. **SSE objects 增量**：2996 个物件里几乎都是墙/门/马桶，跨 tick 不变；现在只有首帧（或重连/断号）发全量，连续 tick 只发变化的物件和消失的位置。客户端合并后拿到的仍是完整投影。
+2. **静态资源 gzip**：`web/dist` 构建时生成 `.gz` 并嵌入二进制；请求带 `Accept-Encoding: gzip` 时就发压缩体。CSS 286,180→124,026 B，JS 82,605→26,309 B，HTML 900→696 B。
+3. （跳过）渲染器整盘重绘：测量证明不是瓶颈（§9.1），不改。
+4. （跳过）回放拖动请求合并：实现后 p50 142→154 ms、p95 190→173 ms，没有可见改善（§9.5），已 revert，只保留测量结论。
 
-（`byType` 按 initiatorType 的分组也在 metrics 里：(.conductor/perf/before/metrics.json :full.load.byType)；字体由 CSS 发起，所以 initiatorType 为 css。）
+## 2. 测量方法与口径
 
-首屏大头：字体 621,296 B (.conductor/perf/before/metrics.json :full.load.byKind.font.transfer)、样式 286,180 B (.conductor/perf/before/metrics.json :full.load.byKind.style.transfer)、脚本 82,605 B (.conductor/perf/before/metrics.json :full.load.byKind.script.transfer)。
+- 机器：Intel Core i7-10750H，12 线程，14.9 GB，Linux 7.0.0-43-generic `(.conductor/perf/before/metrics.json :machine.cpu)`；Chrome `Google Chrome 156.0.8078.79`，有头（`DISPLAY=:0`，`--ozone-platform=x11`），视口 1440×900、DPR 1 `(:chrome_version)`。
+- 前后两次用**同一脚本、同一机器、同一 Chrome 版本**；只改被测代码。
+- 代码基线：`b6d17d5`（G 的 rules/限流/退出码 + I 的稀缺世界已合入）。此前在 `aa7910f` 上量过的第一版基线保留在 `.conductor/perf/before-aa7910f/`（结论一致：首屏 1,006,187 B、SSE 371,931 B）。
+- **地图固定为生产地图**：I 把仓库默认世界改成 48×32 / 12 在场 / 队列 10，但线上仍是 130×100 / 50 / 50。为了让"修复前后"是同一压力场景，测量用 `--map .conductor/perf/map-prod.txt`（`git show aa7910f:maps/default.txt`，sha256 `cc3c9e05…`），并用 dev 配置覆盖 `max_on_field=50`、`session.queue_capacity=50`；`need.deadline_ticks_*`、`session.queue_idle_seconds`、`session.idle_cleanup_ticks` 推到测量窗口之外，防止掉人。**这是测量配置，不是新默认。** `(.conductor/perf/before/config.json, :full... )`
+- 满场是真实造出来的：`scripts/perf/seed.mjs` 注册 100 个 dev Agent，join 后各自走到唯一停靠格并循环 `/api/wait` 保活；开始与结束各校验一次 `/api/projection`：`inside=50, queued=50, agents=50, queue=50` `(.conductor/perf/before/occupancy.json :full.start / :full.end)`。
+- 首屏：冷缓存（`Network.setCacheDisabled` + 清缓存），每场景 5 次取中位；`interactiveMs` = navigationStart → 首个非空 canvas 帧；FCP/LCP/TBT 来自 PerformanceObserver。
+- FPS：包裹 `requestAnimationFrame`，量每个回调的实际执行耗时（`frameScriptMs`）；fps = 相邻帧时间戳差。**本机 Xwayland 窗口会被合成器间歇节流到 ~1 Hz**，所以关掉 vsync/帧率上限（`--disable-gpu-vsync --disable-frame-rate-limit`），fps 表示"每秒能画多少帧（每帧多便宜）"，不是屏幕刷新率；这是同口径的前后对比。每次 run 都跑 rAF 探针并记录停摆样本 `(:empty.rafProbe, :full.fps.stalls)`。
+- 干扰：server、100 个脚本 Agent（每秒约 100 个 long-poll）、Chrome 同机；测量期间并行 Master/其他工作区仍有负载，记录在 `(:machine.loadavgStart / :machine.topCpu)`。前后两次的负载区间相近。
 
-### 静态资源响应头（是否压缩）
+## 3. 首屏
 
-证据：对 `/` 及首屏加载的每个同源静态资源，用原始 HTTP（`Accept-Encoding: gzip, br`，不自动解压）各请求一次，共 22 (.conductor/perf/before/metrics.json :full.load.compression.checked)，其中带 `Content-Encoding` 的 0 (.conductor/perf/before/metrics.json :full.load.compression.withEncoding)。
+| 指标 · 满场 | before | after | 来源 |
+| --- | --- | --- | --- |
+| 传输合计 (B) | 1,006,187 | 787,329 | `:full.load.transferTotal` |
+| decoded 合计 (B) | 998,687 | 999,215 | `:full.load.decodedTotal` |
+| 请求数 | 25 | 25 | `:full.load.requestCount` |
+| interactiveMs | 395.4 | 244.3 | `:full.load.interactiveMs` |
+| FCP / LCP (ms) | 340 / 444 | 212 / 276 | `:full.load.fcp / .lcp` |
+| TBT (ms) | 0 | 0 | `:full.load.tbt` |
 
-| 类型 | 资源数 | 带 content-encoding | 线上 body 字节合计 | 来源 |
-| --- | --- | --- | --- | --- |
-| other | 1 (.conductor/perf/before/metrics.json :full.load.compression.byKind.other.n) | 0 (.conductor/perf/before/metrics.json :full.load.compression.byKind.other.encoded) | 600 B (.conductor/perf/before/metrics.json :full.load.compression.byKind.other.wireBodyBytes) | |
-| script | 1 (.conductor/perf/before/metrics.json :full.load.compression.byKind.script.n) | 0 (.conductor/perf/before/metrics.json :full.load.compression.byKind.script.encoded) | 82,305 B (.conductor/perf/before/metrics.json :full.load.compression.byKind.script.wireBodyBytes) | |
-| style | 1 (.conductor/perf/before/metrics.json :full.load.compression.byKind.style.n) | 0 (.conductor/perf/before/metrics.json :full.load.compression.byKind.style.encoded) | 285,880 B (.conductor/perf/before/metrics.json :full.load.compression.byKind.style.wireBodyBytes) | |
-| font | 18 (.conductor/perf/before/metrics.json :full.load.compression.byKind.font.n) | 0 (.conductor/perf/before/metrics.json :full.load.compression.byKind.font.encoded) | 615,896 B (.conductor/perf/before/metrics.json :full.load.compression.byKind.font.wireBodyBytes) | |
-| image | 1 (.conductor/perf/before/metrics.json :full.load.compression.byKind.image.n) | 0 (.conductor/perf/before/metrics.json :full.load.compression.byKind.image.encoded) | 600 B (.conductor/perf/before/metrics.json :full.load.compression.byKind.image.wireBodyBytes) | |
+按类型（满场，transfer B）：
 
-响应头抽样（`.conductor/perf/before/raw/load-full.json` :headers）：
+| 类型 | before | after | 说明 |
+| --- | --- | --- | --- |
+| font | 621,296（18 个） | 621,296（18 个） | woff2 已压缩；§10 |
+| style | 286,180 | 124,026 | gzip |
+| script | 82,605 | 26,309 | gzip |
+| document | 900 | 696 | gzip |
+| image | 900 | 696 | gzip（SVG） |
+| api | 14,306 | 14,306 | JSON，未改 |
 
-- `/` → 200，content-type=text/html; charset=utf-8，content-encoding=无，content-length=600，cache-control=no-cache
-- `/assets/index-19D2lH2X.js` → 200，content-type=text/javascript; charset=utf-8，content-encoding=无，content-length=82305，cache-control=public, max-age=31536000, immutable
-- `/assets/index-D4vi3jWZ.css` → 200，content-type=text/css; charset=utf-8，content-encoding=无，content-length=285880，cache-control=public, max-age=31536000, immutable
-- `/assets/zcool-qingke-huangyou-116-400-normal-BZhzVL1t.woff2` → 200，content-type=font/woff2，content-encoding=无，content-length=47160，cache-control=public, max-age=31536000, immutable
-- `/assets/silkscreen-latin-400-normal-CtPo2yA5.woff2` → 200，content-type=font/woff2，content-encoding=无，content-length=8404，cache-control=public, max-age=31536000, immutable
+来源 `(:full.load.byKind)`。压缩前后 22 个同源静态资源里，带 `Content-Encoding` 的从 0 个变为 4 个（CSS/JS/HTML/SVG；字体不加）`(:full.load.compression)`。响应头证据：`.conductor/perf/after/raw/load-full.json :headers`，以及 `crates/server/src/http.rs::accepts_gzip` 的单元测试。
 
-**结论：静态资源没有压缩**：线上 body 字节等于 decoded 字节（例如样式 285,880 B (.conductor/perf/before/metrics.json :full.load.compression.byKind.style.wireBodyBytes) = 285,880 B (.conductor/perf/before/metrics.json :full.load.byKind.style.decoded)），即使请求声明了 gzip/br。
+## 4. FPS / 每帧脚本耗时
 
-补充（本地估算，不是服务器测量值）：`web/dist/assets` 里 JS 80.4 KB → gzip 25.3 KB；CSS 279.2 KB → gzip 120.9 KB；字体文件合计 10467.0 KB（373 个，woff2 本身已压缩）。
+口径见 §2；静置 10 s，拖拽/缩放各 8 s。
 
-## 4. FPS / rAF 回调耗时（静置 10 s；drag / zoom 各 8 s）
+| 场景 | fps 中位 before→after | fps p1 before→after | 掉帧 before→after | 回调 p50 before→after | 回调 p95 before→after |
+| --- | --- | --- | --- | --- | --- |
+| empty | 303.03 → 588.24 | 79.37 → 109.89 | 0 → 0 | 2.0 → 1.0 ms | 3.9 → 1.3 ms |
+| ten | 303.03 → 416.67 | 75.19 → 126.58 | 0 → 0 | 2.1 → 1.5 ms | 4.0 → 2.0 ms |
+| full 静置 | 333.33 → 434.78 | 81.30 → 161.29 | 1 → 0 | 1.9 → 1.4 ms | 2.6 → 2.0 ms |
+| full 拖拽 | 344.83 → 416.67 | — | — | 1.8 → 1.4 ms | 2.4 → 2.2 ms |
+| full 缩放 | 526.32 → 588.24 | — | — | 1.1 → 1.0 ms | 2.9 → 2.2 ms |
 
-口径：包裹 `requestAnimationFrame`，每个 rAF 回调（含页面自己的渲染循环）的实际执行耗时 = `frameScriptMs`；fps = 1000 / 相邻不同帧时间戳之差，p1 为最慢 1% 帧对应的 fps；帧间隔 > 25 ms (.conductor/perf/before/metrics.json :full.fps.dropThresholdMs) 记 1 次掉帧。
+来源 `(.conductor/perf/{before,after}/metrics.json :empty.fps / :ten.fps / :full.fps / :full.fpsDrag / :full.fpsZoom)`。
 
-| 场景 | fps 中位 | fps p1 | 掉帧 | 停摆(>500 ms) | 帧数 | frameScriptMs p50 | p95 | max |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| empty 静置 | 476.19 | 175.44 | 0 | 0 | 4340 | 1.300 ms | 2.100 ms | 5.100 ms |
-| ten 静置 | 416.67 | 107.53 | 0 | 0 | 3709 | 1.500 ms | 2.300 ms | 12.400 ms |
-| full 静置 | 526.32 | 92.59 | 0 | 0 | 3737 | 1.100 ms | 1.900 ms | 5.300 ms |
-| full 拖拽 8 s | 454.55 | 91.74 | 0 | 0 | 3152 | 1.300 ms | 2.100 ms | 6.400 ms |
-| full 缩放 8 s | 555.56 | 106.38 | 0 | 0 | 3900 | 1.100 ms | 2.100 ms | 7.200 ms |
+- 三个占用度的回调耗时几乎一样，说明成本在地面/物件/Agent 的固定绘制量，不在人数；满场与空场的差 <0.5 ms。
+- 修复后 full 的 fps 与帧耗时有改善，主要来自 SSE 解析与每 tick 的 Preact 更新变便宜（payload 小 95%），不是渲染器代码变化。
+- 无 vsync 封顶时 CPU 一直有活干，(program)/drawImage/fillRect 占忙时的比例在前后两份 profile 里基本一样 `(:full.cpuProfile)`；因此 profile 不是"卡"的主因证据，帧耗时才是。
 
-来源字段：(.conductor/perf/before/metrics.json :empty.fps.{fpsMedian,fpsP1,frameDrops,frameScriptMs.p50,frameScriptMs.p95}) (.conductor/perf/before/metrics.json :ten.fps.{fpsMedian,fpsP1,frameDrops,frameScriptMs.p50,frameScriptMs.p95}) (.conductor/perf/before/metrics.json :full.fps.{fpsMedian,fpsP1,frameDrops,frameScriptMs.p50,frameScriptMs.p95}) (.conductor/perf/before/metrics.json :full.fpsDrag.{fpsMedian,fpsP1,frameDrops,frameScriptMs.p50,frameScriptMs.p95}) (.conductor/perf/before/metrics.json :full.fpsZoom.{fpsMedian,fpsP1,frameDrops,frameScriptMs.p50,frameScriptMs.p95})
+## 5. SSE
 
-拖拽事件数 422 (.conductor/perf/before/metrics.json :full.fpsDrag.mouseEvents)、滚轮事件数 199 (.conductor/perf/before/metrics.json :full.fpsZoom.wheelEvents)（CDP `Input.dispatchMouseEvent`）。原始帧间隔与回调耗时：`.conductor/perf/before/raw/fps-*.json`、`drag-full.json`、`zoom-full.json`。
+| 指标 · 满场 | before | after |
+| --- | --- | --- |
+| 单条 tick 事件中位 | 371,931 B | 16,715 B |
+| 最小 / 最大 | 62 / 371,931 B | 62 / 371,931 B（首帧全量） |
+| JSON.parse 中位 / p95 | 4.22 / 7.28 ms | 0.19 / 0.40 ms |
+| tick 频率 | 1.006 Hz | 1.035 Hz |
 
-## 5. CPU profile（满场 `/` 静置 5 s，self time TOP10）
+来源 `(:full.sse.bytesMedian, .bytesMin, .bytesMax, .parseMsMedian, .parseMsP95, .tickHz)`；原始流 `.conductor/perf/{before,after}/sse-raw.txt`。
 
-文件：`.conductor/perf/before/profiles/spectator-full.cpuprofile`（采样间隔 200 µs，按 timeDeltas 加权）。总时长 5003 ms (.conductor/perf/before/metrics.json :full.cpuProfile.totalMs)，其中 (idle) 46 ms (.conductor/perf/before/metrics.json :full.cpuProfile.idleMs)。`占忙时` 为扣掉 (idle) 后的占比。
+协议（`crates/proto/src/lib.rs`）：
 
-| # | 函数 | 位置 | self ms | 占总时长 | 占忙时 | 来源 |
-| --- | --- | --- | --- | --- | --- | --- |
-| 1 | `(program)` | (native) | 1997.4 | 39.9% | 40.3% | (.conductor/perf/before/metrics.json :full.cpuProfile.top[0]) |
-| 2 | `drawImage` | (native) | 991.8 | 19.8% | 20.0% | (.conductor/perf/before/metrics.json :full.cpuProfile.top[1]) |
-| 3 | `fillRect` | (native) | 726.5 | 14.5% | 14.7% | (.conductor/perf/before/metrics.json :full.cpuProfile.top[2]) |
-| 4 | `rn` | /assets/index-19D2lH2X.js:241:3511 | 288.0 | 5.8% | 5.8% | (.conductor/perf/before/metrics.json :full.cpuProfile.top[3]) |
-| 5 | `yn` | /assets/index-19D2lH2X.js:241:4761 | 259.3 | 5.2% | 5.2% | (.conductor/perf/before/metrics.json :full.cpuProfile.top[4]) |
-| 6 | `Sn` | /assets/index-19D2lH2X.js:241:5582 | 244.9 | 4.9% | 4.9% | (.conductor/perf/before/metrics.json :full.cpuProfile.top[5]) |
-| 7 | `t` | /assets/index-19D2lH2X.js:241:30471 | 82.4 | 1.6% | 1.7% | (.conductor/perf/before/metrics.json :full.cpuProfile.top[6]) |
-| 8 | `$` | /assets/index-19D2lH2X.js:241:4674 | 59.9 | 1.2% | 1.2% | (.conductor/perf/before/metrics.json :full.cpuProfile.top[7]) |
-| 9 | `(idle)` | (native) | 45.9 | 0.9% | — | (.conductor/perf/before/metrics.json :full.cpuProfile.top[8]) |
-| 10 | `xn` | /assets/index-19D2lH2X.js:241:5236 | 39.9 | 0.8% | 0.8% | (.conductor/perf/before/metrics.json :full.cpuProfile.top[9]) |
+- `Projection` 新增 `objects_mode`（`full` | `delta`）与 `objects_removed`；**全量时两个键都不序列化**，所以 `/api/projection?tick=` 的响应与修复前逐字节一致（`curl … | grep -c objects_mode` = 0）。
+- 一个 SSE 连接上：首帧、`Last-Event-ID` 重连、broadcast lag 跳号都发全量；只有 `prev.tick + 1 == tick` 发 delta（`crates/server/src/http.rs::FrameEncoder`）。每个连接只保存当前世界的最新对象表，内存随世界规模增长，不存历史。
+- 客户端 `web/src/api.ts::mergeFrame` 用上一帧完整投影合并 `objects`/`objects_removed`，按 y、x 排序后交给页面；断线/重连清空缓存并强制要全量；若异常收到没有基线的 delta，则直接重连而不是渲染半张棋盘。
+- 正确性测试：`crates/server/tests/sse_delta.rs`（墙/门/马桶三类变化、空变化、全量键省略）；`cargo test --workspace` 全绿。端到端等值断言：P1 Worker 的 `.conductor/p1/verify-delta.mjs` 对每个 tick 比较 delta 合并结果与 `/api/projection?tick=N`，逐字段相等。
 
-（页面 JS 已压缩，函数名是混淆后的；用位置对照 `web/dist/assets/index-*.js` 的行列。）
+## 6. 回放拖动
 
-## 6. SSE（`/api/watch`，Node 端读 20 (.conductor/perf/before/metrics.json :full.sse.count) 条）
+| 指标 · 20 次真实拖动 | before | after |
+| --- | --- | --- |
+| p50 / p95 | 142.2 / 190.2 ms | 142.2 / 163.8 ms |
+| 单次 `/api/projection?tick=` 响应 | 371,936 B，页内 p50 58.4 ms | 371,936 B，页内 p50 25.9 ms |
+| DOM 更新（指针/TICK） | 2.9 / 5.1 ms | 同（未改） |
 
-- 单条字节（含 `id/event/data` 行与空行分隔符）：中位 371,931 B (.conductor/perf/before/metrics.json :full.sse.bytesMedian)，p95 371,931 B (.conductor/perf/before/metrics.json :full.sse.bytesP95)，最小 62 B (.conductor/perf/before/metrics.json :full.sse.bytesMin)，最大 371,931 B (.conductor/perf/before/metrics.json :full.sse.bytesMax)；首条 62 B (.conductor/perf/before/metrics.json :full.sse.firstEventBytes)
-- 事件类型分布：`{"hello":1,"tick":19}` (.conductor/perf/before/metrics.json :full.sse.byEvent)；注释/心跳块 2 (.conductor/perf/before/metrics.json :full.sse.comments) 个
-- JSON.parse 耗时（Node）：中位 2.4155 ms (.conductor/perf/before/metrics.json :full.sse.parseMsMedian)，p95 2.9993 ms (.conductor/perf/before/metrics.json :full.sse.parseMsP95)
-- tick 频率：1.031 tick/s (.conductor/perf/before/metrics.json :full.sse.tickHz)；事件频率 1.089 条/s (.conductor/perf/before/metrics.json :full.sse.eventHz)
-- 原始流：`.conductor/perf/before/sse-raw.txt`；逐条样本：`.conductor/perf/before/raw/sse-full.json`
+来源 `(:full.scrub.scrubP50 / .scrubP95 / .projectionFetchP50 / .projectionBytesMedian)`。
 
-## 7. 回放拖动（`/replay?tick=212`，20 次 CDP 真实拖动）
+- 拖动延迟的地板是"每个落点拉一整帧 371 KB 投影 + 服务器按 tick 构造投影"；DOM 本身 3 ms 就更新了。
+- 试过把连续 pointermove 合并成「最多 1 个在飞 + 只取最新 tick」并对相邻 tick 预取：41 次 move 的请求从 ~41 降到 22，但 p50 142→154 ms、p95 190→173 ms，没有可见改善（预取还和拖动请求争带宽）。按契约 §6.4 的默认（p95>300 ms 才改）**revert**，记录在 `.conductor/perf/after/report-with-r1.md`。
+- 上表 after 的 163.8 ms 来自**同一个未改动的 Replay.tsx**：它只说明两次测量之间有 ~10–15% 的噪声，不是本票带来的改善。
+- 要真正把拖动做到"瞬时"，需要缩小 `/api/projection?tick=` 的单帧体积（例如回放也用增量/紧凑编码）。这会改回放接口语义，超出本票合同（Conductor 要求该接口保持全量），列为后续。
 
-口径：scrubMs = last pointermove event.timeStamp -> (DOM updated, all /api/projection?tick= fetches done) + 2 rAF; 20 real CDP drags (press, then move) on the replay timeline, each landing on a different tick. p50/p95 = samples where the page kept producing frames; scrubAll* = every sample incl. host-induced page stalls
+## 7. 视觉一致性
 
-- 模式：`free-range` (.conductor/perf/before/metrics.json :full.scrub.mode)（`free-range` = 该 world 没有任何高光标记——脚本 Agent 全程 idle，不产生成功/攻击事件——时间轴退回自由 tick 范围，拖动按轨道比例落在 20 个不同 tick 上；`highlight-slots` = 在相邻高光槽之间拖）
-- 高光 tick 数 0 (.conductor/perf/before/metrics.json :full.scrub.highlightCount)，时间轴上可点的高光槽 0 (.conductor/perf/before/metrics.json :full.scrub.slotCount)；有网络请求的样本 20 (.conductor/perf/before/metrics.json :full.scrub.samplesWithNetwork) / 20 (.conductor/perf/before/metrics.json :full.scrub.samples)，超时样本 0 (.conductor/perf/before/metrics.json :full.scrub.timeouts)
-- 拖动到画面更新（含 projection 请求）：p50 142.3 ms (.conductor/perf/before/metrics.json :full.scrub.scrubP50)，p95 181.7 ms (.conductor/perf/before/metrics.json :full.scrub.scrubP95)（20 (.conductor/perf/before/metrics.json :full.scrub.cleanSamples) 个页面持续出帧的样本）
-- 含主机造成的页面停摆的全部样本：p50 142.3 ms (.conductor/perf/before/metrics.json :full.scrub.scrubAllP50)，p95 181.7 ms (.conductor/perf/before/metrics.json :full.scrub.scrubAllP95)，最大 182.2 ms (.conductor/perf/before/metrics.json :full.scrub.scrubAllMax)；停摆样本 0 (.conductor/perf/before/metrics.json :full.scrub.stalledSamples) 个（拖动期间页面 ≥500 ms 不出帧，rAF 与 DOM 更新一起被推迟 0.5–5 s，与 §1 的合成器节流同源；已从 p50/p95 里剔除并在此并列，不隐藏）
-- 仅 DOM（TICK/指针）更新：p50 2.9 ms (.conductor/perf/before/metrics.json :full.scrub.scrubDomP50)，p95 5.1 ms (.conductor/perf/before/metrics.json :full.scrub.scrubDomP95)
-- 页内 `/api/projection?tick=` 请求耗时：p50 33.1 ms (.conductor/perf/before/metrics.json :full.scrub.projectionFetchP50)，p95 62.7 ms (.conductor/perf/before/metrics.json :full.scrub.projectionFetchP95)；Node 端对 20 (.conductor/perf/before/metrics.json :full.scrub.projectionNodeFetchCount) 个不同 tick 各请求一次：p50 23.6 ms (.conductor/perf/before/metrics.json :full.scrub.projectionNodeFetchP50)，p95 53.6 ms (.conductor/perf/before/metrics.json :full.scrub.projectionNodeFetchP95)，单个响应中位 371,936 B (.conductor/perf/before/metrics.json :full.scrub.projectionBytesMedian)
-- 原始逐次样本：`.conductor/perf/before/raw/scrub-full.json`
+- 同一 fixture（`.conductor/perf/visual/data.tar`，满场 50/50，`--tick-seconds 120` 冻结）、1440×900、DPR1、`prefers-reduced-motion: reduce`、`document.fonts.ready` + 2 rAF。
+- 截图：`docs/screenshots/perf-before-spectator.png` / `perf-after-spectator.png`、`perf-before-replay-213.png` / `perf-after-replay-213.png`。
+- 逐像素：观战页 `diff_pixels=0 / 1,296,000`，回放页 `diff_pixels=0 / 1,296,000`（`node scripts/perf/pixdiff.mjs <a> <b>`）。**外观未变。**
+- 观战页在这台机器上有两种相机居中变体（首帧尺寸竞态，与本次改动无关）：base 变体在 before/after 都是多数（4/5、3/5），另一种变体两边的差异都是 `312,528` 像素、bbox `{0,174–959,784}`，即整块画布偏移；变体文件在 `.conductor/perf/visual/variants-*/`。对照用的是各自 run 的多数变体。
 
-## 8. 视觉 fixture 与截图
+## 8. 改了哪些文件
 
-- fixture：`.conductor/perf/visual/data.tar`（满场 data dir）与 `meta.json`；截图用 `--tick-seconds 120`（世界冻结）、1440×900 DPR1、`prefers-reduced-motion: reduce`、`document.fonts.ready` + 2 rAF。
-- 截图：`docs/screenshots/perf-before-spectator.png`、`docs/screenshots/perf-before-replay-<tick>.png`
-- `pixdiff` 自比（必须 0）：
+- SSE：`crates/proto/src/lib.rs`、`crates/server/src/projection.rs`、`crates/server/src/http.rs`（SSE 段）、`crates/server/tests/sse_delta.rs`、`web/src/types.ts`、`web/src/api.ts`。Worker commit `5bded1c`，合并 `20fc500`。
+- gzip：`web/scripts/gzip-dist.mjs`、`web/package.json`、`crates/server/src/http.rs`（静态段）。Worker commit `c9c2fb5`，合并 `52f09b6`。
+- 测量：`scripts/perf.sh`、`scripts/perf/**`、`docs/perf-report.md`、`docs/screenshots/perf-*.png`。基线 commit `4931925`；本轮的 map/config/fixture-reuse 改动随最终提交。
+  - `perf.sh` 新增：`PERF_MAP`（固定测量地图）、`max_on_field/queue_capacity` 覆盖、`PERF_REUSE_VISUAL=1`（after 复用 before 的冻结世界，保证同 tick 截图）。
+- Master 小修：`web/src/api.ts` 在收到无基线 delta 时强制重连（不渲染半张棋盘）。
+- 未改：`web/src/render.ts`、`web/src/pages/Spectator.tsx`、`web/src/pages/Replay.tsx`、`crates/server/src/lib.rs`、`docs/design.md`、美术/地图/规则。
 
-```
-diff_pixels=0 total_pixels=1296000 bbox=null
-diff_pixels=0 total_pixels=1296000 bbox=null
-```
-- 同一 fixture 连续 5 次全新加载的一致性（页面相机只在首次拿到尺寸时居中一次，之后队列条/字体就绪会让画布整体偏移若干像素，所以同一个 world 可能出现不止一种布局变体；基准图取出现次数最多的变体，所有变体都留在 `.conductor/perf/visual/variants-before/`，前后对照时先看是否落在同一变体，不同则按下面的差异区域解释）：
+## 9. 嫌疑逐条裁定（数据先行）
 
-```
-perf-before-spectator.png: 3/5 fresh loads identical to the reference shot; 2 layout variant(s)
-  variant x2 (.conductor/perf/visual/variants-before/perf-before-spectator.v1.png) vs reference: diff_pixels=310724 total_pixels=1296000 bbox={"minX":0,"minY":174,"maxX":959,"maxY":784}
-perf-before-replay-212.png: 5/5 fresh loads identical to the reference shot; 1 layout variant(s)
-```
-
-## 9. 四个嫌疑 + 回放：是 / 不是瓶颈
-
-阈值取自 `.conductor/contract-H.md` §6、§7。
-
-1. **每帧重绘整张棋盘**：**不是瓶颈**。判据：满场静置 fps 中位 < 55 或 rAF 回调耗时 p50 > 4 ms。数据：fps 中位 526.32 (.conductor/perf/before/metrics.json :full.fps.fpsMedian)，p1 92.59 (.conductor/perf/before/metrics.json :full.fps.fpsP1)，掉帧 0 (.conductor/perf/before/metrics.json :full.fps.frameDrops)，回调耗时 p50 1.100 ms (.conductor/perf/before/metrics.json :full.fps.frameScriptMs.p50) / p95 1.900 ms (.conductor/perf/before/metrics.json :full.fps.frameScriptMs.p95)。空场回调耗时 p50 1.300 ms (.conductor/perf/before/metrics.json :empty.fps.frameScriptMs.p50)、ten 1.500 ms (.conductor/perf/before/metrics.json :ten.fps.frameScriptMs.p50)：不同占用度下每帧脚本耗时几乎一样，说明这个量级下 Agent 数量对每帧脚本耗时没有可见影响；CPU profile 里时间主要在原生 canvas 调用（§5：drawImage/fillRect 与 (program)）。
-2. **SSE 整投影**：**是瓶颈**。判据：单条 ≥ 64 KB 或解析中位 ≥ 2 ms。数据：单条中位 371,931 B (.conductor/perf/before/metrics.json :full.sse.bytesMedian)，p95 371,931 B (.conductor/perf/before/metrics.json :full.sse.bytesP95)；JSON.parse 中位 2.4155 ms (.conductor/perf/before/metrics.json :full.sse.parseMsMedian)（Node 端；浏览器里还要加 setState 与重渲染，页内那部分已包含在上面的 rAF/fps 里）。
-3. **插值重绘范围（拖拽/缩放时仍整盘重画）**：**不是瓶颈**。判据：拖拽或缩放 fps 中位 < 55。数据：拖拽 454.55 (.conductor/perf/before/metrics.json :full.fpsDrag.fpsMedian)（回调 p95 2.100 ms (.conductor/perf/before/metrics.json :full.fpsDrag.frameScriptMs.p95)），缩放 555.56 (.conductor/perf/before/metrics.json :full.fpsZoom.fpsMedian)（回调 p95 2.100 ms (.conductor/perf/before/metrics.json :full.fpsZoom.frameScriptMs.p95)），静置 526.32 (.conductor/perf/before/metrics.json :full.fps.fpsMedian)。
-4. **字体体积（“12 MB 字体”）**：**是瓶颈**（按首屏传输；阈值 150 KB）。数据：首屏字体 18 (.conductor/perf/before/metrics.json :full.load.byKind.font.count) 个、621,296 B (.conductor/perf/before/metrics.json :full.load.byKind.font.transfer)，占首屏传输 61.7%（总 1,006,187 B (.conductor/perf/before/metrics.json :full.load.transferTotal)）；全部字体文件体积见 §3 补充；字体与 CSS 均无压缩（§3）。
-5. **回放拖动**：**不是瓶颈**。判据：p95 > 300 ms（取页面持续出帧的样本）。数据：p50 142.3 ms (.conductor/perf/before/metrics.json :full.scrub.scrubP50)，p95 181.7 ms (.conductor/perf/before/metrics.json :full.scrub.scrubP95)；全部样本 p95 181.7 ms (.conductor/perf/before/metrics.json :full.scrub.scrubAllP95)（含 0 (.conductor/perf/before/metrics.json :full.scrub.stalledSamples) 个主机停摆样本，不是页面延迟）；单次 projection 请求 p50 33.1 ms (.conductor/perf/before/metrics.json :full.scrub.projectionFetchP50)，响应 371,936 B (.conductor/perf/before/metrics.json :full.scrub.projectionBytesMedian)。
+1. **每帧重绘整张棋盘：不是瓶颈。** 满场 rAF 回调 p50 1.4 ms、p95 2.0 ms，空场 1.0 ms；拖拽 1.4 ms、缩放 1.0 ms `(:full.fps.frameScriptMs, :empty.fps.frameScriptMs)`。整盘重绘只在相机/尺寸变化时才有额外成本，60 Hz 下预算 16.7 ms，余量 >10 倍。跳过，不改渲染器。
+2. **SSE 推送整投影：是瓶颈。** 371,931 B/tick、解析 4.22 ms（`(:full.sse.*)`）。已修（§5），修后 16,715 B / 0.19 ms。
+3. **插值重绘范围：不是瓶颈。** 拖拽/缩放时的帧耗时与静置同量级（1.4/1.0 vs 1.4 ms），无掉帧 `(:full.fpsDrag, :full.fpsZoom, :full.fps.frameDrops)`。
+4. **字体体积（“约 12 MB”）：按首屏传输是瓶颈，但外观不变前提下已到下限。** 浏览器只抓用到的 18 个子集 = 621,296 B（dist 里全部字体 10.2 MB 不会被下载）`(:full.load.byKind.font)`。子集化会让任意昵称缺字回退系统字体；延迟加载会让首屏标题字体可见 swap——两者都改变外观，票面禁止。**待用户决定：是否接受换字体/回退以继续压缩首屏；当前不做。**
+5. **回放拖动：不是瓶颈到 300 ms 阈值，但仍有 142 ms 地板。** 见 §6；尝试的合并请求方案被数据否掉并 revert。
 
 ## 10. 未测到 / 局限
 
-- 所有阶段都跑完，没有阶段错误 (.conductor/perf/before/metrics.json :full.errors)
-- “页面渲染耗时”只含 rAF 回调内的 JS 与 canvas 命令提交，不含 GPU 光栅与合成；fps 是无 vsync 封顶的 rAF 触发率（见 §1），不是屏幕显示帧率，也没有在真实 60/144 Hz 显示节奏下复核。
-- 首屏每个场景 5 次冷加载取中位；场景之间的差距要对照各自 5 次的最小–最大范围看，范围内的差异是噪声。
-- 回放拖动的“画面更新”以更新后第 2 个 rAF 的开始时间为终点（近似，浏览器不暴露 presentation time）。
-- 脚本 Agent 的 long-poll 与 loo-server 和被测浏览器同机，会占用一部分 CPU；empty/ten 场景该干扰更小，三个占用度的 fps/回调耗时对比里已包含这个差别。
+- fps 是"无刷新率封顶的 rAF 触发率"，不是屏幕显示帧率：本机 Xwayland 合成器会间歇把窗口节流到 1 Hz（rAF 探针 `(:empty.rafProbe)`），在真实 60/144 Hz 显示节奏下的复核需要在用户机器上做（待用户审核，见 §11）。
+- 首屏是 localhost，不含真实网络 RTT/TLS；传输体积与 interactiveMs 是本地口径，真实网络下 gzip 的相对收益会更大。
+- after 的 empty 首屏 FCP/LCP 采样缺失（`None`），只报 interactiveMs 与 ten/full 的 FCP/LCP。
+- `tools/verify.py` 的 CI 项不适用：本分支只做本地 commit，不 push（`origin/main [gone]`），CI 由 Conductor 合并后统一跑。
+- 真机长时间拖拽的手感、低端设备上的帧率：静态截图与本地脚本不能证明，**待用户审核**。
 
-## 11. 重现
+## 11. 待用户审核
+
+1. 打开观战页（`/`）满场世界，缩放、拖拽、看几秒；打开 `/replay` 拖动时间轴，确认"卡"的感觉消失。审核方法：对比 `docs/screenshots/perf-before-*` 与 `perf-after-*` 的同一 tick，并在真实浏览器里操作。
+2. 是否接受为继续压缩首屏而更换字体或允许缺字回退（§9.4）。目前保持外观不变，621 KB 字体未动。
+
+## 12. 重现
 
 ```sh
-scripts/perf.sh run --tag before   # 构建 + 3 个场景 + 视觉截图 + 本报告
-scripts/perf.sh compare            # 只有 before 时会注明 after 缺失
+# 测量地图固定为生产世界（I 改默认世界之前的 maps/default.txt）
+git show aa7910f:maps/default.txt > .conductor/perf/map-prod.txt
+PERF_MAP=$PWD/.conductor/perf/map-prod.txt scripts/perf.sh run --tag before   # ~8 分钟
+PERF_MAP=$PWD/.conductor/perf/map-prod.txt PERF_REUSE_VISUAL=1 scripts/perf.sh run --tag after
+scripts/perf.sh compare        # 两列表格
+node scripts/perf/pixdiff.mjs docs/screenshots/perf-before-spectator.png docs/screenshots/perf-after-spectator.png
+(cd web && npm run build && npm run typecheck)
+cargo test --workspace
+scripts/e2e-full.sh
 ```
 
-产物：`.conductor/perf/before/{metrics.json,occupancy.json,config.json,machine.json,sse-raw.txt}`、`.conductor/perf/before/profiles/*.cpuprofile`、`.conductor/perf/before/raw/*.json`、`docs/screenshots/perf-before-*.png`、`.conductor/perf/visual/{data.tar,meta.json}`
+产物：`.conductor/perf/<tag>/{metrics.json,occupancy.json,config.json,machine.json,map.txt,raw/*.json,profiles/*.cpuprofile,sse-raw.txt}`、`.conductor/perf/visual/{data.tar,meta.json}`、`docs/screenshots/perf-<tag>-*.png`。

@@ -16,12 +16,18 @@ PORT_DEBUG=18112
 PORT_VISUAL=18113
 CHROME="${CHROME_PATH:-/usr/bin/google-chrome}"
 BIN="$ROOT/target/release/loo-server"
+# The measured map. Default is the repo default; PROJECT-126-I changed that
+# default after this ticket's baseline, so the before/after runs pin the map
+# the production deployment uses (see docs/perf-report.md §1).
+MAP="${PERF_MAP:-$ROOT/maps/default.txt}"
+MAP="$(cd "$(dirname "$MAP")" && pwd)/$(basename "$MAP")"
 
 # Dev-only config. deadline / queue-idle / idle-cleanup are pushed far past the
 # measurement window so the 50 inside + 50 queued scripted agents are not
-# retired mid-run; limits.requests_per_second keeps the production value (2).
-# Nothing else in the rules is changed.
-CONFIG_JSON='{"need":{"deadline_ticks_min":1000000,"deadline_ticks_max":1000000},"session":{"idle_cleanup_ticks":100000,"queue_idle_seconds":100000},"limits":{"requests_per_second":2}}'
+# retired mid-run; max_on_field / queue_capacity reproduce the production
+# capacity that PROJECT-126-I lowered to 12/10; limits.requests_per_second keeps
+# the production value (2). Nothing else in the rules is changed.
+CONFIG_JSON='{"max_on_field":50,"need":{"deadline_ticks_min":1000000,"deadline_ticks_max":1000000},"session":{"queue_capacity":50,"idle_cleanup_ticks":100000,"queue_idle_seconds":100000},"limits":{"requests_per_second":2}}'
 
 SERVER_PID=""
 SEED_PID=""
@@ -177,6 +183,9 @@ cmd_run() {
   mkdir -p "$PERF/profiles" "$PERF/raw" "$ROOT/docs/screenshots" "$VIS"
   echo '{}' >"$PARTIAL"
   echo "$CONFIG_JSON" >"$PERF/config.json"
+  echo "$MAP" >"$PERF/map.path"
+  cp "$MAP" "$PERF/map.txt"
+  sha256sum "$MAP" >"$PERF/map.sha256"
 
   if [ -z "${PERF_SKIP_BUILD:-}" ]; then
     echo "perf: building web..."
@@ -205,7 +214,7 @@ cmd_run() {
 
     echo "perf[$name]: start server on :$PORT_MAIN"
     MALLOC_ARENA_MAX="${MALLOC_ARENA_MAX:-2}" "$BIN" --dev --addr "127.0.0.1:$PORT_MAIN" \
-      --tick-seconds 1 --data-dir "$data" --config "$PERF/config.json" >"$PERF/server-$name.log" 2>&1 &
+      --map "$MAP" --tick-seconds 1 --data-dir "$data" --config "$PERF/config.json" >"$PERF/server-$name.log" 2>&1 &
     SERVER_PID=$!
     wait_health "$BASE" || return 1
 
@@ -258,18 +267,25 @@ cmd_run() {
 
   # ---- visual fixture: stop the server cleanly so the data dir is consistent
   stop_seed; stop_server; kill_chrome
-  if [ -d "$PERF/data-full" ]; then
+  if [ -n "${PERF_REUSE_VISUAL:-}" ]; then
+    # The after run reuses the before run's frozen world, so the two screenshot
+    # sets show the same tick instead of two independently seeded worlds.
+    [ -f "$VIS/data.tar" ] && [ -f "$VIS/meta.json" ] || { echo "FAIL: PERF_REUSE_VISUAL set but $VIS is incomplete" >&2; RUN_FAILED=1; }
+    echo "perf: reusing visual fixture $VIS"
+  elif [ -d "$PERF/data-full" ]; then
     echo "perf: saving visual fixture..."
     tar -cf "$VIS/data.tar" -C "$PERF/data-full" .
     local TICK
     TICK=$(node -e "const p=JSON.parse(require('fs').readFileSync('$PARTIAL','utf8'));const s=p?.full?.scrub;process.stdout.write(JSON.stringify(s&&s.tick?[s.tick]:[]))")
     node "$ROOT/scripts/perf/write-visual-meta.mjs" --out "$VIS/meta.json" --tick-seconds 1 \
       --ticks "$TICK" --chrome-version "$CHROME_VER" --config "$PERF/config.json"
+  fi
+  if [ -f "$VIS/data.tar" ] && [ -f "$VIS/meta.json" ]; then
     echo "perf: visual screenshots (server :$PORT_VISUAL, Chrome debug :$PORT_DEBUG)..."
     node "$ROOT/scripts/perf/visual-screenshots.mjs" --tag "$TAG" --tar "$VIS/data.tar" --meta "$VIS/meta.json" \
-      --port "$PORT_VISUAL" --debug-port "$PORT_DEBUG" --bin "$BIN" || { echo "FAIL: visual screenshots" >&2; RUN_FAILED=1; }
+      --port "$PORT_VISUAL" --debug-port "$PORT_DEBUG" --bin "$BIN" --map "$MAP" || { echo "FAIL: visual screenshots" >&2; RUN_FAILED=1; }
   else
-    echo "FAIL: no full data dir for the visual fixture" >&2
+    echo "FAIL: no visual fixture (no full data dir and none to reuse)" >&2
     RUN_FAILED=1
   fi
   kill_chrome; kill_ports
