@@ -14,6 +14,7 @@ const LAMP_IDLE = 0xd8dcd6;
 const WATER_BOWL = 0x4fa3c7;
 const TOILET_SCALE = 1.4;
 const SIGN_LIT = 0.9;
+const TRIM = 0xe9e4da;
 const WOODS = PLANK_COLORS;
 const BAG_COLORS = [0x6f5340, 0x7a5c46, 0x64493a] as const;
 const SIGN_RED = 0xd8392f;
@@ -295,12 +296,18 @@ export function doorSide(seed: number, accent = ACCENT): { group: THREE.Group; p
   const pivot = new THREE.Group();
   pivot.position.set(-0.5, 0, 0);
   group.add(pivot);
+  const leafH = WH - 0.16;
+  const leafY = leafH / 2 + 0.04;
   const leaf = new Batch();
-  leaf.add(boxGeo(0.98, WH - 0.16, 0.07), T(0.49, (WH - 0.16) / 2 + 0.04, 0), accent);
+  leaf.add(boxGeo(0.98, leafH, 0.12), T(0.49, leafY, 0), accent);
+  leaf.add(boxGeo(0.03, leafH, 0.13), T(0.015, leafY, 0), TRIM);
+  leaf.add(boxGeo(0.03, leafH, 0.13), T(0.965, leafY, 0), TRIM);
+  leaf.add(boxGeo(0.98, 0.03, 0.13), T(0.49, 0.055, 0), TRIM);
+  leaf.add(boxGeo(0.98, 0.03, 0.13), T(0.49, 0.04 + leafH - 0.015, 0), TRIM);
   leaf.add(boxGeo(0.98, 0.06, 0.09), T(0.49, 0.3, 0), IRON);
   leaf.add(boxGeo(0.98, 0.06, 0.09), T(0.49, 0.85, 0), IRON);
   for (const m of leaf.meshes()) pivot.add(m);
-  const sign = single(boxGeo(0.18, 0.18, 0.03), SIGN_RED, { emissive: SIGN_RED, emissiveIntensity: SIGN_LIT }, T(0.49, 0.6, 0.05));
+  const sign = single(boxGeo(0.18, 0.18, 0.03), SIGN_RED, { emissive: SIGN_RED, emissiveIntensity: SIGN_LIT }, T(0.49, 0.6, 0.085));
   pivot.add(sign);
   const top = single(boxGeo(0.34, 0.05, 0.22), SIGN_RED, { emissive: SIGN_RED, emissiveIntensity: SIGN_LIT }, T(0, WH + 0.055, 0));
   group.add(top);
@@ -341,64 +348,89 @@ export function cornerPost(): THREE.Group {
 }
 
 const CER = 0xe9ebe6;
+const PORCELAIN = 0xf2f2ee;
 const WATER = 0x6aa9bd;
+const CLUTTER_LIMIT = 1.05;
 
-function clutter(batch: { flat: Batch; smooth: Batch }): void {
-  const smooth = { flatShading: false, roughness: 0.3 };
-  batch.flat.add(boxGeo(0.6, 0.5, 0.4), T(-0.98, 0.33, -1.0), 0x8a8f8a);
-  batch.smooth.add(new THREE.CylinderGeometry(0.14, 0.14, 0.03, 14), T(-0.98, 0.59, -0.98), WATER, { ...smooth, roughness: 0.1 });
-  batch.flat.add(new THREE.CylinderGeometry(0.15, 0.12, 0.3, 10), T(1.0, 0.25, 0.95), 0x5f6a70);
-  for (let i = 0; i < 3; i++) {
-    batch.smooth.add(new THREE.CylinderGeometry(0.08, 0.08, 0.1, 10), T(-1.02 + (i % 2) * 0.17, 0.15 + (i > 1 ? 0.1 : 0), 0.98), 0xe9e4da, smooth);
-  }
-  batch.flat.add(boxGeo(0.5, 0.3, 0.4), T(1.0, 0.25, -1.0), 0x8a623c);
-  batch.flat.add(boxGeo(0.3, 0.2, 0.3), T(1.02, 0.5, -1.02), 0x7a5a3c);
+function clampClutter(v: number): number {
+  return Math.max(-CLUTTER_LIMIT, Math.min(CLUTTER_LIMIT, v));
 }
 
-export function toiletModel(level: number): THREE.Group {
+function clutterGroup(): THREE.Group {
+  const flat = new Batch();
+  const smooth = new Batch();
+  const sm = { flatShading: false, roughness: 0.3 };
+  const at = (x: number, y: number, z: number): THREE.Matrix4 => T(clampClutter(x), y, clampClutter(z));
+  flat.add(boxGeo(0.6, 0.5, 0.4), at(-0.98, 0.33, -1.0), 0x8a8f8a);
+  smooth.add(new THREE.CylinderGeometry(0.14, 0.14, 0.03, 14), at(-0.98, 0.59, -0.98), WATER, { ...sm, roughness: 0.1 });
+  flat.add(new THREE.CylinderGeometry(0.15, 0.12, 0.3, 10), at(1.0, 0.25, 0.95), 0x5f6a70);
+  for (let i = 0; i < 3; i++) {
+    smooth.add(new THREE.CylinderGeometry(0.08, 0.08, 0.1, 10), at(-1.02 + (i % 2) * 0.17, 0.15 + (i > 1 ? 0.1 : 0), 0.98), 0xe9e4da, sm);
+  }
+  flat.add(boxGeo(0.5, 0.3, 0.4), at(1.0, 0.25, -1.0), 0x8a623c);
+  flat.add(boxGeo(0.3, 0.2, 0.3), at(1.02, 0.5, -1.02), 0x7a5a3c);
+  const g = new THREE.Group();
+  for (const m of flat.meshes()) g.add(m);
+  for (const m of smooth.meshes()) g.add(m);
+  return g;
+}
+
+export function toiletModel(level: number, withClutter = true): THREE.Group {
   const flat = new Batch();
   const smooth = new Batch();
   const sm = { flatShading: false, roughness: 0.3 };
   const gold = level === 5;
-  const body = gold ? { flatShading: false, roughness: 0.3, metalness: 0.6 } : sm;
-  const bodyHex = gold ? 0xe8b93a : CER;
+  const body = gold ? { flatShading: false, roughness: 0.25, metalness: 0.7 } : sm;
+  const bodyHex = gold ? 0xe8b93a : PORCELAIN;
   const extra = new THREE.Group();
 
   if (level === 1) {
-    flat.add(boxGeo(0.62, 0.16, 0.5), T(0, 0.18, 0), 0x8a623c);
-    flat.add(boxGeo(0.56, 0.02, 0.44), T(0, 0.27, 0), 0xd8c48a);
+    const frame = 0x8a623c;
+    flat.add(boxGeo(0.7, 0.14, 0.06), T(0, 0.07, -0.25), frame);
+    flat.add(boxGeo(0.7, 0.14, 0.06), T(0, 0.07, 0.25), frame);
+    flat.add(boxGeo(0.06, 0.14, 0.44), T(-0.32, 0.07, 0), frame);
+    flat.add(boxGeo(0.06, 0.14, 0.44), T(0.32, 0.07, 0), frame);
+    flat.add(boxGeo(0.58, 0.02, 0.44), T(0, 0.13, 0), 0xe2cf94);
     for (const [x, z] of [[-0.15, 0.05], [0.05, -0.08], [0.18, 0.1]]) {
-      flat.add(new THREE.SphereGeometry(0.035, 8, 6), T(x, 0.3, z), 0x4b3b27);
+      flat.add(new THREE.SphereGeometry(0.035, 8, 6), T(x, 0.15, z), 0x4b3b27);
     }
   } else if (level === 2) {
     smooth.add(new THREE.CylinderGeometry(0.26, 0.26, 0.05, 18), T(0, 0.125, 0), CER, sm);
-    flat.add(new THREE.CylinderGeometry(0.09, 0.09, 0.01, 14), T(0, 0.152, 0), 0x2a2a26);
-    smooth.add(boxGeo(0.3, 0.22, 0.1), T(0, 0.6, -1.25), CER, sm);
+    smooth.add(new THREE.TorusGeometry(0.245, 0.02, 6, 18), T(0, 0.17, 0, PI / 2, 0, 0), CER, sm);
+    flat.add(new THREE.CylinderGeometry(0.09, 0.09, 0.01, 14), T(0, 0.152, 0), 0x2b3238);
+    smooth.add(boxGeo(0.3, 0.22, 0.1), T(0, 0.45, -0.3), CER, sm);
   } else {
-    smooth.add(rboxGeo(0.44, 0.5, 0.2, 0.06), T(0, 0.35, -0.3), bodyHex, body);
+    smooth.add(rboxGeo(0.44, 0.5, 0.18, 0.06), T(0, 0.35, -0.26), bodyHex, body);
     smooth.add(new THREE.CylinderGeometry(0.23, 0.17, 0.3, 18), T(0, 0.25, 0.02), bodyHex, body);
-    smooth.add(new THREE.CylinderGeometry(0.25, 0.25, 0.06, 18), T(0, 0.42, 0.02), bodyHex, body);
-    smooth.add(new THREE.CylinderGeometry(0.207, 0.207, 0.02, 18), T(0, 0.455, 0.02), WATER_BOWL, { flatShading: false, roughness: 0.1 });
+    smooth.add(
+      new THREE.TorusGeometry(0.22, 0.03, 8, 24),
+      T(0, 0.42, 0.02, PI / 2, 0, 0),
+      gold ? 0xb8322c : bodyHex,
+      gold ? { flatShading: false, roughness: 0.9 } : sm,
+    );
+    smooth.add(new THREE.CylinderGeometry(0.171, 0.171, 0.02, 18), T(0, 0.42, 0.02), WATER_BOWL, { flatShading: false, roughness: 0.1 });
     if (level >= 4) {
       flat.add(boxGeo(0.08, 0.22, 0.3), T(0.3, 0.42, 0), 0x2b3238);
+      flat.add(boxGeo(0.2, 0.02, 0.1), T(0, 0.61, -0.26), 0x101417);
       const strip = new THREE.Mesh(
         new THREE.TorusGeometry(0.25, 0.01, 6, 24).rotateX(PI / 2).translate(0, 0.455, 0.02),
-        own(new THREE.MeshStandardMaterial({ color: 0x39d7ff, emissive: 0x39d7ff, emissiveIntensity: 1.2 })),
+        own(new THREE.MeshStandardMaterial({ color: 0x39d7ff, emissive: 0x39d7ff, emissiveIntensity: 1.5 })),
       );
       extra.add(shadowed(strip));
     }
     if (gold) {
-      smooth.add(new THREE.SphereGeometry(0.07, 14, 10), T(0, 0.64, -0.3), 0xe8b93a, body);
+      smooth.add(new THREE.SphereGeometry(0.07, 14, 10), T(0, 0.66, -0.26), 0xe8b93a, body);
     }
   }
 
-  const clut = { flat, smooth };
-  clutter(clut);
+  const parts = new THREE.Group();
+  for (const m of flat.meshes()) parts.add(m);
+  for (const m of smooth.meshes()) parts.add(m);
+  parts.add(extra);
+  parts.scale.setScalar(TOILET_SCALE);
   const g = new THREE.Group();
-  for (const m of flat.meshes()) g.add(m);
-  for (const m of smooth.meshes()) g.add(m);
-  g.add(extra);
-  g.scale.setScalar(TOILET_SCALE);
+  g.add(parts);
+  if (withClutter) g.add(clutterGroup());
   return g;
 }
 
@@ -491,20 +523,21 @@ export function signalLamp(): THREE.Group {
 export function roof(palette: readonly [number, number]): { group: THREE.Group; materials: THREE.Material[] } {
   const [tin, rib] = palette;
   const batch = new Batch();
+  const k = 3.3 / 3.7;
   for (const s of [-1, 1]) {
-    const half = new THREE.Matrix4().multiply(T(s * 0.92, 0.36, 0)).multiply(new THREE.Matrix4().makeRotationZ(-s * 0.3));
-    batch.add(boxGeo(2.0, 0.06, 3.7), half.clone(), tin);
+    const half = new THREE.Matrix4().multiply(T(s * 0.815, 0.393, 0)).multiply(new THREE.Matrix4().makeRotationZ(-s * 0.3));
+    batch.add(boxGeo(1.78, 0.06, 3.3), half.clone(), tin);
     for (let i = 0; i < 15; i++) {
-      batch.add(boxGeo(2.0, 0.035, 0.09), half.clone().multiply(T(0, 0.045, -1.75 + i * 0.25)), rib);
+      batch.add(boxGeo(1.78, 0.035, 0.09), half.clone().multiply(T(0, 0.045, -1.65 + (i * 3.3) / 14)), rib);
     }
   }
-  batch.add(boxGeo(0.16, 0.07, 3.74), T(0, 0.68, 0), rib);
+  batch.add(boxGeo(0.16, 0.07, 3.34), T(0, 0.68, 0), rib);
   const tri = new THREE.Shape();
-  tri.moveTo(-1.5, 0);
-  tri.lineTo(1.5, 0);
-  tri.lineTo(0, 0.52);
-  tri.lineTo(-1.5, 0);
-  for (const z of [1.44, -1.44]) batch.add(new THREE.ShapeGeometry(tri), T(0, 0.02, z), 0x6c4d33);
+  tri.moveTo(-1.5 * k, 0);
+  tri.lineTo(1.5 * k, 0);
+  tri.lineTo(0, 0.52 * k);
+  tri.lineTo(-1.5 * k, 0);
+  for (const z of [1.44 * k, -1.44 * k]) batch.add(new THREE.ShapeGeometry(tri), T(0, 0.02, z), 0x6c4d33);
   batch.add(rboxGeo(0.5, 0.2, 0.34, 0.09), T(0.9, 0.46, -0.9, 0, 0.5, -0.3), 0x6f5340);
   batch.add(boxGeo(0.7, 0.03, 0.5), T(-0.8, 0.5, 0.6, 0.05, 0.4, 0.3), 0x4d6f78);
   batch.add(boxGeo(0.8, 0.46, 0.05), T(0, 0.3, 1.5), RAIL);

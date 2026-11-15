@@ -258,7 +258,7 @@ export function createObjectsLayer(ctx: SceneCtx): Layer {
 
       if (t.site === 'toilet') {
         bodyPos(reg.get('barrier:' + tk, () => barrier()));
-        const ghost = reg.get(`ghost:${tk}:1`, () => toGhost(toiletModel(1)));
+        const ghost = reg.get(`ghost:${tk}:1`, () => toGhost(toiletModel(1, false)));
         bodyPos(ghost);
         ghost.scale.y = Math.max(0.001, p);
       } else if (t.progress !== 0) {
@@ -269,7 +269,7 @@ export function createObjectsLayer(ctx: SceneCtx): Layer {
         } else {
           bodyPos(reg.get(`model:${tk}:${level}`, () => toiletModel(level)));
           const next = Math.min(level + 1, MAX_LEVEL);
-          const ghost = reg.get(`ghost:${tk}:${next}`, () => toGhost(toiletModel(next)));
+          const ghost = reg.get(`ghost:${tk}:${next}`, () => toGhost(toiletModel(next, false)));
           bodyPos(ghost, GHOST_LIFT * (1 - p));
           ghost.position.x += GHOST_SHIFT;
           setOpacity(ghost, 0.25 + 0.5 * p);
