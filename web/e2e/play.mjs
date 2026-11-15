@@ -360,6 +360,41 @@ async function freshSnap(after, label = 'a fresh play state', timeout = 4_000) {
   );
 }
 
+/** The permanent action bar: its state, its one-line text, page overflow. */
+async function actionBar() {
+  return page.evaluate(() => {
+    const bar = document.querySelector('[data-testid=play-pending]');
+    if (!bar) return null;
+    return {
+      state: bar.getAttribute('data-state'),
+      text: (bar.textContent ?? '').replace(/\s+/g, ' ').trim(),
+      overflow: document.documentElement.scrollWidth - window.innerWidth,
+    };
+  });
+}
+
+/** Ticks update every 100ms from the last poll's deadline, so the DOM is fresh. */
+async function domTick() {
+  return page.$eval('[data-testid=play-tick]', (element) =>
+    Number(element.getAttribute('data-play-tick') ?? '0'),
+  );
+}
+
+/**
+ * Wait for the page to paint a new tick. The poll cadence (1 s) and the tick
+ * cadence (0.5 s) stay in phase, so `ms_to_next_tick` is roughly constant;
+ * pressing right after a rollover is the reliable way to land just after a
+ * settlement instead of just before one.
+ */
+async function waitTickRollover(label) {
+  const from = await domTick();
+  return until(async () => ((await domTick()) > from ? domTick() : null), {
+    timeout: 4_000,
+    interval: 20,
+    label: `${label}: tick after ${from}`,
+  });
+}
+
 async function walkTo(target, { takeAtStep = null } = {}) {
   let snap = await playSnap();
   let pos = { ...ENTRANCE };
@@ -975,6 +1010,128 @@ async function main() {
     pass(
       `stats mixed scope has ${mixedStats.total_sessions} sessions (human ${mixedStats.human.sessions}, ai ${mixedStats.ai.sessions})`,
     );
+
+    // --- permanent action bar (390) ---------------------------------------
+    // The bar is the page's single surface for "queued / running / refused", so
+    // it is exercised once at 390: a keyboard move must land in `pending`, a
+    // settled tick must move it on, and an exhausted token bucket must show the
+    // retry sentence — with the page still 390 wide at every step.
+    phase('pending bar');
+    await page.setViewport({ width: 390, height: 844, deviceScaleFactor: 1, isMobile: true, hasTouch: true });
+    await page.goto(`${BASE}/play`, { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('[data-testid=play-join]', { timeout: 10_000 });
+    await joinWithRoom('pending bar');
+
+    // The join spent most of the per-agent burst and the page polls once a
+    // second against a 2/s refill, so a starved bucket would answer the poll
+    // with a 429 and paint `rejected` over the window asserted below.
+    await sleep(6_000);
+
+    // A queued command only reads `pending` until the server's next tick, so
+    // each attempt submits right after the page paints a settlement and retries
+    // on a miss.
+    let queued = null;
+    for (let attempt = 1; attempt <= 6 && !queued; attempt += 1) {
+      const tick = await waitTickRollover('pending bar');
+      await page.keyboard.press('ArrowRight');
+      try {
+        const bar = await until(
+          async () => {
+            const current = await actionBar();
+            return current && current.state === 'pending' ? current : null;
+          },
+          { timeout: 700, interval: 20, label: 'the pending bar' },
+        );
+        queued = { bar, tick };
+      } catch (error) {
+        const seen = await actionBar();
+        console.log(
+          `  pending bar: attempt ${attempt} at tick ${tick} missed (bar=${seen?.state ?? 'none'}: ${JSON.stringify(seen?.text ?? '')}): ${error.message}`,
+        );
+        await sleep(1_200);
+      }
+    }
+    assert(queued, 'the action bar never reached data-state=pending after a keyboard move');
+    assert(
+      /已提交：移动 [NSEW]/.test(queued.bar.text),
+      `pending bar title is ${JSON.stringify(queued.bar.text)}`,
+    );
+    assert(
+      /下一次结算执行 · \d+\.\ds/.test(queued.bar.text),
+      `pending bar detail is ${JSON.stringify(queued.bar.text)}`,
+    );
+    assert(
+      queued.bar.overflow <= 0,
+      `the 390 page scrolls horizontally by ${queued.bar.overflow}px while the pending bar is shown`,
+    );
+    await page.evaluate(() => window.scrollTo(0, 0));
+    await sleep(80);
+    await screenshot(page, 'play-pending-390.png', queued.tick, '390-wide pending bar right after a keyboard move');
+    pass(`action bar reads ${JSON.stringify(queued.bar.text)} at 390 with no horizontal overflow`);
+
+    phase('pending bar settles');
+    const settled = await until(
+      async () => {
+        const tick = await domTick();
+        if (tick <= queued.tick) return null;
+        const bar = await actionBar();
+        return bar && bar.state !== 'pending' ? { tick, bar } : null;
+      },
+      { timeout: 5_000, interval: 25, label: 'the bar leaving pending after one tick' },
+    );
+    assert(
+      settled.bar.state === 'executing' || settled.bar.state === 'idle',
+      `the bar is ${settled.bar.state} at tick ${settled.tick}: ${settled.bar.text}`,
+    );
+    pass(`after tick ${settled.tick} the bar is ${settled.bar.state}: ${JSON.stringify(settled.bar.text)}`);
+
+    phase('pending bar rejected');
+    const flood = await page.evaluate(async () => {
+      const pair = document.cookie
+        .split(';')
+        .map((part) => part.trim())
+        .find((part) => part.startsWith('loo_csrf='));
+      const csrf = pair ? decodeURIComponent(pair.slice('loo_csrf='.length)) : '';
+      const results = [];
+      for (let index = 0; index < 15; index += 1) {
+        const response = await fetch('/api/play/cancel', {
+          method: 'POST',
+          headers: {
+            accept: 'application/json',
+            'content-type': 'application/json',
+            'X-Loo-CSRF': csrf,
+          },
+          credentials: 'same-origin',
+          body: '{}',
+        });
+        const body = await response.json().catch(() => null);
+        results.push({
+          status: response.status,
+          code: body?.error?.code ?? null,
+          retryAfter: body?.error?.retry_after_seconds ?? null,
+        });
+      }
+      return results;
+    });
+    const limited = flood.find((entry) => entry.status === 429 || entry.code === 'rate_limited');
+    assert(limited, `15 cancel calls never exhausted the bucket: ${JSON.stringify(flood)}`);
+    await page.keyboard.press('ArrowLeft');
+    const rejected = await until(
+      async () => {
+        const bar = await actionBar();
+        return bar && bar.state === 'rejected' ? bar : null;
+      },
+      { timeout: 4_000, interval: 25, label: 'the rejected bar' },
+    );
+    assert(/被拒绝：/.test(rejected.text), `rejected bar title is ${JSON.stringify(rejected.text)}`);
+    assert(/请求过快/.test(rejected.text), `rejected bar carries no retry sentence: ${JSON.stringify(rejected.text)}`);
+    const retrySeconds = limited.retryAfter ?? 1;
+    await sleep(Math.max(1_500, Math.round(retrySeconds * 1_000) + 500));
+    pass(`the bucket refused the 15th command (retry ${retrySeconds}s) and the bar showed ${JSON.stringify(rejected.text)}`);
+
+    phase('pending bar: leave');
+    await leaveRound();
+    pass('left the world after the action-bar checks');
 
     // --- 390-wide round ----------------------------------------------------
     phase('390 round');

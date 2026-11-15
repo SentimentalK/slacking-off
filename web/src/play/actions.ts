@@ -40,6 +40,7 @@ export const KEY_DIR: Record<string, Dir> = {
 };
 
 export type PlayAction =
+  | { id: 'move'; label: string; kind: 'move'; dir: Dir }
   | { id: string; label: string; kind: 'build'; build: BuildKind; target: TargetSpec }
   | { id: string; label: string; kind: 'demolish'; target: TargetSpec }
   | { id: string; label: string; kind: 'door'; target: Dir; open: boolean }
@@ -48,6 +49,14 @@ export type PlayAction =
   | { id: string; label: string; kind: 'upgrade'; target: TargetSpec }
   | { id: string; label: string; kind: 'downgrade'; target: TargetSpec }
   | { id: string; label: string; kind: 'use' };
+
+/**
+ * The keyboard and d-pad step: one cardinal move, submitted through the same
+ * `submit` path as a clicked menu entry so both share one pending/error track.
+ */
+export function moveAction(dir: Dir): PlayAction {
+  return { id: 'move', label: `移动 ${dir}`, kind: 'move', dir };
+}
 
 const BUILD_LABEL: Record<BuildKind, string> = {
   wall: '建墙',
