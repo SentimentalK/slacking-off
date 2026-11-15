@@ -105,10 +105,15 @@ pub fn terrain_rows(world: &WorldState) -> TerrainResponse {
     for y in 0..height {
         let mut row = String::with_capacity(width.max(0) as usize);
         for x in 0..width {
-            let glyph = match world.map.terrain_at(Pos::new(x, y)) {
-                Some(loo_core::Terrain::NoBuild) => ':',
-                Some(loo_core::Terrain::Buildable) => '.',
-                None => '.',
+            let pos = Pos::new(x, y);
+            let glyph = if world.map.is_wild(pos) {
+                '~'
+            } else {
+                match world.map.terrain_at(pos) {
+                    Some(loo_core::Terrain::NoBuild) => ':',
+                    Some(loo_core::Terrain::Buildable) => '.',
+                    None => '.',
+                }
             };
             row.push(glyph);
         }
@@ -145,6 +150,7 @@ fn project_agents(
             None => 0,
         };
         let public = agents.get(&agent.id);
+        let commit = commitment(cfg, world, agent, session);
         out.push(ProjectionAgent {
             id: agent.id,
             nick: agent.nick.to_string(),
@@ -164,9 +170,53 @@ fn project_agents(
             defending: agent.defending,
             stun_until: agent.stun_until,
             immunity_until: agent.immunity_until,
+            action_target: commit.action_target,
+            attack_land_tick: commit.attack_land_tick,
+            recovery_deadline: commit.recovery_deadline,
+            urgent: commit.urgent,
         });
     }
     out
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Commitment {
+    pub action_target: Option<Pos>,
+    pub attack_land_tick: Option<Tick>,
+    pub recovery_deadline: Option<Tick>,
+    pub urgent: bool,
+}
+
+pub(crate) fn commitment(
+    cfg: &Config,
+    world: &WorldState,
+    agent: &loo_core::Agent,
+    session: &Session,
+) -> Commitment {
+    let (action_target, attack_land_tick) = match &agent.action {
+        Some(
+            Action::Build { target, .. }
+            | Action::Demolish { target, .. }
+            | Action::Door { target, .. }
+            | Action::Use { target, .. }
+            | Action::Upgrade { target, .. }
+            | Action::Downgrade { target, .. },
+        ) => (Some(*target), None),
+        Some(Action::Attack {
+            target_pos,
+            land_tick,
+            ..
+        }) => (Some(*target_pos), Some(*land_tick)),
+        Some(Action::Move { .. }) | None => (None, None),
+    };
+    Commitment {
+        action_target,
+        attack_land_tick,
+        recovery_deadline: session.recovery_deadline,
+        urgent: session.deadline > 0
+            && session.deadline.saturating_sub(world.tick)
+                <= u64::from(cfg.need.deadline_warning_ticks),
+    }
 }
 
 pub(crate) fn pose(agent: &loo_core::Agent, session: &Session, tick: Tick) -> AgentPose {

@@ -35,6 +35,8 @@ pub struct Map {
     width: i32,
     height: i32,
     terrain: Vec<Terrain>,
+    #[serde(default)]
+    wild: Vec<bool>,
 }
 
 impl Map {
@@ -60,6 +62,12 @@ impl Map {
 
     pub fn terrain_at(&self, pos: Pos) -> Option<Terrain> {
         self.index(pos).map(|i| self.terrain[i])
+    }
+
+    pub fn is_wild(&self, pos: Pos) -> bool {
+        self.index(pos)
+            .and_then(|i| self.wild.get(i).copied())
+            .unwrap_or(false)
     }
 
     /// Orthogonal in-bounds neighbours, north first.
@@ -248,18 +256,51 @@ pub fn parse(text: &str) -> Result<MapDef, MapError> {
     })?;
     let (queue_primary, queue_overflow) =
         order_queue_lanes(entrance, &primary_cells, &overflow_cells)?;
+    let walls: Vec<bool> = objects
+        .iter()
+        .map(|object| matches!(object, Some(Object::Wall { .. })))
+        .collect();
+    let wild = wild_cells(width, height, &walls);
 
     Ok(MapDef {
         map: Map {
             width,
             height,
             terrain,
+            wild,
         },
         objects,
         entrance,
         queue_primary,
         queue_overflow,
     })
+}
+
+fn wild_cells(width: i32, height: i32, walls: &[bool]) -> Vec<bool> {
+    let index = |pos: Pos| pos.y as usize * width as usize + pos.x as usize;
+    let mut wild = vec![false; walls.len()];
+    let mut stack: Vec<Pos> = Vec::new();
+    for y in 0..height {
+        for x in 0..width {
+            let pos = Pos::new(x, y);
+            let on_edge = x == 0 || y == 0 || x == width - 1 || y == height - 1;
+            if on_edge && walls[index(pos)] && !wild[index(pos)] {
+                wild[index(pos)] = true;
+                stack.push(pos);
+            }
+        }
+    }
+    while let Some(pos) = stack.pop() {
+        for dir in Dir::ALL {
+            let next = pos.step(dir);
+            let inside = next.x >= 0 && next.y >= 0 && next.x < width && next.y < height;
+            if inside && walls[index(next)] && !wild[index(next)] {
+                wild[index(next)] = true;
+                stack.push(next);
+            }
+        }
+    }
+    wild
 }
 
 /// Orders both queue lanes head to tail.

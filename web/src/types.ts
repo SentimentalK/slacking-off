@@ -93,6 +93,10 @@ export interface ProjectionAgent {
   defending: Pos | null;
   stun_until: Tick;
   immunity_until: Tick;
+  action_target: Pos | null;
+  attack_land_tick: number | null;
+  recovery_deadline: number | null;
+  urgent: boolean;
 }
 
 export interface ProjectionObject {
@@ -442,6 +446,10 @@ export interface PlayAgent {
   defending: Pos | null;
   stun_until: Tick;
   immunity_until: Tick;
+  action_target: Pos | null;
+  attack_land_tick: number | null;
+  recovery_deadline: number | null;
+  urgent: boolean;
 }
 
 /** `GET /api/play/state`. */

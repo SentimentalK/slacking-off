@@ -8,7 +8,7 @@ use loo_core::{Config, WorldState};
 use loo_proto::{AgentId, PlayAgent, PlayWindow, Pos, ProjectionObject};
 use std::collections::BTreeMap;
 
-use crate::projection::{facing, pose, project_object, AgentPublic, COLOR_COUNT};
+use crate::projection::{commitment, facing, pose, project_object, AgentPublic, COLOR_COUNT};
 
 /// Cells per side of the visible window (contract §5).
 pub const WINDOW_SIDE: i32 = 9;
@@ -77,6 +77,7 @@ pub fn agents_in(
             Some(loo_proto::Need::Feces) => cfg.need.feces_use_ticks,
             None => 0,
         };
+        let commit = commitment(cfg, world, agent, session);
         out.push(PlayAgent {
             id: agent.id,
             nick: agent.nick.to_string(),
@@ -92,6 +93,12 @@ pub fn agents_in(
             defending: agent.defending,
             stun_until: agent.stun_until,
             immunity_until: agent.immunity_until,
+            action_target: commit
+                .action_target
+                .filter(|target| in_window(window, *target)),
+            attack_land_tick: commit.attack_land_tick,
+            recovery_deadline: commit.recovery_deadline,
+            urgent: commit.urgent,
         });
     }
     out

@@ -776,6 +776,14 @@ pub struct ProjectionAgent {
     pub defending: Option<Pos>,
     pub stun_until: Tick,
     pub immunity_until: Tick,
+    #[serde(default)]
+    pub action_target: Option<Pos>,
+    #[serde(default)]
+    pub attack_land_tick: Option<Tick>,
+    #[serde(default)]
+    pub recovery_deadline: Option<Tick>,
+    #[serde(default)]
+    pub urgent: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -1053,6 +1061,14 @@ pub struct PlayAgent {
     pub defending: Option<Pos>,
     pub stun_until: Tick,
     pub immunity_until: Tick,
+    #[serde(default)]
+    pub action_target: Option<Pos>,
+    #[serde(default)]
+    pub attack_land_tick: Option<Tick>,
+    #[serde(default)]
+    pub recovery_deadline: Option<Tick>,
+    #[serde(default)]
+    pub urgent: bool,
 }
 
 /// `GET /api/play/state`: the browser's whole view of the world.

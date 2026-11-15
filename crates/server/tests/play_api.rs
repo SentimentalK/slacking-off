@@ -6,8 +6,9 @@
 
 use loo_core::{map, Config, WorldState};
 use loo_proto::{
-    DemolishRequest, Dir, Envelope, ErrorCode, JoinRequest, MoveRequest, MoveSpec, Nick,
-    PlacementKind, PlayState, PlayerKind, Pos, RegisterRequest, SentBy, TargetSpec, WaitRequest,
+    AttackRequest, DemolishRequest, Dir, Envelope, ErrorCode, JoinRequest, MoveRequest, MoveSpec,
+    Nick, PlacementKind, PlayState, PlayerKind, Pos, RegisterRequest, SentBy, TargetSpec,
+    WaitRequest,
 };
 use loo_server::Server;
 use std::path::{Path, PathBuf};
@@ -548,5 +549,120 @@ async fn the_cli_cannot_attach_to_or_join_as_a_human_character() {
         "unexpected code {:?}: {}",
         error.code,
         error.message
+    );
+}
+
+#[tokio::test]
+async fn play_state_clips_an_action_target_outside_the_window() {
+    let dir = fresh_dir("state-action-target");
+    let server = open(&dir);
+    let (_user_id, token) = account_token(&server, "gina").await;
+    let watcher = register_agent(&server, &token, "gina-c").await;
+    let attacker = register_agent(&server, &token, "gina-a").await;
+    let victim = register_agent(&server, &token, "gina-b").await;
+
+    assert!(
+        server
+            .join(&caller(&token, watcher.agent_id), join_request())
+            .await
+            .ok
+    );
+    let walked = server
+        .move_cmd(
+            &caller(&token, watcher.agent_id),
+            MoveRequest {
+                spec: MoveSpec::Steps {
+                    dir: Dir::W,
+                    count: 4,
+                },
+            },
+        )
+        .await;
+    assert!(walked.ok, "watcher move: {:?}", walked.error);
+    for _ in 0..4 {
+        server.tick_once().await;
+    }
+
+    assert!(
+        server
+            .join(&caller(&token, attacker.agent_id), join_request())
+            .await
+            .ok
+    );
+    let stepped = server
+        .move_cmd(
+            &caller(&token, attacker.agent_id),
+            MoveRequest {
+                spec: MoveSpec::Steps {
+                    dir: Dir::N,
+                    count: 1,
+                },
+            },
+        )
+        .await;
+    assert!(stepped.ok, "attacker move: {:?}", stepped.error);
+    server.tick_once().await;
+
+    assert!(
+        server
+            .join(&caller(&token, victim.agent_id), join_request())
+            .await
+            .ok
+    );
+    let around = server
+        .move_cmd(
+            &caller(&token, victim.agent_id),
+            MoveRequest {
+                spec: MoveSpec::Path {
+                    path: "EN".to_string(),
+                },
+            },
+        )
+        .await;
+    assert!(around.ok, "victim move: {:?}", around.error);
+    for _ in 0..2 {
+        server.tick_once().await;
+    }
+    let victim_pos = server
+        .world_state()
+        .await
+        .agents
+        .get(&victim.agent_id)
+        .and_then(|agent| agent.pos)
+        .expect("victim stands on the map");
+    assert_eq!(victim_pos, Pos::new(11, 9));
+
+    let attack = server
+        .attack_cmd(
+            &caller(&token, attacker.agent_id),
+            AttackRequest { dir: Dir::E },
+        )
+        .await;
+    assert!(attack.ok, "attack: {:?}", attack.error);
+    server.tick_once().await;
+
+    let projection = server.current_projection().await;
+    let attacking = projection
+        .agents
+        .iter()
+        .find(|agent| agent.id == attacker.agent_id)
+        .expect("attacker is on the projection");
+    assert_eq!(attacking.action_target, Some(victim_pos));
+
+    let state = expect_ok(server.play_state(watcher.agent_id).await).expect("state");
+    assert!(
+        !in_window(&state.window, victim_pos),
+        "the attacked cell is outside the watcher's window"
+    );
+    let drawn = state
+        .agents
+        .iter()
+        .find(|agent| agent.id == attacker.agent_id)
+        .expect("the attacker is inside the window");
+    assert_eq!(drawn.action_target, None);
+    assert!(drawn.attack_land_tick.is_some());
+    assert!(
+        !state.agents.iter().any(|agent| agent.id == victim.agent_id),
+        "the attacked player is outside the window and not drawn"
     );
 }
