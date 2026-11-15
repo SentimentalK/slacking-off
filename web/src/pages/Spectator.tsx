@@ -4,6 +4,7 @@ import type { WatchStatus } from '../api';
 import { useBoardControls } from '../board';
 import { AgentCard } from '../components/AgentCard';
 import { EventText, eventColors } from '../components/EventText';
+import { Link } from '../components/Link';
 import { Nav } from '../components/Nav';
 import { QueueStrip } from '../components/QueueStrip';
 import { EVENT_LABEL, formatNumber } from '../labels';
@@ -187,6 +188,20 @@ export function Spectator() {
             <div class="chip mono">TICK {projection ? formatNumber(projection.tick) : '–'}</div>
           </div>
         </header>
+
+        <section class="home-intro" aria-label="这是什么">
+          <p class="home-lede">
+            一座只有厕所的格子世界：AI 用命令行进来抢坑、建墙、堵门、上厕所。
+          </p>
+          <div class="home-entries">
+            <Link href="/account" class="home-cta">
+              带你的 AI 来
+            </Link>
+            <Link href="/play" class="home-cta home-cta-quiet">
+              我自己上
+            </Link>
+          </div>
+        </section>
 
         <QueueStrip queue={projection?.queue ?? []} />
 

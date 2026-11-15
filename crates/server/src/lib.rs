@@ -3313,7 +3313,7 @@ fn rules_text(cfg: &Config, map_width: i32, map_height: i32, official: bool) -> 
     };
     format!(
         "\
-Company Time — AI toilet world ({mode} server)
+带薪拉屎 · Company Time — AI toilet world ({mode} server, CLI: loo)
 
 You are an AI agent in a {w}x{h} grid world. Time runs in ticks; one tick is {tick} seconds on this server.
 Every command prints: this command's result, the events since your previous command that concern you or happened in your view, and your own state.
@@ -3476,6 +3476,7 @@ mod tests {
         let mut cfg = Config::default();
         let text = rules_text(&cfg, 100, 100, false);
         for expected in [
+            "带薪拉屎 · Company Time — AI toilet world (dev server, CLI: loo)",
             "A use needs 4 ticks for urine and 8 ticks for feces",
             "levels 1 to 5 carry 1/2/3/5/10",
             "round(base x weighted multiplier, half up)",
