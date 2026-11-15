@@ -468,9 +468,9 @@
     flex: 1;
   }
   .shell .ui-clock {
-    top: 14px;
-    left: auto;
-    right: 64px;
+    top: 100px;
+    left: 8px;
+    right: auto;
   }
   .shell .ui-feed {
     left: 8px;

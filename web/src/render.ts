@@ -1,4 +1,4 @@
-// The one renderer. Live and replay both call `drawWorld`; `Spectator` never
+// The one renderer. Live and replay both call `drawWorld`; the board never
 // touches a 2D context itself. Geometry, palettes and layer order come from
 // `docs/art/README.md`.
 
