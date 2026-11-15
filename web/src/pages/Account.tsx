@@ -4,11 +4,14 @@ import { useEffect, useState } from 'preact/hooks';
 import { getJSON } from '../api';
 import { AuthError, account, createToken, logout, revokeToken } from '../auth';
 import { Link } from '../components/Link';
+import { commandMessage, loadMe } from '../play/client';
 import { navigate } from '../router';
+import { agentColor } from '../render';
 import type {
   AccountResponse,
   DownloadEntry,
   InstallCommands,
+  PlayMe,
   TokenCreateResponse,
 } from '../types';
 
@@ -79,6 +82,22 @@ export function Account() {
   const [copied, setCopied] = useState(false);
   const [copyError, setCopyError] = useState(false);
   const [downloads, setDownloads] = useState<DownloadEntry[] | null>(null);
+  const [role, setRole] = useState<PlayMe | null | undefined>(undefined);
+  const [roleError, setRoleError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    loadMe()
+      .then((response) => {
+        if (alive) setRole(response.agent);
+      })
+      .catch((failure: unknown) => {
+        if (alive) setRoleError(commandMessage(failure));
+      });
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   useEffect(() => {
     let alive = true;
@@ -346,6 +365,37 @@ export function Account() {
               已用 {data.agents.length}/{MAX_AGENTS} 个。注册已有昵称会更新资料，不占新名额。
             </p>
           </>
+        )}
+      </section>
+
+      <section class="wsec">
+        <h3>你自己的角色</h3>
+        {roleError ? (
+          <p class="err" role="alert">
+            {roleError}
+          </p>
+        ) : role === undefined ? (
+          <p class="sub">载入中…</p>
+        ) : role ? (
+          <div class="who">
+            <div class="dot" style={{ background: agentColor(role.color) }} />
+            <div class="card-id">
+              <div class="nick">
+                {role.nick}
+                <span class="tag h">人</span>
+              </div>
+            </div>
+            <button type="button" onClick={() => navigate('/play')}>
+              去上场
+            </button>
+          </div>
+        ) : (
+          <div>
+            <p class="sub">还没有角色。</p>
+            <button type="button" onClick={() => navigate('/play')}>
+              建角色
+            </button>
+          </div>
         )}
       </section>
     </>

@@ -19,6 +19,7 @@ interface Props {
   arrivedAt: number;
   current: TopMode;
   onSettings: () => void;
+  hideClock?: boolean;
 }
 
 function useNow(intervalMs: number): number {
@@ -30,7 +31,7 @@ function useNow(intervalMs: number): number {
   return now;
 }
 
-export function TopBar({ status, replaying, projection, arrivedAt, current, onSettings }: Props) {
+export function TopBar({ status, replaying, projection, arrivedAt, current, onSettings, hideClock = false }: Props) {
   const now = useNow(200);
   const auth = useAuth();
   const [menuOpen, setMenuOpen] = useState(false);
@@ -75,18 +76,20 @@ export function TopBar({ status, replaying, projection, arrivedAt, current, onSe
         <div class="t2">COMPANY TIME</div>
       </div>
 
-      <div class="ui-clock">
-        <span class={statusClass}>{statusLabel}</span>
-        <div class="big">TICK {projection?.tick ?? '–'}</div>
-        {replaying ? null : (
-          <>
-            <div class="countdown">下次结算 {projection ? remaining : '–'}s</div>
-            <div class="cdbar">
-              <i style={{ width: `${fill}%` }} />
-            </div>
-          </>
-        )}
-      </div>
+      {hideClock ? null : (
+        <div class="ui-clock">
+          <span class={statusClass}>{statusLabel}</span>
+          <div class="big">TICK {projection?.tick ?? '–'}</div>
+          {replaying ? null : (
+            <>
+              <div class="countdown">下次结算 {projection ? remaining : '–'}s</div>
+              <div class="cdbar">
+                <i style={{ width: `${fill}%` }} />
+              </div>
+            </>
+          )}
+        </div>
+      )}
 
       <div class="ui-modes panel">
         {MODES.map((mode) => (

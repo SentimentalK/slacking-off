@@ -609,3 +609,201 @@
     overflow-x: auto;
   }
 }
+
+.shell .ui-bottom[data-mode="play"] {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+  white-space: normal;
+  width: min(860px, calc(100vw - 32px));
+}
+.shell .play-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+.shell .play-row .col {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  flex: 1 1 0;
+}
+.shell .play-row .play-pips-col {
+  flex: 0 0 150px;
+}
+.shell .play-row .play-doing {
+  flex: 1.3 1 0;
+}
+.shell .play-row .kv {
+  margin: 0;
+  gap: 8px;
+}
+.shell .play-row .bar {
+  margin: 0;
+  width: 100%;
+}
+.shell .play-row .pips {
+  margin: 0;
+}
+.shell .pm-pending {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.shell .pm-pending[data-tone="rejected"] {
+  color: var(--bad);
+}
+.shell .pm-pending[data-tone="executing"] {
+  color: var(--gold);
+}
+.shell .pm-pending[data-tone="pending"] {
+  color: var(--blue);
+}
+.shell .pm-pending[data-tone="idle"] {
+  color: var(--dim);
+}
+.shell .play-actions {
+  display: flex;
+  gap: 8px;
+  flex: none;
+}
+.shell .play-hint {
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.shell .play-hint button {
+  padding: 3px 10px;
+}
+.shell .play-clock .play-placement {
+  color: var(--dim);
+  font-size: 12px;
+}
+.shell .play-feed {
+  width: 260px;
+}
+.shell .pm-events {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.shell .pm-event {
+  display: flex;
+  gap: 6px;
+}
+.shell .pm-event-tick {
+  color: var(--dim);
+  flex: none;
+}
+.shell .pm-stats {
+  margin-top: 8px;
+  border-top: 1px solid var(--line);
+  padding-top: 4px;
+}
+.shell .play-menu {
+  position: absolute;
+  left: 0;
+  top: 0;
+  z-index: 5;
+  width: 220px;
+  max-width: calc(100vw - 16px);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+}
+.shell .play-menu .play-menu-title {
+  margin: 0 0 2px;
+  font-weight: 800;
+  font-size: 13px;
+}
+.shell .play-menu button {
+  min-height: 40px;
+  text-align: left;
+}
+.shell .play-menu > .sub {
+  margin: 0;
+}
+.shell .play-recenter {
+  position: fixed;
+  right: 16px;
+  bottom: calc(var(--bottom-h) + 16px);
+  z-index: 4;
+}
+.shell .play-create label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 6px;
+}
+.shell .play-create input {
+  font: inherit;
+  color: inherit;
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 8px 10px;
+}
+.shell .play-create .sw {
+  margin: 10px 0 12px;
+}
+.shell .play-create .pm-notice {
+  color: var(--bad);
+  margin: 8px 0 0;
+}
+.shell .pm-notice {
+  color: var(--gold);
+  margin: 6px 0 0;
+}
+
+@media (max-width: 700px) {
+  .shell:has(.ui-bottom[data-mode="play"]) {
+    --bottom-h: 150px;
+  }
+  .shell .ui-bottom[data-mode="play"] {
+    width: auto;
+    gap: 6px;
+    padding: 6px 10px;
+  }
+  .shell .ui-bottom[data-mode="play"] > * {
+    flex: 0 0 100%;
+    min-width: 0;
+  }
+  .shell .ui-bottom[data-mode="play"] .sep,
+  .shell .ui-bottom[data-mode="play"] .play-pips-col {
+    display: none;
+  }
+  .shell .play-row {
+    flex-wrap: wrap;
+    gap: 6px 8px;
+  }
+  .shell .play-row .col {
+    flex: 1 1 0;
+  }
+  .shell .play-row .play-doing .sub:last-child {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .shell .play-row .play-actions {
+    flex: 0 0 100%;
+  }
+  .shell .play-row .play-actions button {
+    flex: 1;
+    padding: 5px 8px;
+  }
+  .shell .play-recenter {
+    top: 96px;
+    right: 8px;
+    bottom: auto;
+  }
+  .shell .ui-card.play:not(.expanded) .card-need,
+  .shell .ui-card.play:not(.expanded) .bar {
+    display: none;
+  }
+  .shell .play-menu {
+    width: 220px;
+  }
+}

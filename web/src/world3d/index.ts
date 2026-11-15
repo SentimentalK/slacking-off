@@ -6,6 +6,7 @@ import { createDecor } from './decor';
 import { createForest } from './forest';
 import { createObjectsLayer } from './objects';
 import { createVisionBoxLayer } from './visionbox';
+import { createPathMarksLayer } from './pathmarks';
 import { createGround } from './ground';
 import { createLighting } from './lighting';
 import { applyVision, installVisionShader } from './vision';
@@ -49,6 +50,7 @@ export const extraLayers: Array<(ctx: SceneCtx) => Layer> = [];
 extraLayers.push((ctx) => createObjectsLayer(ctx));
 extraLayers.push((ctx) => createAgentsLayer(ctx));
 extraLayers.push((ctx) => createVisionBoxLayer(ctx));
+extraLayers.push((ctx) => createPathMarksLayer(ctx));
 
 const EMPTY_TERRAIN: Terrain = { width: 0, height: 0, entrance: { x: 0, y: 0 }, rows: [] };
 

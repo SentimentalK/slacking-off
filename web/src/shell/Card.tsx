@@ -1,25 +1,29 @@
 import { useState } from 'preact/hooks';
+import type { ComponentChildren } from 'preact';
 import { navigate } from '../router';
 import { NEED_LABEL, SENT_BY_LABEL, formatNumber } from '../labels';
 import { agentColor } from '../render';
 import type { LeaderRow, ProjectionAgent } from '../types';
 
-const DEADLINE_MAX_TICKS = 240;
+export const DEADLINE_MAX_TICKS = 240;
 
 interface Props {
   agent: ProjectionAgent | null;
   tick: number;
   top3: LeaderRow[];
   onVision: (on: boolean) => void;
+  vision?: boolean;
+  play?: boolean;
+  extra?: ComponentChildren;
 }
 
-function meterColor(fraction: number): string {
+export function meterColor(fraction: number): string {
   if (fraction > 0.5) return 'var(--ok)';
   if (fraction > 0.2) return 'var(--gold)';
   return 'var(--bad)';
 }
 
-export function Card({ agent, tick, top3, onVision }: Props) {
+export function Card({ agent, tick, top3, onVision, vision = true, play = false, extra }: Props) {
   const [visionOn, setVisionOn] = useState(true);
   const [expanded, setExpanded] = useState(false);
 
@@ -57,7 +61,7 @@ export function Card({ agent, tick, top3, onVision }: Props) {
   };
 
   return (
-    <div class={expanded ? 'ui-card panel sel expanded' : 'ui-card panel sel'}>
+    <div class={['ui-card', 'panel', 'sel', expanded && 'expanded', play && 'play'].filter(Boolean).join(' ')}>
       <div class="who">
         <div class="dot" style={{ background: agentColor(agent.color) }} />
         <div class="card-id">
@@ -111,10 +115,13 @@ export function Card({ agent, tick, top3, onVision }: Props) {
           <button type="button" onClick={() => navigate(`/agent/${agent.id}`)}>
             看档案
           </button>
-          <button type="button" aria-pressed={visionOn ? 'true' : 'false'} onClick={toggleVision}>
-            看它的视野
-          </button>
+          {vision ? (
+            <button type="button" aria-pressed={visionOn ? 'true' : 'false'} onClick={toggleVision}>
+              看它的视野
+            </button>
+          ) : null}
         </div>
+        {extra}
       </div>
     </div>
   );

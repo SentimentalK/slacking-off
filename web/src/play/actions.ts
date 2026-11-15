@@ -41,6 +41,7 @@ export const KEY_DIR: Record<string, Dir> = {
 
 export type PlayAction =
   | { id: 'move'; label: string; kind: 'move'; dir: Dir }
+  | { id: 'path'; label: string; kind: 'path'; path: string }
   | { id: string; label: string; kind: 'build'; build: BuildKind; target: TargetSpec }
   | { id: string; label: string; kind: 'demolish'; target: TargetSpec }
   | { id: string; label: string; kind: 'door'; target: Dir; open: boolean }
