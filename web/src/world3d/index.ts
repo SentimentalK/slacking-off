@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import type { Terrain } from '../types';
 import { CameraControls, pick } from './camera';
+import { createAgentsLayer } from './agents';
 import { createDecor } from './decor';
 import { createForest } from './forest';
 import { createGround } from './ground';
@@ -26,6 +27,7 @@ export interface WorldView {
 }
 
 export const extraLayers: Array<(ctx: SceneCtx) => Layer> = [];
+extraLayers.push((ctx) => createAgentsLayer(ctx));
 
 const EMPTY_TERRAIN: Terrain = { width: 0, height: 0, entrance: { x: 0, y: 0 }, rows: [] };
 
@@ -42,7 +44,15 @@ export function createWorldView(canvas: HTMLCanvasElement, opts: WorldViewOption
   scene.add(world);
   const lighting = createLighting(scene);
   const pickables = new Map<THREE.Object3D, number>();
-  const ctx: SceneCtx = { scene, world, quality, worldId: 0, terrain: EMPTY_TERRAIN, pickables };
+  const ctx: SceneCtx = {
+    scene,
+    world,
+    quality,
+    worldId: 0,
+    terrain: EMPTY_TERRAIN,
+    pickables,
+    camera: new THREE.PerspectiveCamera(),
+  };
 
   let last: FrameInput | null = null;
   let layers: Layer[] = [];
@@ -98,6 +108,7 @@ export function createWorldView(canvas: HTMLCanvasElement, opts: WorldViewOption
     draw(input) {
       last = input;
       const cam = ensureControls(input.terrain);
+      ctx.camera = cam.camera;
       ensureLayers(input);
       for (const l of layers) l.update(input, ctx);
       lighting.update(input, quality);
