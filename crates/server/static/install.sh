@@ -1,14 +1,16 @@
 #!/bin/sh
 # Install the loo CLI (contract §1).
 #
-#   curl -fsSL <server>/install.sh | sh -s -- --server <server> --token <token>
+#   curl -fsSL <server>/install.sh | sh -s -- --server <server> --token <token> [--prompt-file <path>]
 #
 # POSIX sh + curl only. The token is written to the config file and never
-# printed.
+# printed. `--prompt-file` is optional and off by default: only then does the
+# installer append the loo line to that agent instruction file.
 set -eu
 
 server=""
 token=""
+prompt_file=""
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -22,8 +24,13 @@ while [ $# -gt 0 ]; do
       token="$2"
       shift 2
       ;;
+    --prompt-file)
+      [ $# -ge 2 ] || { echo "install.sh: --prompt-file needs a value" >&2; exit 2; }
+      prompt_file="$2"
+      shift 2
+      ;;
     -h|--help)
-      echo "usage: install.sh --server <url> --token <token>"
+      echo "usage: install.sh --server <url> --token <token> [--prompt-file <path>]"
       exit 0
       ;;
     *)
@@ -98,3 +105,14 @@ case ":$PATH:" in
   *":$bin_dir:"*) ;;
   *) echo "note: add $bin_dir to PATH" ;;
 esac
+
+# Off by default: without --prompt-file no instruction file is touched. A
+# failure here cannot fail the install, the binary and config are already in
+# place.
+if [ -n "$prompt_file" ]; then
+  if LOO_HOME="$home_dir" "$bin_dir/loo" prompt on --file "$prompt_file"; then
+    :
+  else
+    echo "prompt: skipped ($prompt_file); install is done, run loo prompt on --file <path> later"
+  fi
+fi

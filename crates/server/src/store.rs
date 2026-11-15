@@ -81,7 +81,8 @@ CREATE TABLE IF NOT EXISTS users(
     id INTEGER PRIMARY KEY,
     username TEXT NOT NULL UNIQUE,
     password_hash TEXT NOT NULL,
-    created_at_ms INTEGER NOT NULL
+    created_at_ms INTEGER NOT NULL,
+    prompt_enabled INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS auth_tokens(
     id INTEGER PRIMARY KEY,
@@ -127,6 +128,26 @@ pub struct StoredAgent {
     pub kind: PlayerKind,
     /// Explicit colour `0..=11`; `None` means `id % 12`.
     pub color: Option<u8>,
+}
+
+/// `GET /api/stats?prompt=` — narrow the stats to accounts whose install did
+/// (`On`) or did not (`Off`) add the loo line to an agent instruction file.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PromptFilter {
+    Any,
+    On,
+    Off,
+}
+
+impl PromptFilter {
+    /// The SQL predicate value: `None` for `Any`, `1`/`0` for the two halves.
+    fn as_flag(self) -> Option<i64> {
+        match self {
+            PromptFilter::Any => None,
+            PromptFilter::On => Some(1),
+            PromptFilter::Off => Some(0),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -223,6 +244,7 @@ impl Store {
         migrate_agents(&conn)?;
         migrate_play_kind(&conn)?;
         migrate_worlds_official(&conn)?;
+        migrate_users_prompt(&conn)?;
 
         let existing: Option<i64> = conn
             .query_row(
@@ -704,6 +726,34 @@ impl Store {
         )?)
     }
 
+    /// Records whether this account's install added the loo line to an agent
+    /// instruction file. An unknown account is an error, never a silent no-op.
+    pub fn set_prompt_enabled(&self, user_id: u64, enabled: bool) -> Result<bool, StoreError> {
+        let updated = self.conn()?.execute(
+            "UPDATE users SET prompt_enabled = ?1 WHERE id = ?2",
+            params![i64::from(enabled), user_id as i64],
+        )?;
+        if updated == 0 {
+            return Err(StoreError::Conflict(format!(
+                "account {user_id} does not exist"
+            )));
+        }
+        Ok(enabled)
+    }
+
+    /// `prompt_enabled` for an account; an unknown account is an error.
+    pub fn prompt_enabled(&self, user_id: u64) -> Result<bool, StoreError> {
+        self.conn()?
+            .query_row(
+                "SELECT prompt_enabled FROM users WHERE id = ?1",
+                [user_id as i64],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()?
+            .map(|value| value != 0)
+            .ok_or_else(|| StoreError::Conflict(format!("account {user_id} does not exist")))
+    }
+
     pub fn auth_token_lookup(&self, token_hash: &str) -> Result<Option<u64>, StoreError> {
         Ok(self
             .conn()?
@@ -1114,8 +1164,11 @@ impl Store {
 
     /// Two ranges (`all`, `mixed`) split by player kind, then the AI-only model
     /// table. A session can be in both ranges, so the range is a join row, not
-    /// a partition.
-    pub fn stats(&self) -> Result<StatsResponse, StoreError> {
+    /// a partition. `prompt` narrows every number to accounts that did (or did
+    /// not) install the loo line in their agent instructions.
+    pub fn stats(&self, prompt: PromptFilter) -> Result<StatsResponse, StoreError> {
+        // `None` is `any`; the SQL keeps the parameter shape identical.
+        let prompt: Option<i64> = prompt.as_flag();
         let conn = self.conn()?;
         let mut scopes = [ScopeStats::default(); 2];
         let mut ended = [0u64; 2];
@@ -1129,10 +1182,12 @@ impl Store {
                  JOIN sessions s ON r.mixed = 0 OR s.with_other_kind = 1 \
                  JOIN agents a ON a.id = s.agent AND a.world_id = s.world_id \
                  JOIN worlds w ON w.id = s.world_id AND w.official = 1 \
+                 JOIN users u ON u.id = a.user_id \
                  WHERE a.user_id IS NOT NULL \
+                   AND (?1 IS NULL OR u.prompt_enabled = ?1) \
                  GROUP BY r.mixed, a.kind",
             )?;
-            let rows = stmt.query_map([], |row| {
+            let rows = stmt.query_map(params![prompt], |row| {
                 Ok((
                     row.get::<_, i64>(0)? != 0,
                     row.get::<_, String>(1)?,
@@ -1180,9 +1235,11 @@ impl Store {
             let mut stmt = conn.prepare(
                 "SELECT a.model, COUNT(*), COALESCE(SUM(a.score_total), 0) \
                  FROM agents a JOIN worlds w ON w.id = a.world_id AND w.official = 1 \
-                 WHERE a.user_id IS NOT NULL AND a.kind = 'ai' GROUP BY a.model",
+                 JOIN users u ON u.id = a.user_id \
+                 WHERE a.user_id IS NOT NULL AND a.kind = 'ai' \
+                   AND (?1 IS NULL OR u.prompt_enabled = ?1) GROUP BY a.model",
             )?;
-            let rows = stmt.query_map([], |row| {
+            let rows = stmt.query_map(params![prompt], |row| {
                 Ok((
                     row.get::<_, String>(0)?,
                     row.get::<_, i64>(1)?,
@@ -1204,9 +1261,11 @@ impl Store {
                  FROM sessions s \
                  JOIN agents a ON a.id = s.agent AND a.world_id = s.world_id \
                  JOIN worlds w ON w.id = s.world_id AND w.official = 1 \
-                 WHERE a.user_id IS NOT NULL AND a.kind = 'ai' GROUP BY a.model",
+                 JOIN users u ON u.id = a.user_id \
+                 WHERE a.user_id IS NOT NULL AND a.kind = 'ai' \
+                   AND (?1 IS NULL OR u.prompt_enabled = ?1) GROUP BY a.model",
             )?;
-            let rows = stmt.query_map([], |row| {
+            let rows = stmt.query_map(params![prompt], |row| {
                 Ok((
                     row.get::<_, String>(0)?,
                     row.get::<_, i64>(1)?,
@@ -1617,6 +1676,16 @@ fn migrate_worlds_official(conn: &Connection) -> Result<(), StoreError> {
     Ok(())
 }
 
+/// Contract §1: whether the account's install added the loo line to an agent
+/// instruction file. Defaults to off, so an existing database upgrades in place.
+fn migrate_users_prompt(conn: &Connection) -> Result<(), StoreError> {
+    let columns = table_columns(conn, "users")?;
+    if !columns.iter().any(|column| column.name == "prompt_enabled") {
+        add_column(conn, "users", "prompt_enabled INTEGER NOT NULL DEFAULT 0")?;
+    }
+    Ok(())
+}
+
 fn add_column(conn: &Connection, table: &str, definition: &str) -> Result<(), StoreError> {
     conn.execute_batch(&format!("ALTER TABLE {table} ADD COLUMN {definition}"))?;
     Ok(())
@@ -1668,4 +1737,39 @@ fn now_ms() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fresh_store(name: &str) -> (PathBuf, Store) {
+        let dir = std::env::temp_dir().join(format!("loo-store-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let store = Store::open(&dir, "test", "test", 7).expect("store opens");
+        (dir, store)
+    }
+
+    #[test]
+    fn a_new_account_has_no_prompt_and_the_flag_round_trips() {
+        let (dir, store) = fresh_store("prompt");
+        let user_id = store
+            .create_user("prompt-user", "hash")
+            .expect("account is created");
+
+        assert!(
+            !store.prompt_enabled(user_id).expect("the new flag reads"),
+            "the flag is off until the install records it"
+        );
+        store
+            .set_prompt_enabled(user_id, true)
+            .expect("the flag is writable");
+        assert!(
+            store.prompt_enabled(user_id).expect("the flag reads back"),
+            "the stored flag reads back"
+        );
+
+        drop(store);
+        let _ = std::fs::remove_dir_all(dir);
+    }
 }

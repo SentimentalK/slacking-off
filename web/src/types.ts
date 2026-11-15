@@ -186,6 +186,8 @@ export interface AccountResponse {
   username: string;
   agents: AccountAgent[];
   token: AccountTokenInfo;
+  /** Whether the install appended the loo line to an agent instruction file. */
+  prompt_enabled: boolean;
 }
 
 export interface InstallCommands {

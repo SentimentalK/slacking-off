@@ -16,9 +16,9 @@ use loo_proto::{
     ErrorCode, EventView, InstallCommands, JoinRequest, JoinResponse, LeaderRow, LeaveResponse,
     LookResponse, MapResponse, MetricsResponse, MoveRequest, Need, Placement, PlacementKind,
     PlayAgentResponse, PlayMe, PlayState, PlayerKind, Pos, ProfileResponse, Projection,
-    RegisterRequest, RegisterResponse, RulesResponse, SentBy, SessionId, SessionOutcome, SettleMs,
-    StatsResponse, TargetSpec, TerrainResponse, Tick, Timeline, TokenCreateResponse,
-    UpgradeRequest, WaitRequest, WaitResponse, WaitWake, WorldSummary,
+    PromptResponse, RegisterRequest, RegisterResponse, RulesResponse, SentBy, SessionId,
+    SessionOutcome, SettleMs, StatsResponse, TargetSpec, TerrainResponse, Tick, Timeline,
+    TokenCreateResponse, UpgradeRequest, WaitRequest, WaitResponse, WaitWake, WorldSummary,
 };
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::path::Path;
@@ -688,8 +688,8 @@ impl Server {
     }
 
     /// `GET /api/stats` (contract §3).
-    pub async fn stats(&self) -> Envelope<StatsResponse> {
-        match self.store.stats() {
+    pub async fn stats(&self, prompt: store::PromptFilter) -> Envelope<StatsResponse> {
+        match self.store.stats(prompt) {
             Ok(stats) => Envelope::ok(stats, Vec::new(), None),
             Err(error) => error_envelope(
                 ErrorCode::Internal,
@@ -1005,6 +1005,7 @@ impl Server {
                 username,
                 agents,
                 token,
+                prompt_enabled: self.store.prompt_enabled(user_id).unwrap_or(false),
             },
             Vec::new(),
             None,
@@ -1043,6 +1044,35 @@ impl Server {
 
     pub fn revoke_account_tokens(&self, user_id: u64) -> Result<(), StoreError> {
         self.store.auth_token_revoke_all(user_id).map(|_| ())
+    }
+
+    /// Records whether this account's install added the loo line to an agent
+    /// instruction file. `caller_token` is the account token (Authorization:
+    /// Bearer); no agent is needed, the install runs before `register`.
+    pub fn set_prompt_enabled(
+        &self,
+        caller_token: &str,
+        enabled: bool,
+    ) -> Envelope<PromptResponse> {
+        let user_id = match self
+            .store
+            .auth_token_lookup(&auth::sha256_hex(caller_token))
+        {
+            Ok(Some(user_id)) => user_id,
+            Ok(None) => {
+                return error_envelope(ErrorCode::NotAuthenticated, not_authenticated().message)
+            }
+            Err(error) => {
+                return error_envelope(
+                    ErrorCode::Internal,
+                    format!("reading the token failed: {error}"),
+                )
+            }
+        };
+        match self.store.set_prompt_enabled(user_id, enabled) {
+            Ok(prompt_enabled) => Envelope::ok(PromptResponse { prompt_enabled }, Vec::new(), None),
+            Err(error) => error_envelope(ErrorCode::Internal, format!("{error}")),
+        }
     }
 
     /// The account's human character as the browser sees it (contract §3).

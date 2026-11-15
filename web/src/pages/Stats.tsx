@@ -13,7 +13,14 @@ const SCOPES = [
   { key: 'mixed', label: '有另一类在场' },
 ] as const;
 
+const PROMPT_FILTERS = [
+  { key: 'any', label: '全部' },
+  { key: 'on', label: '装了提示' },
+  { key: 'off', label: '没装提示' },
+] as const;
+
 type ScopeKey = (typeof SCOPES)[number]['key'];
+type PromptKey = (typeof PROMPT_FILTERS)[number]['key'];
 
 function KindCard({
   label,
@@ -61,10 +68,11 @@ export function Stats() {
   const [stats, setStats] = useState<StatsResponse | null>(null);
   const [error, setError] = useState(false);
   const [scope, setScope] = useState<ScopeKey>('all');
+  const [prompt, setPrompt] = useState<PromptKey>('any');
 
   useEffect(() => {
     let alive = true;
-    getJSON<StatsResponse>('/api/stats')
+    getJSON<StatsResponse>(`/api/stats?prompt=${prompt}`)
       .then((next) => {
         if (alive) setStats(next);
       })
@@ -74,7 +82,7 @@ export function Stats() {
     return () => {
       alive = false;
     };
-  }, []);
+  }, [prompt]);
 
   const models = useMemo(
     () => (stats ? [...stats.models].sort((a, b) => b.total_score - a.total_score) : []),
@@ -108,6 +116,22 @@ export function Stats() {
                   data-scope={entry.key}
                   aria-selected={entry.key === scope}
                   onClick={() => setScope(entry.key)}
+                >
+                  {entry.label}
+                </button>
+              ))}
+            </div>
+
+            <div class="tabs" role="tablist" aria-label="摸鱼提示切分">
+              {PROMPT_FILTERS.map((entry) => (
+                <button
+                  key={entry.key}
+                  type="button"
+                  role="tab"
+                  class="tab"
+                  data-prompt={entry.key}
+                  aria-selected={entry.key === prompt}
+                  onClick={() => setPrompt(entry.key)}
                 >
                   {entry.label}
                 </button>

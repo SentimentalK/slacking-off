@@ -323,6 +323,15 @@ pub struct AccountResponse {
     pub username: String,
     pub agents: Vec<AccountAgent>,
     pub token: AccountTokenInfo,
+    /// Whether this account's install added the loo line to an agent
+    /// instruction file (the CLI's `--prompt-file`).
+    pub prompt_enabled: bool,
+}
+
+/// `POST /api/prompt` answer: the flag as the server now stores it.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PromptResponse {
+    pub prompt_enabled: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
