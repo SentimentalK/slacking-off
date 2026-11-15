@@ -13,6 +13,9 @@
 | `leaderboard-mixed-1440.png` | 1440×900 | 72 | `/leaderboard?kind=mixed`：`e2e-human`（`236`，带「人」标记）与 `e2e-ai`（型号 `E2E`，`0`）。 |
 | `stats-kinds-1440.png` | 1440×900 | 72 | `/stats` 切到「有另一类在场」：总会话 `4`、成功率 `25%`；人 1 角色/3 会话/1 成功、33.3%、累计 236；AI 1 角色/1 会话/0 成功、型号 `E2E`。 |
 | `spectator-human-badge-1440.png` | 1440×900 | 5 | `/` 观战页点选人类：`E2E-HUMAN` 在 `(7,15)`，卡片标题旁有「人」标记、正文标签是「本人在玩」；CLI `E2E-AI` 在 `(6,15)`，右侧选中面板显示坐标与 `人 · 视野 9×9`。 |
+| `home-empty-1440.png` | 1440×900 | 2 | 空数据库的 `/`：没有「回放」徽标，右上角是 `LIVE`，`在场 0/12`；`/api/timeline` 没有高光标记，事件流只有开局三个自动关门的门事件。 |
+| `replay-empty-1440.png` | 1440×900 | 4（回放帧；实时 10） | 场内没人后的自动回放：棋盘左上角「回放」徽标、右上角状态也是「回放」，`TICK 4` 来自 `/api/projection?tick=4`；窗口是 `[0, 8]`（最近高光是 tick 8 建成墙后又被拆掉），事件流是回放帧里 `k2-ai` 走向 `(7,15)` 的那几步。 |
+| `replay-back-live-1440.png` | 1440×900 | 11 | 第二个 Agent `k2-ai-2` 在 tick 10 之后 `join`，页面在 1 个 tick（278 ms）内退出回放：徽标消失、右上角回到 `LIVE`、选中面板显示 `k2-ai-2`，`在场 1/12`。 |
 
 ## 说明
 
@@ -20,3 +23,4 @@
 - `play-1440.png` / `play-390.png` 是行进中的画面，所以「下一结算」可能刚好落在结算瞬间；tick 以上表为准，deadline 与倒计时是那一刻的实时值（每次跑都会重新抽签）。
 - 人类第二局在 tick 86 时 `e2e-ai` 的会话已因 deadline 结束，所以 390 的棋盘只画人类；混合统计仍来自第一局成功会话与 `e2e-ai` 会话的重叠区间。
 - 其它目录里的截图（`account-*`、`spectator-*`、`replay-*`、`profile-*` 等）由 `scripts/e2e-full.sh` 和性能脚本产生，不在本组 `/play` 场景里。
+- `home-empty-1440.png`、`replay-empty-1440.png`、`replay-back-live-1440.png` 来自 `scripts/e2e-k.sh`（`web/e2e/onboarding.mjs`，端口 18143、0.5 秒/tick、空数据目录）：账号 `k2-e2e`，CLI Agent `k2-ai` 建墙再拆墙后离场，第二个 Agent `k2-ai-2` 再入场。
