@@ -1,12 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
+import type { RefObject } from 'preact';
 import { getJSON, watch } from '../api';
 import type { WatchStatus } from '../api';
-import { AgentCard } from '../components/AgentCard';
-import { EventText, eventColors } from '../components/EventText';
-import { Link } from '../components/Link';
-import { Nav } from '../components/Nav';
-import { QueueStrip } from '../components/QueueStrip';
-import { EVENT_LABEL, formatNumber } from '../labels';
+import { eventColors } from '../components/EventText';
 import { pickReplaySpan, REPLAY_TICKS_PER_SECOND } from '../replay-source';
 import { AutoQuality, chooseQuality, createWorldView, rendererName } from '../world3d';
 import type { Quality, UiState, WorldView } from '../world3d';
@@ -25,6 +21,9 @@ declare global {
 const EVENT_LOG_LIMIT = 50;
 const QUALITY_KEY = 'loo.quality';
 const STILL_MODE = new URLSearchParams(location.search).get('still') === '1';
+
+export type QualityChoice = 'auto' | Quality;
+export type ViewMode = 'live' | 'replay';
 
 function mergeEvents(previous: ProjectionEvent[], next: ProjectionEvent[]): ProjectionEvent[] {
   const seen = new Set(previous.map((event) => `${event.tick}:${event.seq}`));
@@ -46,6 +45,14 @@ function readStoredQuality(): string | null {
 function writeStoredQuality(value: Quality): void {
   try {
     localStorage.setItem(QUALITY_KEY, value);
+  } catch {
+    return;
+  }
+}
+
+function clearStoredQuality(): void {
+  try {
+    localStorage.removeItem(QUALITY_KEY);
   } catch {
     return;
   }
@@ -74,28 +81,24 @@ interface LiveState {
   reduceMotion: boolean;
 }
 
-type ViewMode = 'live' | 'replay';
-
-export function Spectator() {
+export function useWorld(canvasRef: RefObject<HTMLCanvasElement | null>) {
   const [projection, setProjection] = useState<Projection | null>(null);
   const [terrain, setTerrain] = useState<Terrain | null>(null);
   const [status, setStatus] = useState<WatchStatus>('reconnecting');
   const [selected, setSelected] = useState<number | null>(null);
   const [events, setEvents] = useState<ProjectionEvent[]>([]);
-  const [leaderboard, setLeaderboard] = useState<LeaderRow[] | null>(null);
+  const [top3, setTop3] = useState<LeaderRow[]>([]);
   const [reduceMotion, setReduceMotion] = useState(false);
   const [mode, setMode] = useState<ViewMode>('live');
   const modeRef = useRef<ViewMode>('live');
-  const latestLive = useRef<Projection | null>(null);
   const [replay, setReplay] = useState<{ from: number; to: number } | null>(null);
   const replayTick = useRef(0);
   const replayCache = useRef(new Map<number, Projection>());
   const startingReplay = useRef(false);
   const [dusk, setDusk] = useState(false);
-  const [quality, setQuality] = useState<Quality>('high');
+  const [choice, setChoice] = useState<QualityChoice>('high');
+  const [arrivedAt, setArrivedAt] = useState(0);
 
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const wrapRef = useRef<HTMLDivElement | null>(null);
   const viewRef = useRef<WorldView | null>(null);
   const autoRef = useRef<AutoQuality | null>(null);
   const qualityRef = useRef<Quality>('high');
@@ -121,9 +124,11 @@ export function Spectator() {
   };
 
   const showLive = (frame: Projection, previous: Projection | null) => {
+    const now = performance.now();
     live.current.previous = previous;
     live.current.projection = frame;
-    live.current.arrivedAt = performance.now();
+    live.current.arrivedAt = now;
+    setArrivedAt(now);
     setProjection(frame);
   };
 
@@ -205,17 +210,16 @@ export function Spectator() {
         if (alive) setTerrain({ width: 0, height: 0, entrance: { x: 0, y: 0 }, rows: [] });
       });
 
-    getJSON<LeaderRow[]>('/api/leaderboard?metric=score&limit=5')
+    getJSON<LeaderRow[]>('/api/leaderboard?metric=score&limit=3')
       .then((rows) => {
-        if (alive) setLeaderboard(rows);
+        if (alive) setTop3(rows);
       })
       .catch(() => {
-        if (alive) setLeaderboard([]);
+        if (alive) setTop3([]);
       });
 
     const stop = watch(
       (next) => {
-        latestLive.current = next;
         if (modeRef.current === 'replay') {
           if (next.counts.inside > 0) leaveReplay(next);
           return;
@@ -237,8 +241,7 @@ export function Spectator() {
 
   useEffect(() => {
     const canvas = canvasRef.current;
-    const wrap = wrapRef.current;
-    if (!canvas || !wrap) return;
+    if (!canvas) return;
 
     const params = new URLSearchParams(location.search);
     const urlQuality = params.get('quality');
@@ -247,8 +250,9 @@ export function Spectator() {
     const view = createWorldView(canvas, { quality: initial, still: STILL_MODE, onSelect: select });
     viewRef.current = view;
     qualityRef.current = initial;
-    setQuality(initial);
-    autoRef.current = new AutoQuality(!STILL_MODE && urlQuality === null && stored === null);
+    const autoPick = !STILL_MODE && urlQuality === null && stored === null;
+    autoRef.current = new AutoQuality(autoPick);
+    setChoice(autoPick ? 'auto' : initial);
     const initialDusk = params.get('dusk') === '1';
     live.current.dusk = initialDusk;
     live.current.duskT = 0;
@@ -260,7 +264,7 @@ export function Spectator() {
     };
 
     const observer = new ResizeObserver(() => view.resize());
-    observer.observe(wrap);
+    observer.observe(canvas);
 
     const onMove = (event: PointerEvent) => {
       if (STILL_MODE) return;
@@ -283,7 +287,6 @@ export function Spectator() {
         if (next) {
           qualityRef.current = next;
           view.setQuality(next);
-          setQuality(next);
         }
       }
       const cur = state.projection;
@@ -356,16 +359,22 @@ export function Spectator() {
     setDusk(on);
   };
 
-  const toggleQuality = () => {
-    const next: Quality = qualityRef.current === 'high' ? 'low' : 'high';
+  const setQuality = (next: QualityChoice) => {
+    if (next === 'auto') {
+      const picked = chooseQuality(null, null, innerWidth, navigator.hardwareConcurrency ?? 8, rendererName());
+      clearStoredQuality();
+      autoRef.current = new AutoQuality(!STILL_MODE);
+      qualityRef.current = picked;
+      viewRef.current?.setQuality(picked);
+      setChoice('auto');
+      return;
+    }
     autoRef.current = null;
     qualityRef.current = next;
     viewRef.current?.setQuality(next);
-    setQuality(next);
     writeStoredQuality(next);
+    setChoice(next);
   };
-
-  const agent = projection?.agents.find((entry) => entry.id === selected) ?? null;
 
   const colors = useMemo(() => eventColors(projection), [projection]);
 
@@ -395,169 +404,23 @@ export function Spectator() {
     return { from, to, marks, pointer: ((tick - from) / (to - from)) * 100 };
   }, [tick]);
 
-  return (
-    <div class="spectator">
-      <div class="board-column">
-        <header class="status-bar">
-          <div class="brand">
-            <h1 class="brand-title">带薪拉屎</h1>
-            <span class="brand-sub">COMPANY TIME</span>
-          </div>
-          <Nav current="spectator" />
-          <div class="status-spacer" />
-          <div class="live" data-status={mode === 'replay' ? 'replay' : status}>
-            <span class="live-dot" />
-            <span>
-              {mode === 'replay' ? '回放' : status === 'live' ? 'LIVE' : status === 'reconnecting' ? '重连中' : '已断开'}
-            </span>
-          </div>
-          <div class="stat-chips">
-            <div class="chip">
-              在场{' '}
-              <b>
-                {projection?.counts.inside ?? '–'}/{projection?.counts.capacity ?? '–'}
-              </b>
-            </div>
-            <div class="chip">
-              门外排队 <b>{projection?.counts.queued ?? '–'}</b>
-            </div>
-            <div class="chip mono">TICK {projection ? formatNumber(projection.tick) : '–'}</div>
-          </div>
-        </header>
-
-        <section class="home-intro" aria-label="这是什么">
-          <p class="home-lede">
-            一座只有厕所的格子世界：AI 用命令行进来抢坑、建墙、堵门、上厕所。
-          </p>
-          <div class="home-entries">
-            <Link href="/account" class="home-cta">
-              带你的 AI 来
-            </Link>
-            <Link href="/play" class="home-cta home-cta-quiet">
-              我自己上
-            </Link>
-          </div>
-        </section>
-
-        <QueueStrip queue={projection?.queue ?? []} />
-
-        <div class="board-wrap" ref={wrapRef}>
-          <canvas class="board" data-renderer="3d" ref={canvasRef} role="img" aria-label={boardLabel} />
-          <div class="board-vignette" />
-          {mode === 'replay' ? (
-            <div class="replay-badge" data-mode="replay">
-              回放
-            </div>
-          ) : null}
-          <div class="board-tools">
-            <button
-              type="button"
-              class="chip board-tool"
-              aria-pressed={dusk ? 'true' : 'false'}
-              onClick={toggleDusk}
-            >
-              黄昏
-            </button>
-            <button type="button" class="chip board-tool" onClick={toggleQuality}>
-              画质：{quality === 'high' ? '高' : '低'}
-            </button>
-          </div>
-          <div class="board-hint">滚轮缩放 · 拖拽平移 · 点击选人</div>
-        </div>
-
-        <div class="timeline">
-          <div class="timeline-track" aria-hidden="true">
-            <div class="timeline-rail" />
-            {timeline.marks.map((mark) => (
-              <div
-                key={mark.tick}
-                class="timeline-tick"
-                data-major={mark.major ? 'true' : 'false'}
-                style={{ left: `${mark.percent}%` }}
-              />
-            ))}
-            <div class="timeline-pointer" style={{ left: `${timeline.pointer}%` }} />
-          </div>
-          <div class="timeline-labels">
-            <span>{formatNumber(timeline.from)}</span>
-            <span>TICK {formatNumber(tick)}</span>
-            <span>{formatNumber(timeline.to)}</span>
-          </div>
-          <div class="timeline-legend">
-            <span class="legend-item">
-              <span class="legend-mark" style={{ background: 'var(--success)' }} />
-              成功
-            </span>
-            <span class="legend-item">
-              <span class="legend-mark" style={{ background: 'var(--danger)' }} />
-              打人 / 拆除
-            </span>
-            <span class="legend-item">
-              <span class="legend-mark" style={{ background: 'var(--defend)' }} />
-              防住了
-            </span>
-            <span class="legend-item">
-              <span class="legend-mark vision" />
-              选中 Agent 的视野
-            </span>
-          </div>
-        </div>
-      </div>
-
-      <aside class="side">
-        <section class="side-section">
-          <div class="panel-label">SELECTED · 选中的 Agent</div>
-          {agent && projection ? (
-            <AgentCard agent={agent} tick={projection.tick} tickSeconds={projection.tick_seconds} />
-          ) : (
-            <div class="panel">
-              <p class="muted" style={{ margin: 0 }}>
-                暂无 Agent
-              </p>
-            </div>
-          )}
-        </section>
-
-        <section class="side-section">
-          <div class="panel-label">LIVE LOG · 现场</div>
-          <div class="log-list">
-            {events.length === 0 ? (
-              <span class="log-empty">暂无事件</span>
-            ) : (
-              events.map((event) => (
-                <div class="log-row" key={`${event.tick}:${event.seq}`}>
-                  <span class="log-tick">{formatNumber(event.tick)}</span>
-                  <span class="log-text">
-                    <span class="muted">[{EVENT_LABEL[event.kind]}]</span>{' '}
-                    <EventText text={event.text} colors={colors} />
-                  </span>
-                </div>
-              ))
-            )}
-          </div>
-        </section>
-
-        <section class="side-section">
-          <div class="panel-label">TOP 5 · 带薪榜</div>
-          <div class="rank-list">
-            {leaderboard === null ? (
-              <span class="log-empty">载入中…</span>
-            ) : leaderboard.length === 0 ? (
-              <span class="log-empty">暂无数据</span>
-            ) : (
-              leaderboard.map((row) => (
-                <div class="rank-row" key={row.agent_id} data-rank={String(row.rank)}>
-                  <span class="rank-no">{row.rank}</span>
-                  <span class="rank-name">
-                    <b>{row.nick}</b> <span class="rank-model">· {row.model}</span>
-                  </span>
-                  <span class="rank-score">{formatNumber(row.score_total)}</span>
-                </div>
-              ))
-            )}
-          </div>
-        </section>
-      </aside>
-    </div>
-  );
+  return {
+    projection,
+    terrain,
+    status,
+    mode,
+    replay,
+    events,
+    top3,
+    selected,
+    select,
+    dusk,
+    toggleDusk,
+    quality: choice,
+    setQuality,
+    arrivedAt,
+    colors,
+    boardLabel,
+    timeline,
+  };
 }
