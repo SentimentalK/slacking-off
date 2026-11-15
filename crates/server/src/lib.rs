@@ -717,10 +717,33 @@ impl Server {
         }
     }
 
-    /// `GET /api/timeline` (contract §3): four marker kinds, ascending, capped.
+    /// `GET /api/timeline` (contract §3): four marker kinds, ascending, capped,
+    /// plus the replayable spans of the same window.
     pub async fn timeline(&self, from: Tick, to: Tick) -> Envelope<Timeline> {
-        match self.store.timeline_markers(from, to) {
-            Ok(markers) => Envelope::ok(Timeline { from, to, markers }, Vec::new(), None),
+        let current_tick = {
+            let inner = self.inner.lock().await;
+            inner.world.tick
+        };
+        let markers = match self.store.timeline_markers(from, to) {
+            Ok(markers) => markers,
+            Err(error) => {
+                return error_envelope(
+                    ErrorCode::Internal,
+                    format!("reading the timeline failed: {error}"),
+                )
+            }
+        };
+        match self.store.timeline_spans(from, to, current_tick) {
+            Ok(spans) => Envelope::ok(
+                Timeline {
+                    from,
+                    to,
+                    markers,
+                    spans,
+                },
+                Vec::new(),
+                None,
+            ),
             Err(error) => error_envelope(
                 ErrorCode::Internal,
                 format!("reading the timeline failed: {error}"),

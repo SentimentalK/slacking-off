@@ -9,7 +9,7 @@ use loo_core::{Event, EventKind, IntentKind, Snapshot, WorldState};
 use loo_proto::{
     AccountTokenInfo, AgentId, EventTag, KindStats, LeaderRow, ModelStats, Need, PlayerKind,
     ProfileResponse, ScopeStats, SentBy, SessionId, SessionOutcome, SessionRow, StatsResponse,
-    Tick, TimelineMarker, WorldSummary,
+    Tick, TimelineMarker, TimelineSpan, WorldSummary,
 };
 use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::Value;
@@ -1463,6 +1463,90 @@ impl Store {
             }
         }
         Ok(markers)
+    }
+
+    /// Replayable spans of `[from, to]`, consistent with
+    /// [`crate::Server::projection_at`]: a tick replays at least one session
+    /// when, after it settles, at least one session stands in the world.
+    ///
+    /// The tick a session enters counts (`Joined { inside: true }` and
+    /// `EnteredWorld`); the tick it ends does not, so a session that enters at
+    /// `t` and ends at `e > t` covers `[t, e - 1]`. A session still present
+    /// after `current_tick` covers `[start, max(start, current_tick)]`. Spans
+    /// are trimmed to `[from, to]`, sorted ascending, and merged when they
+    /// overlap or touch.
+    pub fn timeline_spans(
+        &self,
+        from: Tick,
+        to: Tick,
+        current_tick: Tick,
+    ) -> Result<Vec<TimelineSpan>, StoreError> {
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(
+            "SELECT payload FROM events WHERE world_id = ?1 \
+             AND kind IN ('Joined', 'EnteredWorld', 'SessionEnded') ORDER BY tick, seq",
+        )?;
+        let rows = stmt.query_map([WORLD_ID], |row| row.get::<_, String>(0))?;
+        let mut starts: BTreeMap<SessionId, Tick> = BTreeMap::new();
+        let mut spans = Vec::new();
+        for payload in rows {
+            let event: Event = serde_json::from_str(&payload?)?;
+            match &event.kind {
+                EventKind::Joined {
+                    session,
+                    inside: true,
+                    ..
+                } => {
+                    starts.insert(*session, event.tick);
+                }
+                // A queued session joins outside the world; its replayable
+                // stretch begins when it takes the entrance.
+                EventKind::Joined { .. } => {}
+                EventKind::EnteredWorld { session, .. } => {
+                    starts.insert(*session, event.tick);
+                }
+                EventKind::SessionEnded { session, .. } => {
+                    if let Some(start) = starts.remove(session) {
+                        if event.tick > start {
+                            spans.push(TimelineSpan {
+                                from: start,
+                                to: event.tick - 1,
+                            });
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        for start in starts.into_keys() {
+            spans.push(TimelineSpan {
+                from: start,
+                to: start.max(current_tick),
+            });
+        }
+
+        let mut clipped: Vec<TimelineSpan> = spans
+            .into_iter()
+            .filter_map(|span| {
+                let start = span.from.max(from);
+                let end = span.to.min(to);
+                (start <= end).then_some(TimelineSpan {
+                    from: start,
+                    to: end,
+                })
+            })
+            .collect();
+        clipped.sort_by_key(|span| span.from);
+        let mut merged: Vec<TimelineSpan> = Vec::with_capacity(clipped.len());
+        for span in clipped {
+            match merged.last_mut() {
+                Some(last) if span.from <= last.to.saturating_add(1) => {
+                    last.to = last.to.max(span.to);
+                }
+                _ => merged.push(span),
+            }
+        }
+        Ok(merged)
     }
 
     pub fn is_official(&self) -> Result<bool, StoreError> {
