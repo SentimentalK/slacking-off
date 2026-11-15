@@ -1,12 +1,19 @@
 import type * as THREE from 'three';
 import type { Pos, Projection, Terrain } from '../types';
 
+export interface VisionGrid {
+  width: number;
+  height: number;
+  values: Uint8Array;
+}
+
 export interface UiState {
   selected: number | null;
   hoverToilet: Pos | null;
   dusk: boolean;
   duskT: number;
   visionOf?: number | null;
+  vision?: VisionGrid | null;
 }
 
 export interface FrameInput {
