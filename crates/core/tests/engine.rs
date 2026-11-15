@@ -422,7 +422,7 @@ fn look_is_a_centered_9x9_window() {
     assert_eq!(center_row[4], '@', "you are in the middle of your view");
     assert_eq!(view.pos, world.entrance);
     assert_eq!(view.grid.origin, Pos::new(view.pos.x - 4, view.pos.y - 4));
-    assert_eq!(view.grid.origin, Pos::new(27, 46), "the entrance is 31,50");
+    assert_eq!(view.grid.origin, Pos::new(2, 11), "the entrance is 6,15");
     assert!(
         view.grid.rows.iter().all(|row| !row.contains('?')),
         "the whole window sits inside the map"
@@ -430,29 +430,33 @@ fn look_is_a_centered_9x9_window() {
 }
 
 #[test]
-fn default_map_has_the_eight_starting_toilets() {
+fn default_map_has_the_three_starting_toilets() {
     let def = map::parse(DEFAULT_MAP).expect("default map parses");
-    assert_eq!((def.map.width(), def.map.height()), (130, 100));
-    assert_eq!(def.entrance, Pos::new(31, 50));
+    assert_eq!((def.map.width(), def.map.height()), (48, 32));
+    assert_eq!(def.entrance, Pos::new(6, 15));
     assert_eq!(
         (def.queue_primary.len(), def.queue_overflow.len()),
-        (25, 25),
-        "the default map has 50 queue cells"
+        (5, 5),
+        "the default map has ten queue cells, five per lane"
     );
     let cfg = Config::default();
     let world = WorldState::new(def);
     let briefing = loo_core::briefing(&world, &cfg);
-    assert_eq!(briefing.toilets.len(), 8, "6 level-1 and 2 level-2 toilets");
+    assert_eq!(
+        briefing.toilets.len(),
+        3,
+        "the default map has three preset stalls"
+    );
     let level1 = briefing.toilets.iter().filter(|t| t.level == 1).count();
     let level2 = briefing.toilets.iter().filter(|t| t.level == 2).count();
-    assert_eq!((level1, level2), (6, 2));
+    assert_eq!((level1, level2), (3, 0));
     assert!(
         briefing.toilets.iter().all(|t| t.usable),
         "each starting toilet is enclosed by walls and a closed door"
     );
     assert!(
         !briefing.no_build.is_empty(),
-        "the cross corridor is no-build"
+        "the corridor and the stall strip are no-build"
     );
 }
 
@@ -461,8 +465,8 @@ fn map_memory_only_grows_inside_the_view() {
     let cfg = Config::default();
     let world = join_agent(&build(DEFAULT_MAP), &cfg, 1, "dev-1");
     let memory = map_memory(&world, 1).expect("session exists");
-    // The entrance at (31,50) is far from every edge, so the first window is
-    // the full 9x9.
+    // The entrance at (6,15) is far from every edge but the west one, so the
+    // first window is the full 9x9.
     assert_eq!((memory.grid.width, memory.grid.height), (9, 9));
     assert!(memory.seen_at.iter().flatten().all(|t| *t == 0));
 
@@ -476,7 +480,7 @@ fn map_memory_only_grows_inside_the_view() {
         );
         next = stepped;
     }
-    assert_eq!(pos_of(&next, 1), Pos::new(36, 50));
+    assert_eq!(pos_of(&next, 1), Pos::new(11, 15));
     let memory = map_memory(&next, 1).expect("session exists");
     assert!(memory.grid.width > 9, "walking east widens the memory");
     assert!(memory.seen_at.iter().flatten().any(|t| *t == 1));

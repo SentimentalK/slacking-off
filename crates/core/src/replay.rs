@@ -208,6 +208,7 @@ fn apply_event(world: &mut WorldState, event: &Event, cfg: &Config) -> Result<()
                     attack_cooldown_until: 0,
                     defend_cooldown_until: 0,
                     defending: None,
+                    defend_until: 0,
                     score_total: *score_total,
                     level: agent_level(*score_total, cfg),
                 },
@@ -365,6 +366,7 @@ fn apply_event(world: &mut WorldState, event: &Event, cfg: &Config) -> Result<()
             };
             entry.need = Some(*need);
             entry.deadline = *deadline;
+            entry.deadline_span = deadline.saturating_sub(event.tick);
         }
         // The action is already set by `ActionStarted`/`ActionReplaced`.
         EventKind::UseStarted { agent, .. } => {
@@ -523,6 +525,7 @@ fn apply_event(world: &mut WorldState, event: &Event, cfg: &Config) -> Result<()
         EventKind::DefendStarted {
             agent,
             target,
+            until,
             cooldown_until,
             ..
         } => {
@@ -530,6 +533,7 @@ fn apply_event(world: &mut WorldState, event: &Event, cfg: &Config) -> Result<()
                 return Err(fail(event, format!("agent {agent} does not exist")));
             };
             entry.defending = Some(*target);
+            entry.defend_until = *until;
             entry.defend_cooldown_until = *cooldown_until;
         }
         EventKind::DefendEnded { agent, .. } => {
@@ -537,6 +541,7 @@ fn apply_event(world: &mut WorldState, event: &Event, cfg: &Config) -> Result<()
                 return Err(fail(event, format!("agent {agent} does not exist")));
             };
             entry.defending = None;
+            entry.defend_until = 0;
         }
         EventKind::Stunned { agent, until, .. } => {
             let Some(entry) = world.agents.get_mut(agent) else {

@@ -300,7 +300,7 @@ pub enum EventKind {
         at: Pos,
         reason: String,
     },
-    /// The agent shields one adjacent cell for this tick.
+    /// The agent shields one adjacent cell while `tick < until`.
     DefendStarted {
         session: SessionId,
         agent: AgentId,
@@ -759,10 +759,11 @@ impl Event {
             EventKind::DefendStarted {
                 nick,
                 target,
+                until,
                 cooldown_until,
                 ..
             } => format!(
-                "{nick} defends {target} this tick; defend cooldown until tick {cooldown_until}"
+                "{nick} defends {target} until tick {until}; defend cooldown until tick {cooldown_until}"
             ),
             EventKind::DefendEnded { nick, .. } => format!("{nick} stopped defending"),
             EventKind::DemolishBlocked {

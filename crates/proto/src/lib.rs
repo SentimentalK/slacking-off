@@ -547,6 +547,17 @@ pub struct ConfigResponse {
     pub wait_effective_default_seconds: f64,
     pub wait_max_seconds: f64,
     pub snapshot_interval_ticks: u32,
+    /// Agents allowed inside the world at once.
+    pub max_on_field: usize,
+    /// Shortest and longest deadline a session can draw, in ticks.
+    pub deadline_ticks_min: u32,
+    pub deadline_ticks_max: u32,
+    /// Maximum time bonus, as a percent of the base score.
+    pub time_bonus_percent: u32,
+    /// Ticks between committing an attack and its landing.
+    pub windup_ticks: u32,
+    /// Ticks a defend shields its adjacent cell.
+    pub defend_ticks: u32,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

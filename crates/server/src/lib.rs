@@ -1564,6 +1564,12 @@ impl Server {
             wait_effective_default_seconds: cfg.wait_default_seconds(),
             wait_max_seconds: cfg.wait.max_seconds,
             snapshot_interval_ticks: cfg.persist.snapshot_interval_ticks,
+            max_on_field: cfg.max_on_field,
+            deadline_ticks_min: cfg.need.deadline_ticks_min,
+            deadline_ticks_max: cfg.need.deadline_ticks_max,
+            time_bonus_percent: cfg.need.time_bonus_percent,
+            windup_ticks: cfg.combat.windup_ticks,
+            defend_ticks: cfg.combat.defend_ticks,
         };
         let env = Envelope::ok(result, Vec::new(), None);
         self.finish("config", None, tick, env, started, "timings", None)
@@ -2065,7 +2071,7 @@ impl Server {
                 None,
             );
         }
-        let label = format!("defend {target} this tick");
+        let label = format!("defend {target} for {} ticks", self.cfg.combat.defend_ticks);
         let intent = IntentKind::Defend { target };
         let intent_json = serde_json::to_value(&intent).ok();
         queue_intent(&mut inner, agent, intent);
@@ -2228,7 +2234,7 @@ impl Server {
             }
         };
         let target = absolute_target(pos, req.target);
-        if let Err(message) = loo_core::validate_downgrade(&inner.world, agent, target) {
+        if let Err(message) = loo_core::validate_downgrade(&inner.world, agent, target, &self.cfg) {
             let env = failed_env(&self.cfg, &mut inner, Some(agent), ApiError::rule(message));
             drop(inner);
             return self.finish(
@@ -2932,13 +2938,13 @@ Commands
   loo move <N|E|S|W> [steps]   |   loo move <path, e.g. NNEE>
       Queue a move. One cell per tick. It stops at the first wall, closed door, other agent or map edge, and tells you where and why.
   loo attack <N|E|S|W>
-      Commit an attack on the unstunned agent in that adjacent cell. The windup is {windup} ticks; the hit resolves on the landing tick, and a target that stepped away is missed. A hit removes {penalty} ticks from the target's deadline, stuns it for {stun} ticks and then leaves it immune for {immunity} ticks. The attack cooldown is {attack_cooldown} ticks from the commit. A defended cell blocks the hit and stuns the attacker.
+      Commit an attack on the unstunned agent in that adjacent cell. The windup is {windup} ticks; the hit resolves on the landing tick, and a target that stepped away inside the windup is missed. A hit removes {penalty} ticks from the target's deadline, stuns it for {stun} ticks and then leaves it immune for {immunity} ticks. The attack cooldown is {attack_cooldown} ticks from the commit. A defended cell blocks the hit and stuns the attacker.
   loo defend <N|E|S|W>
-      Shield one adjacent cell for one tick. Attacks and every demolition aimed at that cell are blocked; the attacker is stunned for {stun} ticks. A defending tick cannot build, move or attack; a use is paused, not interrupted. The defend cooldown is {defend_cooldown} ticks. Your own cell cannot be defended.
+      Shield one adjacent cell for {defend} ticks, starting with the tick the defence settles in. Attacks and every demolition aimed at that cell while the shield holds are blocked; the attacker is stunned for {stun} ticks. On the tick a defence starts you cannot build, move or attack; a use is paused, not interrupted. The defend cooldown is {defend_cooldown} ticks. Your own cell cannot be defended.
   loo build wall|door|toilet <dir|here>
       Queue work on a cell: your own cell (here) or one step away. A wall needs {wall_work} work points, a door {door_work}, a level 1 toilet {toilet_work}; each work tick adds 1 point, so several agents build faster. A new door starts closed.
   loo upgrade <dir|here>
-      Work a toilet up one level. Each worker adds 1 work point per tick; levels 1 to 4 need {upgrade_work} points. Your agent level must be at least the target level; agent levels are cumulative score {levels} for levels 1 to 5. At most 5 agents work one toilet, and a toilet with non-zero progress is not usable.
+      Work a toilet up one level. Each worker adds 1 work point per tick; levels 1 to 4 need {upgrade_work} points. Your agent level must be at least the target level; agent levels are cumulative score {levels} for levels 1 to 5. At most {max_toilet_workers} agents work one toilet, and a toilet with non-zero progress is not usable.
   loo demolish <dir|here>
       Queue demolition of the object on a cell. A wall or door loses {wall_door_demolish} work per tick until it is gone (a wall has {wall_work} work, a door {door_work}); an unfinished site goes in {site_demolish} tick. A toilet is downgraded continuously at {toilet_demolish} per tick; while its progress is not 0 it cannot be used.
   loo downgrade <dir|here>
@@ -2962,9 +2968,10 @@ Need, deadline and score
 - A use needs {urine_use} ticks for urine and {feces_use} ticks for feces. Each use tick counts with the multiplier of the toilet level it was spent on.
 - Joining also sets a deadline {deadline_min} to {deadline_max} ticks after joining, chosen at random. `status` shows the ticks left; one warning arrives when {deadline_warning} ticks or fewer remain.
 - Reaching your deadline ends the session at that tick: the outcome is failed, the score is 0, and you are out of the world at once (you may join again). Missing the {recovery}-tick recovery window after an interruption ends it the same way.
-- A completed use scores round(base x weighted multiplier, half up) + ({time_bonus} per tick left before your deadline).
+- A completed use scores round(base x weighted multiplier, half up) + round(base x {time_bonus_percent}% x remaining / deadline_span).
   - base: {base_urine} for urine, {base_feces} for feces.
   - weighted multiplier: the mean of the multiplier of the toilet level on each use tick; levels 1 to 5 carry {multipliers}.
+  - remaining: the ticks left on your deadline when the use completes. deadline_span: the length of the deadline you drew at join ({deadline_min} to {deadline_max} ticks). Finishing at once pays the full {time_bonus_percent}% of base; finishing on the deadline pays no time bonus.
 - After a completed use you stay up to {linger} more ticks; then the session ends as a success and keeps its score.
 - Agent level is your cumulative score across sessions: levels 1 to 5 start at {levels}. A toilet can only be worked up to a level no higher than the worker's agent level.
 
@@ -2995,7 +3002,7 @@ World facts
         feces_use = cfg.need.feces_use_ticks,
         base_urine = cfg.need.base_score_urine,
         base_feces = cfg.need.base_score_feces,
-        time_bonus = cfg.need.time_bonus_per_tick,
+        time_bonus_percent = cfg.need.time_bonus_percent,
         deadline_min = cfg.need.deadline_ticks_min,
         deadline_max = cfg.need.deadline_ticks_max,
         deadline_warning = cfg.need.deadline_warning_ticks,
@@ -3013,7 +3020,9 @@ World facts
         stun = cfg.combat.stun_ticks,
         immunity = cfg.combat.immunity_ticks,
         attack_cooldown = cfg.combat.attack_cooldown_ticks,
+        defend = cfg.combat.defend_ticks,
         defend_cooldown = cfg.combat.defend_cooldown_ticks,
+        max_toilet_workers = cfg.build.max_toilet_workers,
         wait_default = cfg.wait.default_seconds,
         wait_max = cfg.wait.max_seconds,
     )
@@ -3074,10 +3083,14 @@ mod tests {
             "A use needs 4 ticks for urine and 8 ticks for feces",
             "levels 1 to 5 carry 1/2/3/5/10",
             "round(base x weighted multiplier, half up)",
-            "a deadline 120 to 240 ticks after joining",
+            "base x 50% x remaining / deadline_span",
+            "a deadline 36 to 60 ticks after joining",
             "recovery window of 12 ticks",
             "stay up to 36 more ticks",
             "levels 1 to 5 start at 0/1000/3000/8000/20000",
+            "The windup is 6 ticks",
+            "Shield one adjacent cell for 6 ticks",
+            "At most 5 agents work one toilet",
             "2 commands per second per agent with a burst of 12",
         ] {
             assert!(
@@ -3093,8 +3106,12 @@ mod tests {
         cfg.need.urine_use_ticks = 5;
         cfg.need.linger_ticks = 40;
         cfg.need.interrupt_recovery_ticks = 15;
+        cfg.need.time_bonus_percent = 25;
         cfg.toilet.multiplier = [1, 2, 4, 8, 16];
         cfg.limits.requests_burst = 20;
+        cfg.combat.windup_ticks = 9;
+        cfg.combat.defend_ticks = 4;
+        cfg.build.max_toilet_workers = 3;
         let changed = rules_text(&cfg, 100, 100, false);
         for expected in [
             "A use needs 5 ticks for urine",
@@ -3102,6 +3119,10 @@ mod tests {
             "recovery window of 15 ticks",
             "stay up to 40 more ticks",
             "with a burst of 20",
+            "base x 25% x remaining / deadline_span",
+            "The windup is 9 ticks",
+            "Shield one adjacent cell for 4 ticks",
+            "At most 3 agents work one toilet",
         ] {
             assert!(
                 changed.contains(expected),
