@@ -6,9 +6,10 @@ Usage:
 
 Reads only the group's run directory (`.conductor/exp-i/group-<g>/`):
 `data/events.jsonl`, `data/commands.jsonl`, `agent-*/sessions/**/*.jsonl`,
-`load.log`, `meta.txt`, `start-epoch.txt`, `end-epoch.txt`. When the JSONL logs
-are absent it falls back to the same records in `data/world.db`, which is where
-the server persists them; it prints a `note=` line when it does that.
+`load.log`, `metrics.log`, `meta.txt`, `start-epoch.txt`, `end-epoch.txt`. When
+the JSONL logs are absent it falls back to the same records in `data/world.db`,
+which is where the server persists them; it prints a `note=` line when it does
+that.
 
 Nothing here carries an expected value: every number is a count, a sum or a
 percentile of those files.
@@ -195,6 +196,34 @@ def load_samples(path):
     return samples
 
 
+def load_settle(path):
+    """`/api/metrics` samples: one envelope JSON per line, from `metrics.log`."""
+    samples = []
+    if not path.exists():
+        return samples
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            sample = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(sample, dict):
+            continue
+        settle = sample.get("settle_ms")
+        if not isinstance(settle, dict):
+            result = sample.get("result")
+            settle = result.get("settle_ms") if isinstance(result, dict) else None
+        if not isinstance(settle, dict):
+            continue
+        p99 = settle.get("p99")
+        maximum = settle.get("max")
+        if isinstance(p99, (int, float)) and isinstance(maximum, (int, float)):
+            samples.append((float(p99), float(maximum)))
+    return samples
+
+
 def main():
     if len(sys.argv) != 2 or sys.argv[1] not in GROUPS:
         die("usage: scripts/exp-stats.py <a|b|c>")
@@ -364,13 +393,21 @@ def main():
         print(f"cost_usd.{agent}={cost:.6f}")
     print()
 
-    # 10. machine load.
+    # 10. machine load and tick settlement latency.
     samples = load_samples(group_dir / "load.log")
     max_load = max((sample[1] for sample in samples), default=0.0)
     min_mem = min((sample[2] for sample in samples), default=0)
     print(f"max_loadavg_1m={max_load:.2f}")
     print(f"min_mem_available_mb={min_mem}")
     print(f"load_samples={len(samples)}")
+
+    settle = load_settle(group_dir / "metrics.log")
+    if settle:
+        print(f"settle_ms_p99_max={max(sample[0] for sample in settle):.3f}")
+        print(f"settle_ms_max={max(sample[1] for sample in settle):.3f}")
+    else:
+        print("settle_ms_p99_max=0")
+        print("settle_ms_max=0")
 
 
 if __name__ == "__main__":

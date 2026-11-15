@@ -20,7 +20,7 @@
 #                    persists SQLite; its old JSONL writer was replaced by
 #                    `world.db` in 5eac5bf, so the harness materializes the two
 #                    files the analysis reads from the server's own records)
-#   server.log, load.log, meta.txt, smoke.txt, summary.txt
+#   server.log, load.log, metrics.log, meta.txt, smoke.txt, summary.txt
 #   start-epoch.txt, end-epoch.txt
 #   agent-<NN>/{cwd,home,sessions,run.log,exit.txt,prompt.txt}
 #
@@ -186,13 +186,17 @@ if [ "$READY" -ne 1 ]; then
 fi
 echo "server up on 127.0.0.1:$PORT (pid $SERVER_PID)"
 
-# Step 6: machine samples every 30 seconds, for the whole run.
+# Step 6: machine samples every 30 seconds, for the whole run. Load and memory
+# go to `load.log` as plain columns; the server's own tick settlement latency
+# goes to `metrics.log` one JSON object per line.
 (
   while :; do
     printf '%s %s %s\n' \
       "$(date +%s)" \
       "$(awk '{print $1}' /proc/loadavg)" \
       "$(awk '/^MemAvailable:/ {printf "%d", $2 / 1024}' /proc/meminfo)" >> "$BASE/load.log"
+    curl -fsS --max-time 2 "http://127.0.0.1:$PORT/api/metrics" >> "$BASE/metrics.log" 2>/dev/null || true
+    printf '\n' >> "$BASE/metrics.log"
     sleep 30
   done
 ) &
