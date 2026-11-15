@@ -106,13 +106,17 @@ async function screenshot(name) {
   pass(`screenshot ${name} (${Math.round(size / 1024)} KB)`);
 }
 
+/** The shell's top-left clock carries `● 回放` while the page replays. */
 async function replayBadge() {
-  return (await page.$('.replay-badge')) !== null;
+  return page.evaluate(() => {
+    const badge = document.querySelector('.ui-clock .live.rp');
+    return badge !== null && badge.textContent.includes('回放');
+  });
 }
 
-/** The header chip reads `TICK 1,234`. */
+/** The shell's top-left clock reads `TICK 1234`. */
 async function pageTick() {
-  return page.$eval('.chip.mono', (element) => {
+  return page.$eval('.ui-clock .big', (element) => {
     const match = element.textContent.match(/(\d[\d,]*)/);
     return match ? Number(match[1].replace(/,/g, '')) : null;
   });
@@ -120,9 +124,7 @@ async function pageTick() {
 
 async function pageInside() {
   return page.evaluate(() => {
-    const chip = Array.from(document.querySelectorAll('.chip')).find((element) =>
-      element.textContent.includes('在场'),
-    );
+    const chip = document.querySelector('.ui-navr .cnt');
     if (!chip) return null;
     const match = chip.textContent.match(/在场\s*(\d+)/);
     return match ? Number(match[1]) : null;
@@ -235,7 +237,7 @@ async function objectAt(target) {
 async function phaseEmptyHome() {
   phase('empty home');
   await page.goto(`${BASE}/`, { waitUntil: 'domcontentloaded' });
-  await page.waitForSelector('.home-intro', { timeout: 15_000 });
+  await page.waitForSelector('[data-intro]', { timeout: 15_000 });
   // A fresh database has no markers, so the first settled frame must not replay.
   await until(async () => (await pageTick()) !== null, { timeout: 10_000, label: 'first live frame' });
   await sleep(600);
@@ -265,7 +267,7 @@ async function phaseEmptyHome() {
   pass('/replay without spans shows 没有可回放的区间, no rail, and a disabled transport');
 
   await page.goto(`${BASE}/`, { waitUntil: 'domcontentloaded' });
-  await page.waitForSelector('.home-intro', { timeout: 15_000 });
+  await page.waitForSelector('[data-intro]', { timeout: 15_000 });
 }
 
 async function phaseHistory() {
@@ -390,7 +392,7 @@ async function phaseHistory() {
 async function phaseReplay() {
   phase('replay');
   await page.reload({ waitUntil: 'domcontentloaded' });
-  await page.waitForSelector('.replay-badge', { timeout: 3_000 });
+  await until(() => replayBadge(), { timeout: 3_000, interval: 50, label: 'the replay badge' });
   pass('the empty spectator page started replaying within 3s of the reload');
 
   const { spans } = await timeline();
@@ -469,7 +471,7 @@ async function phaseBackLive() {
   const elapsed = Date.now() - startedAt;
   const t1 = await liveTick();
   const inside = await pageInside();
-  const status = await page.$eval('.live', (element) => element.getAttribute('data-status'));
+  const status = (await page.$('.ui-clock .live:not(.rp)')) !== null ? 'live' : 'not live';
 
   if (t1 - t0 > 2) {
     fail(`the page left replay ${t1 - t0} ticks after the join (t0 ${t0}, t1 ${t1}, ${elapsed} ms)`);
@@ -616,7 +618,7 @@ try {
       const badge = await replayBadge();
       const ticks = await pageTick();
       const live = await liveTick().catch(() => null);
-      console.error(`  .replay-badge present: ${badge}`);
+      console.error(`  replay badge (.ui-clock .live.rp 回放) present: ${badge}`);
       console.error(`  page tick: ${ticks}; live tick: ${live}`);
     } catch (probeError) {
       console.error(`  probe failed: ${probeError.message}`);

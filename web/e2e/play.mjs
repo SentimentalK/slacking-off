@@ -636,7 +636,7 @@ async function main() {
     await page.click('button[type=submit]');
     await page.waitForFunction(() => window.location.pathname === '/account', { timeout: 15_000 });
     await page.waitForFunction(
-      (name) => document.querySelector('.account-username')?.textContent?.includes(name),
+      (name) => document.querySelector('.win[data-window="account"] .nick')?.textContent?.includes(name),
       { timeout: 10_000 },
       USERNAME,
     );
@@ -759,9 +759,9 @@ async function main() {
     try {
       await spectator.setViewport({ width: 1440, height: 900, deviceScaleFactor: 1 });
       await spectator.goto(`${BASE}/`, { waitUntil: 'domcontentloaded' });
-      await spectator.waitForSelector('canvas.board', { timeout: 10_000 });
+      await spectator.waitForSelector('canvas[data-renderer="3d"]', { timeout: 10_000 });
       await spectator.waitForFunction(
-        () => document.querySelector('.live')?.getAttribute('data-status') === 'live',
+        () => document.querySelector('.ui-clock .live') !== null,
         { timeout: 15_000 },
       );
       const projection = (await getJSON('/api/projection')).body.result;
@@ -771,10 +771,10 @@ async function main() {
       assert(at, `the spectator renderer has no screen position for ${HUMAN_NICK} (#${humanId})`);
       await spectator.mouse.click(at.x, at.y);
       await spectator.waitForFunction(
-        () => document.querySelector('.kind-badge')?.textContent?.includes('人'),
+        () => document.querySelector('.ui-card .tag.h')?.textContent?.includes('人'),
         { timeout: 8_000 },
       );
-      const cardName = await spectator.$eval('.agent-card', (element) => element.textContent ?? '').catch(() => '');
+      const cardName = await spectator.$eval('.ui-card', (element) => element.textContent ?? '').catch(() => '');
       assert(cardName.includes(HUMAN_NICK), `the selected spectator card is not ${HUMAN_NICK}: ${cardName.slice(0, 120)}`);
       const spectatorTick = projection.tick;
       await screenshot(spectator, 'spectator-human-badge-1440.png', spectatorTick, `${HUMAN_NICK} selected, 人 badge`);
@@ -948,18 +948,18 @@ async function main() {
 
     await page.goto(`${BASE}/leaderboard?kind=human`, { waitUntil: 'domcontentloaded' });
     await page.waitForFunction(
-      (nick) => document.querySelector('.data-table')?.textContent?.includes(nick),
+      (nick) => document.querySelector('.win[data-window="leaderboard"] table')?.textContent?.includes(nick),
       { timeout: 10_000 },
       HUMAN_NICK,
     );
-    const humanBadge = await page.$$eval('.data-table .kind-badge', (badges) => badges.map((badge) => badge.textContent?.trim()));
+    const humanBadge = await page.$$eval('.win[data-window="leaderboard"] table .tag.h', (badges) => badges.map((badge) => badge.textContent?.trim()));
     assert(humanBadge.includes('人'), 'the human board row has no 人 badge');
     const boardTick = (await getJSON('/api/projection')).body.result.tick;
     await screenshot(page, 'leaderboard-human-1440.png', boardTick, '?kind=human');
 
     await page.goto(`${BASE}/leaderboard?kind=mixed`, { waitUntil: 'domcontentloaded' });
     await page.waitForFunction(
-      (nick) => document.querySelector('.data-table')?.textContent?.includes(nick),
+      (nick) => document.querySelector('.win[data-window="leaderboard"] table')?.textContent?.includes(nick),
       { timeout: 10_000 },
       HUMAN_NICK,
     );
@@ -967,16 +967,18 @@ async function main() {
 
     await page.goto(`${BASE}/leaderboard?kind=ai`, { waitUntil: 'domcontentloaded' });
     await page.waitForFunction(
-      () => document.querySelector('.data-table') || document.body.innerText.includes('暂无数据'),
+      () =>
+        document.querySelector('.win[data-window="leaderboard"] table') ||
+        document.querySelector('.win[data-window="leaderboard"]')?.innerText.includes('暂无数据'),
       { timeout: 10_000 },
     );
-    const aiBoardText = await page.evaluate(() => document.body.innerText);
+    const aiBoardText = await page.$eval('.win[data-window="leaderboard"]', (element) => element.innerText);
     assert(!aiBoardText.includes(HUMAN_NICK), 'the AI board page shows the human e2e-human');
     pass('the AI board page does not show the human');
 
     phase('stats');
     await page.goto(`${BASE}/stats`, { waitUntil: 'domcontentloaded' });
-    await page.waitForSelector('.stat-cards', { timeout: 10_000 });
+    await page.waitForSelector('.win[data-window="stats"] .tiles', { timeout: 10_000 });
     await page.click('[data-scope=mixed]');
     await page.waitForFunction(
       () => document.querySelector('[data-scope=mixed]')?.getAttribute('aria-selected') === 'true',
@@ -986,7 +988,7 @@ async function main() {
     assert(mixedStats.total_sessions > 0, 'the mixed stats total is empty');
     assert(mixedStats.human.sessions > 0, `the mixed human session count is ${mixedStats.human.sessions}`);
     assert(mixedStats.human.successes > 0, `the mixed human success count is ${mixedStats.human.successes}`);
-    const cardText = await page.$$eval('.kind-card', (cards) => cards.map((card) => card.textContent?.replace(/\s+/g, ' ').trim()));
+    const cardText = await page.$$eval('.win[data-window="stats"] .even > section', (cards) => cards.map((card) => card.textContent?.replace(/\s+/g, ' ').trim()));
     assert(cardText.length >= 2, `stats renders ${cardText.length} kind cards`);
     assert(cardText[1].includes(String(mixedStats.human.sessions)), 'the human stats card does not show its session count');
     await screenshot(page, 'stats-kinds-1440.png', boardTick, 'stats scope=有另一类在场');

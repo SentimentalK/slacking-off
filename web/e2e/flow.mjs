@@ -157,6 +157,27 @@ function assert(ok, message) {
   if (!ok) throw new Error(message);
 }
 
+async function waitForWindow(page, key) {
+  await page.waitForSelector(`.win[data-window="${key}"]`, { timeout: 10_000 });
+  // The window's Escape listener and close-button focus are set up in the same
+  // effect pass, so focus means the key handler is attached.
+  await until(
+    () => page.evaluate(() => document.activeElement?.classList.contains('win-close') === true),
+    { timeout: 10_000, label: `${key} window focus` },
+  );
+}
+
+async function waitForPath(page, pathname) {
+  await until(async () => new URL(page.url()).pathname === pathname, {
+    timeout: 10_000,
+    label: `path ${pathname}`,
+  });
+}
+
+async function waitForNoWindow(page, label) {
+  await until(async () => (await page.$('.win')) === null, { timeout: 5_000, label });
+}
+
 async function noHorizontalScroll(page, label) {
   const overflow = await page.evaluate(
     () => document.documentElement.scrollWidth - window.innerWidth,
@@ -225,33 +246,36 @@ async function main() {
 
     // --- negative: signed out /account -> /login ---------------------------
     await page.goto(`${BASE}/account`, { waitUntil: 'domcontentloaded' });
-    await page.waitForFunction(() => window.location.pathname === '/login', { timeout: 10_000 });
+    await waitForPath(page, '/login');
     await page.waitForSelector('input[name=username]');
     pass('signed-out /account redirects to /login');
 
     // The identity probe behind the nav must not bounce public pages.
     await page.goto(`${BASE}/`, { waitUntil: 'domcontentloaded' });
-    await page.waitForSelector('canvas.board', { timeout: 10_000 });
+    await page.waitForSelector('canvas[data-renderer="3d"]', { timeout: 10_000 });
     await sleep(500);
     assert(
       new URL(page.url()).pathname === '/',
       `the signed-out spectator was redirected to ${page.url()}`,
     );
-    const navText = await page.$eval('.nav', (element) => element.textContent);
-    assert(navText.includes('登录'), 'the signed-out nav does not offer 登录');
-    pass('public spectator stays put and the nav offers 登录');
+    const accountText = await page.$eval('[data-open="account"]', (element) => element.textContent.trim());
+    assert(accountText === '登录', `the signed-out account button reads ${accountText}, expected 登录`);
+    pass('public spectator stays put and the account button reads 登录');
 
     // --- register -----------------------------------------------------------
     const username = `e2e-${Date.now().toString(36).slice(-10)}`.slice(0, 16);
     const password = 'e2e-password-123';
-    await page.goto(`${BASE}/register`, { waitUntil: 'domcontentloaded' });
-    await page.waitForSelector('input[name=username]');
-    await page.type('input[name=username]', username);
-    await page.type('input[name=password]', password);
-    await page.click('button[type=submit]');
-    await page.waitForFunction(() => window.location.pathname === '/account', { timeout: 15_000 });
+    await page.click('[data-open="account"]');
+    await waitForWindow(page, 'login');
+    await page.click('.win[data-window="login"] a[href="/register"]');
+    await waitForWindow(page, 'register');
+    await page.waitForSelector('.win[data-window="register"] input[name=username]');
+    await page.type('.win[data-window="register"] input[name=username]', username);
+    await page.type('.win[data-window="register"] input[name=password]', password);
+    await page.click('.win[data-window="register"] button[type=submit]');
+    await waitForPath(page, '/account');
     await page.waitForFunction(
-      (name) => document.querySelector('.account-username')?.textContent?.includes(name),
+      (name) => document.querySelector('.win[data-window="account"] .nick')?.textContent?.includes(name),
       { timeout: 10_000 },
       username,
     );
@@ -323,16 +347,16 @@ async function main() {
     pass(`server advanced at least two ticks (from ${beforeTicks})`);
 
     await page.goto(`${BASE}/`, { waitUntil: 'domcontentloaded' });
-    await page.waitForSelector('canvas.board', { timeout: 10_000 });
+    await page.waitForSelector('canvas[data-renderer="3d"]', { timeout: 10_000 });
     await page.waitForFunction(
-      () => document.querySelector('.live')?.getAttribute('data-status') === 'live',
+      () => document.querySelector('.ui-clock .live') !== null,
       { timeout: 15_000 },
     );
     await page.waitForFunction(
       () => {
         const text = document.body.innerText;
         if (text.includes('e2e-bot')) return true;
-        const inside = document.querySelector('.stat-chips .chip b');
+        const inside = document.querySelector('.ui-navr .cnt b');
         return inside !== null && Number(inside.textContent?.split('/')[0]) >= 1;
       },
       { timeout: 15_000 },
@@ -359,6 +383,128 @@ async function main() {
     pass('live spectator shows the agent and a painted board');
     await screenshot(page, 'spectator-1440.png');
 
+    // --- shell: deep links, history, window features -----------------------
+    const boardRequests = [];
+    const statsRequests = [];
+    page.on('request', (request) => {
+      const url = request.url();
+      if (url.includes('/api/leaderboard')) boardRequests.push(url);
+      if (url.includes('/api/stats')) statsRequests.push(url);
+    });
+
+    const deepLinks = [
+      ['/leaderboard', 'leaderboard'],
+      ['/stats', 'stats'],
+      ['/account', 'account'],
+      [`/agent/${agent.agent_id}`, 'agent'],
+      ['/login', 'login'],
+      ['/register', 'register'],
+    ];
+    for (const [route, key] of deepLinks) {
+      await page.goto(`${BASE}${route}`, { waitUntil: 'domcontentloaded' });
+      await waitForWindow(page, key);
+      await page.waitForSelector('canvas[data-renderer="3d"]', { timeout: 10_000 });
+      await page.click('.win-close');
+      await waitForPath(page, '/');
+      await waitForNoWindow(page, `${route} closed`);
+      pass(`deep link ${route} opens the ${key} window; 关闭 returns to /`);
+    }
+
+    await page.goto(`${BASE}/`, { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('canvas[data-renderer="3d"]', { timeout: 10_000 });
+    await page.evaluate(() => {
+      window.__looCanvas = document.querySelector('canvas');
+    });
+    await page.click('[data-open="leaderboard"]');
+    await waitForPath(page, '/leaderboard');
+    await waitForWindow(page, 'leaderboard');
+    await page.goBack();
+    await waitForPath(page, '/');
+    await waitForNoWindow(page, 'back closes the window');
+    await page.goForward();
+    await waitForPath(page, '/leaderboard');
+    await waitForWindow(page, 'leaderboard');
+    await page.keyboard.press('Escape');
+    await waitForPath(page, '/');
+    await waitForNoWindow(page, 'Escape closes the window');
+    const sameCanvas = await page.evaluate(() => document.querySelector('canvas') === window.__looCanvas);
+    assert(sameCanvas, 'the 3D canvas element was replaced during back, forward and Escape');
+    pass('back, forward and Escape move the window with the URL and keep one canvas');
+
+    await page.goto(`${BASE}/leaderboard`, { waitUntil: 'domcontentloaded' });
+    await waitForWindow(page, 'leaderboard');
+    for (const kind of ['ai', 'human', 'mixed']) {
+      const before = boardRequests.length;
+      await page.click(`.win[data-window="leaderboard"] [data-board="${kind}"]`);
+      await until(
+        async () => boardRequests.slice(before).some((url) => new URL(url).searchParams.get('kind') === kind),
+        { timeout: 10_000, label: `leaderboard request for kind=${kind}` },
+      );
+      await page.waitForFunction(
+        (key) => document.querySelector(`.win[data-window="leaderboard"] [data-board="${key}"]`)?.classList.contains('on'),
+        { timeout: 5_000 },
+        kind,
+      );
+    }
+    pass('leaderboard AI, 人类 and 混合 each switch and request /api/leaderboard?kind=…');
+    await page.click('.win-close');
+    await waitForPath(page, '/');
+
+    await page.goto(`${BASE}/stats`, { waitUntil: 'domcontentloaded' });
+    await waitForWindow(page, 'stats');
+    await page.waitForSelector('.win[data-window="stats"] .tiles');
+    for (const scope of ['mixed', 'all']) {
+      await page.click(`.win[data-window="stats"] [data-scope="${scope}"]`);
+      await page.waitForFunction(
+        (key) => document.querySelector(`.win[data-window="stats"] [data-scope="${key}"]`)?.classList.contains('on'),
+        { timeout: 5_000 },
+        scope,
+      );
+    }
+    pass('stats scope switches between 全部会话 and 有另一类在场');
+    for (const prompt of ['on', 'off', 'any']) {
+      const before = statsRequests.length;
+      await page.click(`.win[data-window="stats"] [data-prompt="${prompt}"]`);
+      await until(
+        async () => statsRequests.slice(before).some((url) => new URL(url).searchParams.get('prompt') === prompt),
+        { timeout: 10_000, label: `stats request for prompt=${prompt}` },
+      );
+      await page.waitForFunction(
+        (key) => document.querySelector(`.win[data-window="stats"] [data-prompt="${key}"]`)?.classList.contains('on'),
+        { timeout: 5_000 },
+        prompt,
+      );
+    }
+    pass('stats prompt filter 全部 / 装了提示 / 没装提示 each switch and request /api/stats?prompt=…');
+    await page.click('.win-close');
+    await waitForPath(page, '/');
+
+    await page.goto(`${BASE}/agent/${agent.agent_id}`, { waitUntil: 'domcontentloaded' });
+    await waitForWindow(page, 'agent');
+    await page.waitForFunction(
+      () => document.querySelector('.win[data-window="agent"] .nick')?.textContent?.includes('e2e-bot'),
+      { timeout: 10_000 },
+    );
+    await page.waitForSelector('.win[data-window="agent"] table thead');
+    pass('档案 window lists the session table');
+    await page.click('.win-close');
+    await waitForPath(page, '/');
+
+    await page.goto(`${BASE}/`, { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('canvas[data-renderer="3d"]', { timeout: 10_000 });
+    await page.waitForFunction(
+      (id) => window.__looView?.screenOf(id) != null,
+      { timeout: 15_000 },
+      agent.agent_id,
+    );
+    const at = await page.evaluate((id) => window.__looView.screenOf(id), agent.agent_id);
+    await page.mouse.click(at.x, at.y);
+    await page.waitForFunction(
+      () => document.querySelector('.ui-card .nick')?.firstChild?.textContent?.trim() === 'e2e-bot',
+      { timeout: 5_000 },
+    );
+    pass('clicking the agent on the field selects it into the card');
+
     // --- replay / profile / leaderboard / stats ---------------------------
     const tick = await currentTick();
     await page.goto(`${BASE}/replay?tick=${tick}`, { waitUntil: 'domcontentloaded' });
@@ -372,20 +518,22 @@ async function main() {
 
     await page.goto(`${BASE}/agent/${agent.agent_id}`, { waitUntil: 'domcontentloaded' });
     await page.waitForFunction(
-      () => document.querySelector('.profile-nick')?.textContent?.includes('e2e-bot'),
+      () => document.querySelector('.win[data-window="agent"] .nick')?.textContent?.includes('e2e-bot'),
       { timeout: 10_000 },
     );
     await screenshot(page, 'profile-1440.png');
 
     await page.goto(`${BASE}/leaderboard`, { waitUntil: 'domcontentloaded' });
     await page.waitForFunction(
-      () => document.querySelector('.data-table') || document.body.innerText.includes('暂无数据'),
+      () =>
+        document.querySelector('.win[data-window="leaderboard"] table') ||
+        document.querySelector('.win[data-window="leaderboard"]')?.innerText.includes('暂无数据'),
       { timeout: 10_000 },
     );
     await screenshot(page, 'leaderboard-1440.png');
 
     await page.goto(`${BASE}/stats`, { waitUntil: 'domcontentloaded' });
-    await page.waitForSelector('.stat-cards', { timeout: 10_000 });
+    await page.waitForSelector('.win[data-window="stats"] .tiles', { timeout: 10_000 });
     await screenshot(page, 'stats-1440.png');
 
     // --- phone viewport ----------------------------------------------------
@@ -397,9 +545,9 @@ async function main() {
       hasTouch: true,
     });
     await page.goto(`${BASE}/`, { waitUntil: 'domcontentloaded' });
-    await page.waitForSelector('canvas.board', { timeout: 10_000 });
+    await page.waitForSelector('canvas[data-renderer="3d"]', { timeout: 10_000 });
     await page.waitForFunction(
-      () => document.querySelector('.live')?.getAttribute('data-status') === 'live',
+      () => document.querySelector('.ui-clock .live') !== null,
       { timeout: 15_000 },
     );
     await noHorizontalScroll(page, 'spectator at 390px');
@@ -474,7 +622,7 @@ async function main() {
     // --- SSE reconnect after a server restart -----------------------------
     await page.goto(`${BASE}/`, { waitUntil: 'domcontentloaded' });
     await page.waitForFunction(
-      () => document.querySelector('.live')?.getAttribute('data-status') === 'live',
+      () => document.querySelector('.ui-clock .live') !== null,
       { timeout: 15_000 },
     );
     const tickBeforeRestart = await currentTick();
@@ -482,16 +630,38 @@ async function main() {
     const restarted = startServer();
     assert(restarted.pid, 'restart did not produce a pid');
     await waitForHealth();
+    // A restarted server starts with an empty field, which the shell shows as
+    // the replay loop. Re-attach the same agent through the account window so
+    // the live projection, and with it the live TICK, comes back.
+    await page.click('[data-open="account"]');
+    await waitForWindow(page, 'account');
+    await page.waitForFunction(
+      () => document.querySelector('[data-testid=token-status]')?.textContent?.includes('已吊销'),
+      { timeout: 15_000 },
+    );
+    await page.click('[data-testid=token-action]');
+    await page.waitForSelector('[data-testid=install-command]', { timeout: 10_000 });
+    const rejoinCommand = await page.$eval('[data-testid=install-command]', (element) =>
+      element.textContent.trim(),
+    );
+    runShell(rejoinCommand, { LOO_HOME: HOME, LOO_BIN_DIR: BIN });
+    const reattached = run(
+      LOO,
+      ['register', '--name', 'e2e-bot', '--model', 'e2e-model', '--intro', 'e2e intro'],
+      { LOO_HOME: HOME },
+    );
+    assert(/attached/.test(reattached.stdout), `expected attached after restart, got:\n${reattached.stdout}`);
+    assert(run(LOO, ['join', '--sent-by', 'self', '--why', 'e2e why'], { LOO_HOME: HOME }).status === 0, 'loo join after restart failed');
+    await page.click('.win-close');
+    await waitForPath(page, '/');
+    await waitForNoWindow(page, 'account closed after restart');
     await page.waitForFunction(
       (before) => {
-        const status = document.querySelector('.live')?.getAttribute('data-status');
-        const chip = [...document.querySelectorAll('.stat-chips .mono')].find((element) =>
-          element.textContent?.startsWith('TICK'),
-        );
-        const tick = chip ? Number(chip.textContent.replace(/\D/g, '')) : 0;
-        return status === 'live' && tick > before;
+        const big = document.querySelector('.ui-clock .big');
+        const tick = big ? Number(big.textContent.replace(/\D/g, '')) : 0;
+        return document.querySelector('.ui-clock .countdown') !== null && tick > before;
       },
-      { timeout: 20_000 },
+      { timeout: 30_000 },
       tickBeforeRestart,
     );
     pass('SSE reconnected after restart and the tick continued growing');
