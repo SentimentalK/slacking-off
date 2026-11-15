@@ -8,9 +8,9 @@ use loo_core::{
     Action, Config, Event, EventKind, Object, ObjectCause, Session, SiteKind, WorldState,
 };
 use loo_proto::{
-    AgentId, AgentPose, Dir, EventTag, Need, ObjectKind, Pos, Projection, ProjectionAgent,
-    ProjectionCounts, ProjectionEvent, ProjectionObject, ProjectionQueueEntry, SentBy,
-    SessionOutcome, TerrainResponse, Tick,
+    AgentId, AgentPose, Dir, EventTag, Need, ObjectKind, ObjectsMode, Pos, Projection,
+    ProjectionAgent, ProjectionCounts, ProjectionEvent, ProjectionObject, ProjectionQueueEntry,
+    SentBy, SessionOutcome, TerrainResponse, Tick,
 };
 use std::collections::BTreeMap;
 
@@ -50,6 +50,8 @@ pub fn build(
         },
         agents: project_agents(cfg, world, agents),
         objects: project_objects(cfg, world),
+        objects_mode: ObjectsMode::Full,
+        objects_removed: Vec::new(),
         queue: project_queue(world),
         // Contract §2: settlement markers and queue heartbeats have no
         // user-facing meaning and would flood the live log.
@@ -64,6 +66,32 @@ pub fn build(
             .map(project_event)
             .collect(),
     }
+}
+
+/// What changed in the object table between two consecutive ticks.
+///
+/// Keyed by `pos`. The first vector holds objects that are new or differ from
+/// `prev`, in `next` order; the second holds positions present in `prev` but
+/// absent from `next`, in `prev` order. Both inputs come from
+/// `project_objects`, so both orders are y then x and the result is
+/// deterministic.
+pub fn delta_objects(
+    prev: &[ProjectionObject],
+    next: &[ProjectionObject],
+) -> (Vec<ProjectionObject>, Vec<Pos>) {
+    let before: BTreeMap<Pos, &ProjectionObject> = prev.iter().map(|o| (o.pos, o)).collect();
+    let after: std::collections::BTreeSet<Pos> = next.iter().map(|o| o.pos).collect();
+    let changed = next
+        .iter()
+        .filter(|object| before.get(&object.pos).map_or(true, |old| *old != *object))
+        .cloned()
+        .collect();
+    let removed = prev
+        .iter()
+        .map(|object| object.pos)
+        .filter(|pos| !after.contains(pos))
+        .collect();
+    (changed, removed)
 }
 
 /// `GET /api/terrain`: rows are y = 0..height, one character per x.

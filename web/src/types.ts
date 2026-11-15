@@ -130,7 +130,12 @@ export interface Projection {
   height: number;
   counts: ProjectionCounts;
   agents: ProjectionAgent[];
+  /** Whole object table; with `objects_mode: 'delta'`, only new/changed objects. */
   objects: ProjectionObject[];
+  /** SSE only. Omitted means `full` (and `/api/projection` is always full). */
+  objects_mode?: 'full' | 'delta';
+  /** `delta` only: positions whose object is gone since tick - 1. */
+  objects_removed?: Pos[];
   queue: ProjectionQueueEntry[];
   events: ProjectionEvent[];
 }

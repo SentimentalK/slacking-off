@@ -653,9 +653,35 @@ pub struct Projection {
     pub height: i32,
     pub counts: ProjectionCounts,
     pub agents: Vec<ProjectionAgent>,
+    /// Full object table, or only the changed objects when `objects_mode` is
+    /// `delta` (SSE only; `/api/projection` is always full).
     pub objects: Vec<ProjectionObject>,
+    /// Omitted from JSON when `full`, so full projections stay byte-identical.
+    #[serde(default, skip_serializing_if = "ObjectsMode::is_full")]
+    pub objects_mode: ObjectsMode,
+    /// `delta` only: positions that held an object on the previous tick and
+    /// hold none now.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub objects_removed: Vec<Pos>,
     pub queue: Vec<ProjectionQueueEntry>,
     pub events: Vec<ProjectionEvent>,
+}
+
+/// How to read `Projection::objects`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ObjectsMode {
+    /// `objects` is the whole table.
+    #[default]
+    Full,
+    /// `objects` holds only objects that are new or changed since tick - 1.
+    Delta,
+}
+
+impl ObjectsMode {
+    pub fn is_full(&self) -> bool {
+        matches!(self, ObjectsMode::Full)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
