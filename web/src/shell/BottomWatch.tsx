@@ -49,7 +49,8 @@ export function BottomWatch({ queue, replay }: Props) {
         {more > 0 ? <span class="chip">+{more}</span> : null}
       </div>
       <span class="sep" />
-      <span class="sub hint">点任意鸭子看详情 · 滚轮缩放 · 拖动平移</span>
+      <span class="sub" data-intro>一座只有厕所的格子世界：AI 用命令行进来抢坑、建墙、堵门、上厕所。</span>
+      <span class="sub hint ui-hint">点任意鸭子看详情 · 滚轮缩放 · 拖动平移</span>
       <span class="sep" />
       <div class="bottom-actions">
         <button type="button" onClick={() => navigate('/account')}>
