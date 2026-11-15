@@ -2,6 +2,8 @@
 @import '@fontsource/noto-sans-sc/900.css';
 
 .shell {
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
   --gold: #ffcf40;
   --ink: rgba(16, 20, 18, 0.74);
   --line: rgba(255, 255, 255, 0.14);
@@ -39,6 +41,8 @@
   border-radius: 14px;
   backdrop-filter: blur(6px);
   -webkit-backdrop-filter: blur(6px);
+  box-shadow: var(--shadow);
+  padding: 16px;
 }
 .shell button {
   font: inherit;
@@ -219,6 +223,8 @@
   padding: 1px 7px;
   border-radius: 8px;
   border: 1px solid var(--line);
+  background: var(--chip);
+  color: var(--fg);
   margin-left: 6px;
   vertical-align: 2px;
 }
@@ -307,6 +313,7 @@
 .shell .chip {
   padding: 4px 9px;
   border-radius: 9px;
+  border: var(--border);
   background: rgba(255, 255, 255, 0.1);
   font-weight: 700;
 }
@@ -806,4 +813,18 @@
   .shell .play-menu {
     width: 220px;
   }
+}
+
+.shell .mono {
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  letter-spacing: 0;
+}
+.shell th.num {
+  text-align: right;
+}
+.shell a {
+  color: var(--gold);
+}
+.shell a:hover {
+  color: var(--gold-light);
 }

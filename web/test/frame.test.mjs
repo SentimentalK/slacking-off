@@ -2,6 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { playProjection, visionGrid } from '../src/play/frame.ts';
 
+const MEMORY_VALUE = 110;
+const DARK_VALUE = 30;
 const W = 12;
 const H = 10;
 const WIN = { origin: { x: 0, y: 0 }, width: 9, height: 9 };
@@ -48,6 +50,18 @@ function state({ objects = [], agents = [], map }) {
 
 const at = (list, x, y) => list.find((o) => o.pos.x === x && o.pos.y === y);
 
+const FLAT = { width: W, height: H, entrance: { x: 0, y: 0 }, rows: Array.from({ length: H }, () => '.'.repeat(W)) };
+
+function terrainWith(wild) {
+  const rows = [];
+  for (let y = 0; y < H; y++) {
+    let row = '';
+    for (let x = 0; x < W; x++) row += wild(x, y) ? '~' : '.';
+    rows.push(row);
+  }
+  return { width: W, height: H, entrance: { x: 0, y: 0 }, rows };
+}
+
 test('objects outside the window come only from memory', () => {
   const s = state({
     objects: [obj('toilet', 2, 2, { level: 2 }), obj('pillar', 11, 1)],
@@ -63,7 +77,7 @@ test('objects outside the window come only from memory', () => {
       return '.';
     }),
   });
-  const p = playProjection(s, 5, W, H);
+  const p = playProjection(s, 5, W, H, FLAT);
   assert.equal(p.world, 5);
   assert.equal(p.tick, 7);
   assert.equal(p.width, W);
@@ -90,12 +104,43 @@ test('objects outside the window come only from memory', () => {
   assert.equal(at(p.objects, 11, 9), undefined, 'unmapped remembered cell yields no object');
 });
 
+test('unseen wilderness outside the window is a wall, unseen floor stays empty', () => {
+  const terrain = terrainWith((x, y) => (x === 10 && y === 0) || (x === 11 && y === 0) || (x === 10 && y === 1));
+  const s = state({
+    agents: [playAgent(1, 4, 4)],
+    map: memory(
+      (x, y) => {
+        if (x === 10 && y === 0) return '?';
+        if (x === 10 && y === 1) return '?';
+        if (x === 11 && y === 9) return '?';
+        return '.';
+      },
+      (x, y) => {
+        if (x === 10 && y === 0) return 0;
+        if (x === 11 && y === 9) return 0;
+        if (x === 10 && y === 1) return 3;
+        return 1;
+      },
+    ),
+  });
+  const p = playProjection(s, 5, W, H, terrain);
+  assert.deepEqual(
+    { kind: at(p.objects, 10, 0).kind, site: at(p.objects, 10, 0).site },
+    { kind: 'wall', site: null },
+    'unseen wilderness becomes a wall',
+  );
+  assert.equal(at(p.objects, 10, 1).kind, 'wall', 'a wilderness cell with an unknown glyph counts as unseen');
+  assert.equal(at(p.objects, 11, 0), undefined, 'a remembered wilderness cell keeps its remembered glyph');
+  assert.equal(at(p.objects, 11, 9), undefined, 'an unseen plain floor cell yields no object');
+  assert.equal(at(p.objects, 9, 9), undefined, 'a remembered plain floor cell yields no object');
+});
+
 test('remembered character letters do not create agents', () => {
   const s = state({
     agents: [playAgent(1, 4, 4)],
     map: memory((x, y) => (x === 10 && y === 2 ? 'a' : '.')),
   });
-  const p = playProjection(s, 5, W, H);
+  const p = playProjection(s, 5, W, H, FLAT);
   assert.deepEqual(p.agents.map((a) => a.id), [1]);
   assert.equal(p.agents[0].kind, 'ai');
   assert.equal(p.agents[0].sent_by, null);
@@ -122,6 +167,18 @@ test('vision grid gives 255 in window, 110 for remembered outside, 30 otherwise'
   assert.equal(counts.get(30), 36);
   assert.equal(g.values[0 * W + 0], 255);
   assert.equal(g.values[0 * W + 10], 110);
+});
+
+test('memory indexes seen_at relative to the grid origin', () => {
+  const map = {
+    grid: { origin: { x: 2, y: 1 }, width: 2, height: 2, rows: ['..', '..'], legend: [] },
+    seen_at: [[1, 0], [0, 0]],
+  };
+  const s = { ...state({ agents: [playAgent(1, 0, 0)], map }), window: { origin: { x: 0, y: 0 }, width: 1, height: 1 } };
+  const g = visionGrid(s, W, H);
+  assert.equal(g.values[1 * W + 2], MEMORY_VALUE);
+  assert.equal(g.values[1 * W + 3], DARK_VALUE);
+  assert.equal(g.values[2 * W + 2], DARK_VALUE);
 });
 
 test('vision grid without map is 30 outside the window', () => {

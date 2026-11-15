@@ -1,13 +1,26 @@
-import type { PlayState, Pos, Projection, ProjectionAgent, ProjectionObject } from '../types';
+import type { PlayState, Pos, Projection, ProjectionAgent, ProjectionObject, Terrain } from '../types';
 import type { VisionGrid } from '../world3d/types';
 
 const VISIBLE = 255;
 const MEMORY = 110;
 const DARK = 30;
+const WILDERNESS = '~';
+const KNOWN_MEMORY = /^[.:@#+'*x1-9a-z]$/;
 
 function inWindow(state: PlayState, x: number, y: number): boolean {
   const w = state.window;
   return x >= w.origin.x && y >= w.origin.y && x < w.origin.x + w.width && y < w.origin.y + w.height;
+}
+
+function memoryAt(state: PlayState, x: number, y: number): { char: string; seenAt: number } {
+  const grid = state.map?.grid;
+  if (!grid) return { char: '?', seenAt: 0 };
+  const row = y - grid.origin.y;
+  const col = x - grid.origin.x;
+  if (row < 0 || row >= grid.rows.length || col < 0 || col >= grid.rows[row].length) {
+    return { char: '?', seenAt: 0 };
+  }
+  return { char: grid.rows[row][col], seenAt: state.map?.seen_at?.[row]?.[col] ?? 0 };
 }
 
 function memoryObject(c: string, pos: Pos): ProjectionObject | null {
@@ -21,7 +34,13 @@ function memoryObject(c: string, pos: Pos): ProjectionObject | null {
   return null;
 }
 
-export function playProjection(state: PlayState, worldId: number, width: number, height: number): Projection {
+export function playProjection(
+  state: PlayState,
+  worldId: number,
+  width: number,
+  height: number,
+  terrain: Terrain,
+): Projection {
   const agents: ProjectionAgent[] = state.agents.map((a): ProjectionAgent => ({
     ...a,
     kind: 'ai',
@@ -30,16 +49,18 @@ export function playProjection(state: PlayState, worldId: number, width: number,
     score_total: 0,
   }));
   const objects: ProjectionObject[] = state.objects.filter((o) => inWindow(state, o.pos.x, o.pos.y));
-  const grid = state.map?.grid;
-  if (grid) {
-    grid.rows.forEach((line, row) => {
-      for (let col = 0; col < line.length; col++) {
-        const pos = { x: grid.origin.x + col, y: grid.origin.y + row };
-        if (inWindow(state, pos.x, pos.y)) continue;
-        const o = memoryObject(line[col], pos);
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      if (inWindow(state, x, y)) continue;
+      const pos = { x, y };
+      const { char, seenAt } = memoryAt(state, x, y);
+      if (seenAt > 0 && KNOWN_MEMORY.test(char)) {
+        const o = memoryObject(char, pos);
         if (o) objects.push(o);
+      } else if (terrain.rows[y]?.[x] === WILDERNESS) {
+        objects.push(memoryObject('#', pos)!);
       }
-    });
+    }
   }
   return {
     world: worldId,
@@ -57,12 +78,11 @@ export function playProjection(state: PlayState, worldId: number, width: number,
 
 export function visionGrid(state: PlayState, width: number, height: number): VisionGrid {
   const values = new Uint8Array(width * height);
-  const seen = state.map?.seen_at;
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
       const i = y * width + x;
       if (inWindow(state, x, y)) values[i] = VISIBLE;
-      else if ((seen?.[y]?.[x] ?? 0) > 0) values[i] = MEMORY;
+      else if (memoryAt(state, x, y).seenAt > 0) values[i] = MEMORY;
       else values[i] = DARK;
     }
   }

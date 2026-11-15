@@ -375,8 +375,8 @@ export function PlayMode({ terrain, top3, view, override, clickRef, cameraRef, b
     }
     const id = worldId ?? 0;
     override.current = {
-      cur: playProjection(state, id, W, H),
-      prev: play.prev ? playProjection(play.prev, id, W, H) : null,
+      cur: playProjection(state, id, W, H, terrain),
+      prev: play.prev ? playProjection(play.prev, id, W, H, terrain) : null,
       arrivedAt: play.arrivedAt,
       vision: visionGrid(state, W, H),
       selected: state.me.agent_id,

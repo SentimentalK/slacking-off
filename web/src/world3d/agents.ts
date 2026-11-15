@@ -18,6 +18,8 @@ const STAR_Y = 1.76;
 const ICON_NEAR = 33;
 const ICON_MAX = 2.6;
 const ICON_LIFT = 0.45;
+const NAME_H = 0.38;
+const NAME_LIFT = 0.55;
 const tmpIconAt = new THREE.Vector3();
 const ACCENTS = [
   '#f2c230',
@@ -208,7 +210,7 @@ class Actor {
     });
     this.textures.push(tex);
     const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthTest: false }));
-    sp.scale.set((2 * w) / 64, 2, 1);
+    sp.userData.aspect = w / 64;
     return sp;
   }
 
@@ -326,7 +328,9 @@ function drawActor(a: Actor, s: Snap, link: Snap | null, input: FrameInput, ctx:
     sel.scale.setScalar(1 + 0.08 * Math.sin(clock * 6));
     sel.visible = true;
     const name = a.get('name', () => a.nameSprite());
-    name.position.set(cx, 2.6, cz);
+    const aspect = name.userData.aspect as number;
+    name.position.set(cx, EYE_Y + NAME_LIFT * icon + lift, cz);
+    name.scale.set(NAME_H * aspect * icon, NAME_H * icon, 1);
     name.visible = true;
   }
 

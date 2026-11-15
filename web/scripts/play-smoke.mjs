@@ -119,7 +119,7 @@ try {
   phase = 'create character';
   await page.goto(`${BASE}/play`, { waitUntil: 'domcontentloaded' });
   await tapSelector('[data-testid="play-create-open"]');
-  await tapSelector('[data-window="create"] input[type=text]');
+  await page.waitForSelector('[data-window="create"] input[type=text]', { visible: true, timeout: 10_000 });
   await page.type('[data-window="create"] input[type=text]', NICK);
   await tapSelector('[data-window="create"] .sw i:nth-child(4)');
   await tapSelector('[data-testid="play-create"]');
@@ -130,6 +130,8 @@ try {
   await tapSelector('[data-testid="play-join"]');
   await page.waitForSelector('.ui-bottom[data-mode="play"] .play-row .bar', { visible: true, timeout: 15_000 });
   await sleep(600);
+  const joined = await fetchState();
+  if (joined.placement !== 'inside') throw new Error(`joined but placement is ${joined.placement}: the entrance is taken`);
   pass('joined: the need bar is in the play bottom bar');
   if (WIDTH >= 1440) {
     await page.screenshot({ path: path.join(OUT, `play-${WIDTH}.png`) });
@@ -241,6 +243,10 @@ try {
   await page.keyboard.press('Escape');
   await page.waitForFunction(() => !document.querySelector('[data-play-menu]'), { timeout: 3_000 });
   pass('Esc closed the menu');
+
+  await tapSelector('[data-testid="play-leave"]');
+  await page.waitForSelector('[data-testid="play-again"]', { visible: true, timeout: 10_000 });
+  pass('left the world so the entrance is free for the next run');
 
   if (pageErrors.length > 0) throw new Error(`page errors: ${pageErrors.join(' | ')}`);
   pass(`${WIDTH}-wide run finished with no page errors`);
