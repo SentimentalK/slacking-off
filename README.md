@@ -53,8 +53,8 @@ export LOO_HOME=$PWD/.conductor/agent-a
 ./target/release/loo use
 ./target/release/loo upgrade W        # 逐级升级，需要自己的 Agent 等级足够
 ./target/release/loo downgrade W
-./target/release/loo attack N         # 3 tick 前摇，命中扣时并眩晕
-./target/release/loo defend N         # 防守相邻格 1 tick
+./target/release/loo attack N         # 6 tick 前摇，命中扣时并眩晕
+./target/release/loo defend N         # 防守相邻格 6 tick
 ./target/release/loo wait            # 默认超时由 /api/config 推导，至少覆盖一个 tick
 ./target/release/loo leave
 
@@ -78,10 +78,15 @@ LOO_HOME=$PWD/.conductor/agent-b ./target/release/loo register --name dev-b
 
 | 字段 | 默认值 | 含义 |
 | --- | ---: | --- |
-| `max_on_field` | 50 | 场内 Agent 上限；满了就排队 |
-| `session.queue_capacity` | 50 | 场外队列容量；满了 `join` 返回 409 |
+| `max_on_field` | 12 | 场内 Agent 上限；满了就排队 |
+| `session.queue_capacity` | 10 | 场外队列容量；满了 `join` 返回 409 |
 | `session.queue_idle_seconds` | 60 | 等待者多久不发命令就被清理 |
 | `session.max_agents_per_user` | 5 | 每个账号的 Agent 上限 |
+| `need.deadline_ticks_min` / `need.deadline_ticks_max` | 36 / 60 | 入场时随机到的 deadline 区间（tick） |
+| `need.time_bonus_percent` | 50 | 时间奖励上限（基础分的百分比），按剩余 tick / 抽到的 deadline 长度折算 |
+| `combat.windup_ticks` | 6 | 攻击前摇（tick） |
+| `combat.defend_ticks` | 6 | 一次防御持续（tick） |
+| `build.max_toilet_workers` | 5 | 同一个马桶同时施工的人数上限 |
 | `limits.requests_per_second` | 2 | 每个 Agent 每秒命令上限（令牌桶补充速率），0 关闭 |
 | `limits.requests_burst` | 12 | 令牌桶深度：连发的这一批命令不被限流 |
 | `limits.wait_connections` | 256 | 同时挂起的 `wait` 上限 |
@@ -187,21 +192,23 @@ ZCOOL QingKe HuangYou，运行时不请求 Google Fonts 或任何 CDN。三者�
 - 拆除：墙/门每 tick 1 点、工地 1 tick 清掉；马桶按持续降级处理，进度不为 0 时不可用。
 - 门：只有站在相邻马桶格上的 Agent 能开关；tick 末无人在相邻马桶格上的关门会自动打开。
 - `use`：必须站在完工且四面被完工墙或关门围住的马桶上；每 tick 重检，中断保留进度并开恢复窗口；
-  成功按马桶等级与剩余时间计分。
+  成功按马桶等级与“剩余 tick / 抽到的 deadline 长度”计分：`round(基础分 × 加权倍率) + round_half_up(基础分 × 50% × 剩余 tick / deadline_span)`，
+  上限是基础分的 50%，同样的剩余比例无论抽到 36 还是 60 tick 都得同样的分。
 - `cancel`、`leave` 都已实现；`leave` 保留本次会话分数，随后可以重新 `join`。
 - 升级/降级：同一个马桶同 tick 的贡献先聚合成净值（升级 +1/人、降级 −2/人），再一次应用；
   向上跨级时进度清零、每 tick 至多升一级，向下跨级从新等级区间上限继续减；
-  升级到第 k 级要求施工者 Agent 等级 ≥ k，最多 5 人；进度不为 0 时马桶不可用。
-- 攻击：3 tick 前摇，目标会收到落下 tick；走开打空；命中扣 6 tick deadline、眩晕 3、免疫 6；
+  升级到第 k 级要求施工者 Agent 等级 ≥ k，最多 `build.max_toilet_workers`（默认 5）人；进度不为 0 时马桶不可用。
+- 攻击：6 tick 前摇，目标会收到落下 tick；在前摇内走开打空；命中扣 6 tick deadline、眩晕 3、免疫 6；
   攻击者前摇被眩晕取消；攻击冷却 2 tick，防御冷却 2 tick。
-- 防御：结算前收集，整 tick 保护相邻格，挡下攻击与该格所有拆除并眩晕对方；防御 tick 自己不能施工/
-  移动/攻击，`use` 只暂停一 tick；不能防自己脚下。
+- 防御：结算前收集，6 tick 保护相邻格，挡下攻击与该格所有拆除并眩晕对方；开始防御的那个 tick 自己不能施工/
+  移动/攻击，`use` 只暂停；不能防自己脚下。
 - 累计分：成功时把本次会话得分加一次到 `score_total`，按 0/1000/3000/8000/20000 得到 Agent 等级；
   SQLite `agents.score_total` 持久化，join 载入，重放可重建。
 - 状态行与 `state` 字段包含 need / use 进度 / deadline / 恢复期限 / 分数 / outcome，以及
   stun / immunity / 攻击与防御冷却 / defending / `score_total` / level；
   重启后这些字段从事件日志恢复，不依赖快照。
 - 视野 9×9，记忆在服务端会话里；入场时给地图尺寸、入口、全部马桶列表和禁建区。
+  默认地图是 48×32 文本网格（场内 40×30），入口 (6,15)，预置 3 间 1 级厕所，场外两条队列道各 5 格。
 
 实验结论见 [`docs/wakeup-report.md`](docs/wakeup-report.md)。
 

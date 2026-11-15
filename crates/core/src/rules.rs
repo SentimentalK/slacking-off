@@ -15,8 +15,6 @@ const NO_BUILD_AREA: &str = "that cell is in a no-build area";
 const NO_DOOR: &str = "there is no door there";
 const DOOR_PERMISSION: &str =
     "only an agent on an adjacent toilet cell can open or close this door";
-/// Design §4.7: at most this many agents may work one toilet at a time.
-const MAX_TOILET_WORKERS: usize = 5;
 
 /// Design §4.8: the highest threshold (from level 5 down to 1) that is at most
 /// `score_total`. Score 0 is level 1.
@@ -137,7 +135,7 @@ pub fn validate_attack_at(
     target_agent.ok_or_else(|| NO_TARGET.to_string())
 }
 
-/// Design §5: a defence covers one adjacent cell for one tick. It needs no
+/// Design §5: a defence covers one adjacent cell for `defend_ticks` ticks. It needs no
 /// cooldown check for the *target* cell, only the agent's own cooldown.
 pub fn validate_defend(world: &WorldState, agent: AgentId, target: Pos) -> Result<(), String> {
     validate_defend_at(world, agent, target, world.tick)
@@ -223,7 +221,7 @@ pub fn validate_upgrade(
     world: &WorldState,
     agent: AgentId,
     target: Pos,
-    _cfg: &Config,
+    cfg: &Config,
 ) -> Result<(), String> {
     let (level, _) = toilet_state_for(world, agent, target, "upgrade")?;
     if level >= 5 {
@@ -239,7 +237,7 @@ pub fn validate_upgrade(
         ));
     }
     let workers = other_workers(world, agent, target);
-    if workers >= MAX_TOILET_WORKERS {
+    if workers >= cfg.build.max_toilet_workers {
         return Err(format!(
             "this toilet already has {workers} workers (the maximum); wait for one to finish"
         ));
@@ -250,13 +248,18 @@ pub fn validate_upgrade(
 /// Downgrading has no level requirement. A level-1 toilet with no progress left
 /// is a demolition target instead; one that still carries progress from an
 /// earlier level keeps its downgrade running until the progress reaches zero.
-pub fn validate_downgrade(world: &WorldState, agent: AgentId, target: Pos) -> Result<(), String> {
+pub fn validate_downgrade(
+    world: &WorldState,
+    agent: AgentId,
+    target: Pos,
+    cfg: &Config,
+) -> Result<(), String> {
     let (level, progress) = toilet_state_for(world, agent, target, "downgrade")?;
     if level == 1 && progress == 0 {
         return Err("this toilet is already level 1; use demolish to remove it".to_string());
     }
     let workers = other_workers(world, agent, target);
-    if workers >= MAX_TOILET_WORKERS {
+    if workers >= cfg.build.max_toilet_workers {
         return Err(format!(
             "this toilet already has {workers} workers (the maximum); wait for one to finish"
         ));
@@ -377,8 +380,15 @@ pub fn weighted_score(base: u32, levels: &[u8], cfg: &Config) -> u32 {
     weighted.min(u64::from(u32::MAX)) as u32
 }
 
+/// Rounds `numerator / denominator` half up, in integer arithmetic.
+fn rounded_ratio(numerator: u64, denominator: u64) -> u64 {
+    (numerator + denominator / 2) / denominator
+}
+
 /// The base score for the need, weighted by the toilets actually used, plus the
-/// configured bonus for every tick left before the deadline.
+/// time bonus: the configured percent of the base, scaled by the fraction of the
+/// drawn deadline that was still left. A session without a span (an old
+/// snapshot, or a scenario builder) earns no time bonus.
 pub fn session_score(session: &Session, cfg: &Config, success_tick: Tick) -> u32 {
     let base = match session.need {
         Some(Need::Urine) => cfg.need.base_score_urine,
@@ -386,9 +396,15 @@ pub fn session_score(session: &Session, cfg: &Config, success_tick: Tick) -> u32
         None => 0,
     };
     let weighted = u64::from(weighted_score(base, &session.use_levels, cfg));
-    let time_bonus = session
-        .deadline
-        .saturating_sub(success_tick)
-        .saturating_mul(u64::from(cfg.need.time_bonus_per_tick));
-    (weighted + time_bonus).min(u64::from(u32::MAX)) as u32
+    let span = session.deadline_span;
+    let bonus = if span == 0 {
+        0
+    } else {
+        let remaining = session.deadline.saturating_sub(success_tick);
+        let numerator = u64::from(base)
+            .saturating_mul(u64::from(cfg.need.time_bonus_percent))
+            .saturating_mul(remaining);
+        rounded_ratio(numerator, 100 * span)
+    };
+    (weighted + bonus).min(u64::from(u32::MAX)) as u32
 }

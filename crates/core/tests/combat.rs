@@ -300,7 +300,7 @@ fn run_until(
 }
 
 #[test]
-fn attack_windup_three_ticks_and_target_is_notified() {
+fn attack_windup_six_ticks_and_target_is_notified() {
     let cfg = Config::default();
     let world = duel();
 
@@ -318,15 +318,15 @@ fn attack_windup_three_ticks_and_target_is_notified() {
             assert_eq!(*agent, 1);
             assert_eq!(*target_agent, 2);
             assert_eq!(*at, B_POS);
-            assert_eq!(*land_tick, 4, "three ticks of windup from tick 1");
-            assert_eq!(*cooldown_until, 7);
+            assert_eq!(*land_tick, 7, "six ticks of windup from tick 1");
+            assert_eq!(*cooldown_until, 10);
         }
         other => panic!("expected AttackStarted, got {other:?}"),
     }
     assert_eq!(started.at(), Some(B_POS));
     assert_eq!(
         started.text(),
-        "dev-1 attacks dev-2 at (3,1); the hit lands at tick 4"
+        "dev-1 attacks dev-2 at (3,1); the hit lands at tick 7"
     );
     assert!(
         started.visible_to(2, Some(B_POS), &cfg),
@@ -337,30 +337,33 @@ fn attack_windup_three_ticks_and_target_is_notified() {
         Some(Action::Attack {
             target_agent: 2,
             target_pos: B_POS,
-            land_tick: 4,
+            land_tick: 7,
             label: "attack the agent at (3,1)".to_string(),
         })
     );
 
-    let (w2, e2) = step(&w1, &[], 7, &cfg);
-    assert_eq!(
-        count(&e2, |kind| matches!(kind, EventKind::AttackLanded { .. })),
-        0
-    );
-    let (w3, e3) = step(&w2, &[], 7, &cfg);
-    assert_eq!(
-        count(&e3, |kind| matches!(kind, EventKind::AttackLanded { .. })),
-        0
-    );
-    assert_eq!(deadline_of(&w3, 2), 200, "the windup costs nothing yet");
+    let mut world = w1;
+    for tick in 2..=6 {
+        let (next, events) = step(&world, &[], 7, &cfg);
+        assert_eq!(
+            count(&events, |kind| matches!(
+                kind,
+                EventKind::AttackLanded { .. }
+            )),
+            0,
+            "tick {tick} is still inside the windup"
+        );
+        world = next;
+    }
+    assert_eq!(deadline_of(&world, 2), 200, "the windup costs nothing yet");
 
-    let (w4, e4) = step(&w3, &[], 7, &cfg);
+    let (w7, e7) = step(&world, &[], 7, &cfg);
     assert_eq!(
-        count(&e4, |kind| matches!(kind, EventKind::AttackLanded { .. })),
+        count(&e7, |kind| matches!(kind, EventKind::AttackLanded { .. })),
         1,
-        "the hit lands on tick 4: {e4:?}"
+        "the hit lands on tick 7: {e7:?}"
     );
-    assert!(w4.agents[&1].action.is_none(), "the attack is spent");
+    assert!(w7.agents[&1].action.is_none(), "the attack is spent");
 }
 
 #[test]
@@ -372,9 +375,13 @@ fn target_walking_away_misses() {
     let (w2, _) = step(&w1, &[move_intent(2, &[Dir::E, Dir::E])], 3, &cfg);
     let (w3, _) = step(&w2, &[], 3, &cfg);
     assert_eq!(pos_of(&w3, 2), Pos::new(5, 1), "the target walked away");
+    let mut world = w3;
+    for _ in 4..=6 {
+        world = step(&world, &[], 3, &cfg).0;
+    }
 
-    let (w4, e4) = step(&w3, &[], 3, &cfg);
-    let missed = find_event(&e4, |kind| matches!(kind, EventKind::AttackMissed { .. }));
+    let (w7, e7) = step(&world, &[], 3, &cfg);
+    let missed = find_event(&e7, |kind| matches!(kind, EventKind::AttackMissed { .. }));
     match &missed.kind {
         EventKind::AttackMissed {
             reason,
@@ -391,16 +398,16 @@ fn target_walking_away_misses() {
         }
         other => panic!("expected AttackMissed, got {other:?}"),
     }
-    assert_eq!(deadline_of(&w4, 2), 200, "a miss costs no deadline");
-    assert_eq!(w4.agents[&2].stun_until, 0, "a miss does not stun");
+    assert_eq!(deadline_of(&w7, 2), 200, "a miss costs no deadline");
+    assert_eq!(w7.agents[&2].stun_until, 0, "a miss does not stun");
     assert_eq!(
-        count(&e4, |kind| matches!(kind, EventKind::AttackLanded { .. })),
+        count(&e7, |kind| matches!(kind, EventKind::AttackLanded { .. })),
         0
     );
-    assert!(w4.agents[&1].action.is_none(), "the attack is spent");
+    assert!(w7.agents[&1].action.is_none(), "the attack is spent");
 
-    let restored = restore(&Snapshot::new(w3.clone()), &e4, &cfg).expect("the miss restores");
-    let diffs = diff_worlds(&w4, &restored);
+    let restored = restore(&Snapshot::new(world), &e7, &cfg).expect("the miss restores");
+    let diffs = diff_worlds(&w7, &restored);
     assert!(diffs.is_empty(), "miss restore differs: {diffs:?}");
 }
 
@@ -408,10 +415,10 @@ fn target_walking_away_misses() {
 fn hit_costs_deadline_stuns_and_immunizes() {
     let cfg = Config::default();
     let world = duel();
-    let (world, per_tick) = run_until(&world, &[attack_intent(1, B_POS)], 4, 5, &cfg);
-    assert_eq!(world.tick, 4);
+    let (world, per_tick) = run_until(&world, &[attack_intent(1, B_POS)], 7, 5, &cfg);
+    assert_eq!(world.tick, 7);
 
-    let landed = find_event(&per_tick[3], |kind| {
+    let landed = find_event(&per_tick[6], |kind| {
         matches!(kind, EventKind::AttackLanded { .. })
     });
     match &landed.kind {
@@ -426,37 +433,37 @@ fn hit_costs_deadline_stuns_and_immunizes() {
             assert_eq!(*penalty, 6);
             assert_eq!(*deadline, 194);
             assert_eq!(*at, B_POS);
-            assert_eq!(*stun_until, 8);
-            assert_eq!(*immunity_until, 11);
+            assert_eq!(*stun_until, 11);
+            assert_eq!(*immunity_until, 14);
         }
         other => panic!("expected AttackLanded, got {other:?}"),
     }
     assert_eq!(deadline_of(&world, 2), 194);
-    assert_eq!(world.agents[&2].stun_until, 8);
-    assert_eq!(world.agents[&2].immunity_until, 11);
+    assert_eq!(world.agents[&2].stun_until, 11);
+    assert_eq!(world.agents[&2].immunity_until, 14);
     assert_eq!(
         landed.text(),
-        "dev-1 hit dev-2 at (3,1): deadline -6 to 194, stunned until 8, immune until 11"
+        "dev-1 hit dev-2 at (3,1): deadline -6 to 194, stunned until 11, immune until 14"
     );
     assert!(world.agents[&2].action.is_none());
-    assert!(is_stunned(&world.agents[&2], 5));
+    assert!(is_stunned(&world.agents[&2], 8));
     assert!(
-        !is_stunned(&world.agents[&2], 8),
+        !is_stunned(&world.agents[&2], 11),
         "the stun ends at its tick"
     );
 
-    // Tick 5: the stunned target cannot act at all.
-    let (w5, e5) = step(&world, &[move_intent(2, &[Dir::E])], 5, &cfg);
-    assert_eq!(pos_of(&w5, 2), B_POS, "a stunned agent does not move");
+    // Tick 8: the stunned target cannot act at all.
+    let (w8, e8) = step(&world, &[move_intent(2, &[Dir::E])], 5, &cfg);
+    assert_eq!(pos_of(&w8, 2), B_POS, "a stunned agent does not move");
     assert_eq!(
-        count(&e5, |kind| matches!(kind, EventKind::ActionRejected { .. })),
+        count(&e8, |kind| matches!(kind, EventKind::ActionRejected { .. })),
         1
     );
     assert!(
-        rejection_reason(&e5, 2).contains("stunned until tick 8"),
-        "the rejection names the stun: {e5:?}"
+        rejection_reason(&e8, 2).contains("stunned until tick 11"),
+        "the rejection names the stun: {e8:?}"
     );
-    assert_eq!(w5.agents[&2].action, None);
+    assert_eq!(w8.agents[&2].action, None);
 }
 
 #[test]
@@ -469,30 +476,30 @@ fn immunity_blocks_a_second_hit() {
     cfg.combat.immunity_ticks = 12;
     let world = duel();
 
-    let (w4, per_tick) = run_until(&world, &[attack_intent(1, B_POS)], 4, 9, &cfg);
+    let (w7, per_tick) = run_until(&world, &[attack_intent(1, B_POS)], 7, 9, &cfg);
     assert_eq!(
-        count(&per_tick[3], |kind| matches!(
+        count(&per_tick[6], |kind| matches!(
             kind,
             EventKind::AttackLanded { .. }
         )),
         1
     );
-    assert_eq!(deadline_of(&w4, 2), 194);
-    assert_eq!(w4.agents[&2].stun_until, 6);
-    assert_eq!(w4.agents[&2].immunity_until, 17);
+    assert_eq!(deadline_of(&w7, 2), 194);
+    assert_eq!(w7.agents[&2].stun_until, 9);
+    assert_eq!(w7.agents[&2].immunity_until, 20);
 
-    let (w5, _) = step(&w4, &[], 9, &cfg);
-    let (w6, _) = step(&w5, &[], 9, &cfg);
-    let (w7, e7) = step(&w6, &[attack_intent(1, B_POS)], 9, &cfg);
+    let (w8, _) = step(&w7, &[], 9, &cfg);
+    let (w9, _) = step(&w8, &[], 9, &cfg);
+    let (w10, e10) = step(&w9, &[attack_intent(1, B_POS)], 9, &cfg);
     assert_eq!(
-        count(&e7, |kind| matches!(kind, EventKind::AttackStarted { .. })),
+        count(&e10, |kind| matches!(kind, EventKind::AttackStarted { .. })),
         1,
-        "the cooldown allows the next attack at tick 7: {e7:?}"
+        "the cooldown allows the next attack at tick 10: {e10:?}"
     );
 
-    let mut world = w7;
+    let mut world = w10;
     let mut last = Vec::new();
-    for _ in 8..=10 {
+    for _ in 11..=16 {
         let (next, events) = step(&world, &[], 9, &cfg);
         world = next;
         last = events;
@@ -509,7 +516,7 @@ fn immunity_blocks_a_second_hit() {
         194,
         "the immune target loses nothing"
     );
-    assert_eq!(world.agents[&2].stun_until, 6, "no second stun");
+    assert_eq!(world.agents[&2].stun_until, 9, "no second stun");
     assert_eq!(
         count(&last, |kind| matches!(kind, EventKind::AttackLanded { .. })),
         0
@@ -536,7 +543,7 @@ fn stunned_attacker_loses_the_windup() {
         })
         .expect("some seed settles the third agent before the attacker");
 
-    // Both attacks are committed on tick 1 and would land on tick 4; the third
+    // Both attacks are committed on tick 1 and would land on tick 7; the third
     // agent resolves first, so the first attack dies in its windup.
     let (w1, _) = step(
         &base,
@@ -544,24 +551,26 @@ fn stunned_attacker_loses_the_windup() {
         seed,
         &cfg,
     );
-    let (w2, _) = step(&w1, &[], seed, &cfg);
-    let (w3, _) = step(&w2, &[], seed, &cfg);
-    let (w4, e4) = step(&w3, &[], seed, &cfg);
+    let mut world = w1;
+    for _ in 2..=6 {
+        world = step(&world, &[], seed, &cfg).0;
+    }
+    let (w7, e7) = step(&world, &[], seed, &cfg);
 
     assert_eq!(
-        count(&e4, |kind| matches!(
+        count(&e7, |kind| matches!(
             kind,
             EventKind::AttackLanded { agent, .. } if *agent == 1
         )),
         0,
-        "the first attack never lands: {e4:?}"
+        "the first attack never lands: {e7:?}"
     );
-    assert!(w4.agents[&1].action.is_none(), "the windup was cleared");
-    assert_eq!(deadline_of(&w4, 2), 200, "the target was never hit");
-    assert_eq!(w4.agents[&2].stun_until, 0);
-    assert_eq!(w4.agents[&1].stun_until, 8, "the third agent stunned it");
+    assert!(w7.agents[&1].action.is_none(), "the windup was cleared");
+    assert_eq!(deadline_of(&w7, 2), 200, "the target was never hit");
+    assert_eq!(w7.agents[&2].stun_until, 0);
+    assert_eq!(w7.agents[&1].stun_until, 11, "the third agent stunned it");
     let cancelled = find_event(
-        &e4,
+        &e7,
         |kind| matches!(kind, EventKind::AttackCancelled { agent, .. } if *agent == 1),
     );
     match &cancelled.kind {
@@ -622,12 +631,14 @@ fn defend_blocks_attack_and_stuns_attacker_in_any_order() {
     for seed in 0..64u64 {
         let world = duel();
         let (w1, _) = step(&world, &[attack_intent(1, B_POS)], seed, &cfg);
-        let (w2, _) = step(&w1, &[], seed, &cfg);
-        let (w3, _) = step(&w2, &[], seed, &cfg);
+        let mut world = w1;
+        for _ in 2..=6 {
+            world = step(&world, &[], seed, &cfg).0;
+        }
         // The defender commits on the landing tick.
-        let (w4, e4) = step(&w3, &[defend_intent(3, B_POS)], seed, &cfg);
+        let (w7, e7) = step(&world, &[defend_intent(3, B_POS)], seed, &cfg);
 
-        let blocked = find_event(&e4, |kind| matches!(kind, EventKind::AttackBlocked { .. }));
+        let blocked = find_event(&e7, |kind| matches!(kind, EventKind::AttackBlocked { .. }));
         match &blocked.kind {
             EventKind::AttackBlocked {
                 agent,
@@ -641,29 +652,29 @@ fn defend_blocks_attack_and_stuns_attacker_in_any_order() {
                 assert_eq!(*target_agent, 2);
                 assert_eq!(*at, B_POS);
                 assert_eq!(*defender_agent, 3);
-                assert_eq!(*stun_until, 8);
+                assert_eq!(*stun_until, 11);
             }
             other => panic!("expected AttackBlocked, got {other:?}"),
         }
         assert_eq!(
-            count(&e4, |kind| matches!(kind, EventKind::AttackLanded { .. })),
+            count(&e7, |kind| matches!(kind, EventKind::AttackLanded { .. })),
             0
         );
-        assert_eq!(w4.agents[&1].stun_until, 8, "the attacker pays the stun");
-        assert!(w4.agents[&1].action.is_none());
-        assert_eq!(deadline_of(&w4, 2), 200, "the defended target is untouched");
-        assert_eq!(w4.agents[&2].stun_until, 0);
+        assert_eq!(w7.agents[&1].stun_until, 11, "the attacker pays the stun");
+        assert!(w7.agents[&1].action.is_none());
+        assert_eq!(deadline_of(&w7, 2), 200, "the defended target is untouched");
+        assert_eq!(w7.agents[&2].stun_until, 0);
         assert!(
             blocked.visible_to(3, Some(C_POS), &cfg),
             "the defender must see its own block"
         );
         assert_eq!(
             blocked.text(),
-            "dev-3 blocked dev-1's attack on dev-2 at (3,1); dev-1 is stunned until 8"
+            "dev-3 blocked dev-1's attack on dev-2 at (3,1); dev-1 is stunned until 11"
         );
 
-        let restored = restore(&Snapshot::new(w3.clone()), &e4, &cfg).expect("the block restores");
-        let diffs = diff_worlds(&w4, &restored);
+        let restored = restore(&Snapshot::new(world), &e7, &cfg).expect("the block restores");
+        let diffs = diff_worlds(&w7, &restored);
         assert!(diffs.is_empty(), "block restore differs: {diffs:?}");
 
         let order = settlement_order(&[1, 2, 3], seed);
@@ -815,18 +826,49 @@ fn defend_tick_pauses_use_without_interrupting_it() {
         0,
         "nothing ends a defence inside its own tick"
     );
-
-    let (w3, e3) = step(&w2, &[], 4, &cfg);
-    assert_eq!(w3.sessions[&session].use_ticks_done, 2, "the use resumes");
     assert_eq!(
-        count(&e3, |kind| matches!(kind, EventKind::UseProgressed { .. })),
+        w2.agents[&1].defend_until, 8,
+        "a defence settled on tick 2 covers ticks 2 through 7"
+    );
+
+    // Ticks 3 to 7 stay paused: the shield is still in force.
+    let mut world = w2;
+    for tick in 3..=7 {
+        let (next, events) = step(&world, &[], 4, &cfg);
+        assert_eq!(
+            next.sessions[&session].use_ticks_done, 1,
+            "the use is paused on tick {tick}"
+        );
+        assert_eq!(
+            count(&events, |kind| matches!(
+                kind,
+                EventKind::UseProgressed { .. }
+            )),
+            0
+        );
+        assert_eq!(next.agents[&1].defending, Some(Pos::new(3, 0)));
+        assert_eq!(
+            count(&events, |kind| matches!(
+                kind,
+                EventKind::DefendEnded { .. }
+            )),
+            0
+        );
+        world = next;
+    }
+
+    // Tick 8 is at defend_until: the shield lapses and the use resumes.
+    let (w8, e8) = step(&world, &[], 4, &cfg);
+    assert_eq!(w8.sessions[&session].use_ticks_done, 2, "the use resumes");
+    assert_eq!(
+        count(&e8, |kind| matches!(kind, EventKind::UseProgressed { .. })),
         1
     );
     assert_eq!(
-        w3.agents[&1].defending, None,
-        "the next tick expires the defence"
+        w8.agents[&1].defending, None,
+        "the shield ended at its until tick"
     );
-    let ended = find_event(&e3, |kind| matches!(kind, EventKind::DefendEnded { .. }));
+    let ended = find_event(&e8, |kind| matches!(kind, EventKind::DefendEnded { .. }));
     assert_eq!(ended.text(), "dev-1 stopped defending");
     assert_eq!(ended.at(), None);
 }
@@ -849,26 +891,29 @@ fn defend_cooldown_two_ticks() {
             ..
         } => {
             assert_eq!(*at, target);
-            assert_eq!(*until, 2, "the shield covers this tick only");
+            assert_eq!(*until, 7, "six ticks of shield from tick 1");
             assert_eq!(*cooldown_until, 4);
         }
         other => panic!("expected DefendStarted, got {other:?}"),
     }
     assert_eq!(
         started.text(),
-        "dev-1 defends (2,0) this tick; defend cooldown until tick 4"
+        "dev-1 defends (2,0) until tick 7; defend cooldown until tick 4"
     );
     assert_eq!(
         count(&e1, |kind| matches!(kind, EventKind::DefendEnded { .. })),
         0,
-        "the defence lapses at the start of the next tick, not inside its own"
+        "nothing ends a defence inside its own tick"
     );
 
     let (w2, e2) = step(&w1, &[defend_intent(1, target)], 8, &cfg);
-    let ended = find_event(&e2, |kind| matches!(kind, EventKind::DefendEnded { .. }));
-    assert_eq!(ended.text(), "dev-1 stopped defending");
-    assert_eq!(ended.at(), None);
-    assert_eq!(w2.agents[&1].defending, None);
+    assert_eq!(
+        count(&e2, |kind| matches!(kind, EventKind::DefendEnded { .. })),
+        0,
+        "tick 2 is still inside the six-tick shield"
+    );
+    assert_eq!(w2.agents[&1].defending, Some(target));
+    assert_eq!(w2.agents[&1].defend_until, 7);
     assert_eq!(
         count(&e2, |kind| matches!(kind, EventKind::DefendStarted { .. })),
         0,
@@ -893,6 +938,124 @@ fn defend_cooldown_two_ticks() {
         "tick 4 is off cooldown again"
     );
     assert_eq!(w4.agents[&1].defend_cooldown_until, 7);
+    assert_eq!(
+        w4.agents[&1].defend_until, 10,
+        "renewing the shield resets its end"
+    );
+}
+
+#[test]
+fn defence_covers_six_ticks() {
+    let cfg = Config::default();
+
+    // A shield settled on tick 2 is in force on ticks 2..=7. An attack committed
+    // on tick 1 lands on tick 7, so this shield catches it.
+    let (w1, _) = step(&duel(), &[attack_intent(1, B_POS)], 21, &cfg);
+    let (w2, _) = step(&w1, &[defend_intent(3, B_POS)], 21, &cfg);
+    assert_eq!(w2.agents[&3].defend_until, 8);
+    let mut world = w2;
+    for _ in 3..=6 {
+        world = step(&world, &[], 21, &cfg).0;
+    }
+    let (w7, e7) = step(&world, &[], 21, &cfg);
+    assert_eq!(
+        count(&e7, |kind| matches!(kind, EventKind::AttackBlocked { .. })),
+        1,
+        "the shield is still in force on the landing tick"
+    );
+    assert_eq!(
+        count(&e7, |kind| matches!(kind, EventKind::AttackLanded { .. })),
+        0
+    );
+    assert_eq!(deadline_of(&w7, 2), 200);
+
+    // The same shield, but the attack is committed one tick later and lands on
+    // tick 8, after the shield expired at the start of tick 8.
+    let (b1, _) = step(&duel(), &[], 21, &cfg);
+    let (b2, _) = step(
+        &b1,
+        &[attack_intent(1, B_POS), defend_intent(3, B_POS)],
+        21,
+        &cfg,
+    );
+    assert_eq!(b2.agents[&3].defend_until, 8);
+    let mut world = b2;
+    for _ in 3..=7 {
+        world = step(&world, &[], 21, &cfg).0;
+    }
+    let (b8, e8) = step(&world, &[], 21, &cfg);
+    assert_eq!(
+        count(&e8, |kind| matches!(kind, EventKind::AttackBlocked { .. })),
+        0,
+        "tick 8 is outside the six-tick window"
+    );
+    assert_eq!(
+        count(&e8, |kind| matches!(kind, EventKind::AttackLanded { .. })),
+        1
+    );
+    assert_eq!(deadline_of(&b8, 2), 194);
+}
+
+#[test]
+fn walking_away_inside_the_windup_makes_the_attack_miss() {
+    let cfg = Config::default();
+    // The target settles before the attacker, so a move on the landing tick is
+    // already done when the hit resolves.
+    let seed = (0..64u64)
+        .find(|seed| {
+            rank(&settlement_order(&[1, 2, 3], *seed), 2)
+                < rank(&settlement_order(&[1, 2, 3], *seed), 1)
+        })
+        .expect("some seed settles the target before the attacker");
+
+    for move_delay in 1..=6u64 {
+        let move_tick = 1 + move_delay;
+        let mut world = duel();
+        let (w1, _) = step(&world, &[attack_intent(1, B_POS)], seed, &cfg);
+        world = w1;
+        let mut at_landing = Vec::new();
+        for tick in 2..=7 {
+            let intents = if tick == move_tick {
+                vec![move_intent(2, &[Dir::E])]
+            } else {
+                Vec::new()
+            };
+            let (next, events) = step(&world, &intents, seed, &cfg);
+            world = next;
+            if tick == 7 {
+                at_landing = events;
+            }
+        }
+        assert_eq!(
+            count(&at_landing, |kind| matches!(
+                kind,
+                EventKind::AttackLanded { .. }
+            )),
+            0,
+            "a target that moved {move_delay} ticks into the windup was not hit"
+        );
+        let missed = find_event(&at_landing, |kind| {
+            matches!(kind, EventKind::AttackMissed { .. })
+        });
+        match &missed.kind {
+            EventKind::AttackMissed { reason, .. } => assert!(
+                reason.contains("out of reach"),
+                "move_delay {move_delay}: {reason}"
+            ),
+            other => panic!("expected AttackMissed, got {other:?}"),
+        }
+    }
+
+    // The control world never moves: the same attack must land.
+    let (_, per_tick) = run_until(&duel(), &[attack_intent(1, B_POS)], 7, seed, &cfg);
+    assert_eq!(
+        count(&per_tick[6], |kind| matches!(
+            kind,
+            EventKind::AttackLanded { .. }
+        )),
+        1,
+        "a target that stands still is hit on the landing tick"
+    );
 }
 
 #[test]
@@ -996,38 +1159,40 @@ fn attack_cooldown_until_after_windup() {
     place(&mut world, 4, NORTH_OF_A);
 
     let (w1, _) = step(&world, &[attack_intent(1, B_POS)], 11, &cfg);
-    assert_eq!(w1.agents[&1].attack_cooldown_until, 7);
-    let (w2, _) = step(&w1, &[], 11, &cfg);
-    let (w3, _) = step(&w2, &[], 11, &cfg);
-    let (w4, e4) = step(&w3, &[], 11, &cfg);
+    assert_eq!(w1.agents[&1].attack_cooldown_until, 10);
+    let mut world = w1;
+    for _ in 2..=6 {
+        world = step(&world, &[], 11, &cfg).0;
+    }
+    let (w7, e7) = step(&world, &[], 11, &cfg);
     assert_eq!(
-        count(&e4, |kind| matches!(kind, EventKind::AttackLanded { .. })),
+        count(&e7, |kind| matches!(kind, EventKind::AttackLanded { .. })),
         1
     );
-    assert_eq!(deadline_of(&w4, 2), 194);
+    assert_eq!(deadline_of(&w7, 2), 194);
 
-    let (w5, e5) = step(&w4, &[attack_intent(1, NORTH_OF_A)], 11, &cfg);
+    let (w8, e8) = step(&w7, &[attack_intent(1, NORTH_OF_A)], 11, &cfg);
     assert_eq!(
-        count(&e5, |kind| matches!(kind, EventKind::AttackStarted { .. })),
+        count(&e8, |kind| matches!(kind, EventKind::AttackStarted { .. })),
         0
     );
-    assert!(rejection_reason(&e5, 1).contains("cooldown"));
-    assert!(rejection_reason(&e5, 1).contains("until tick 7"));
+    assert!(rejection_reason(&e8, 1).contains("cooldown"));
+    assert!(rejection_reason(&e8, 1).contains("until tick 10"));
 
-    let (w6, e6) = step(&w5, &[attack_intent(1, NORTH_OF_A)], 11, &cfg);
+    let (w9, e9) = step(&w8, &[attack_intent(1, NORTH_OF_A)], 11, &cfg);
     assert_eq!(
-        count(&e6, |kind| matches!(kind, EventKind::AttackStarted { .. })),
+        count(&e9, |kind| matches!(kind, EventKind::AttackStarted { .. })),
         0
     );
-    assert!(rejection_reason(&e6, 1).contains("cooldown"));
+    assert!(rejection_reason(&e9, 1).contains("cooldown"));
 
-    let (w7, e7) = step(&w6, &[attack_intent(1, NORTH_OF_A)], 11, &cfg);
+    let (w10, e10) = step(&w9, &[attack_intent(1, NORTH_OF_A)], 11, &cfg);
     assert_eq!(
-        count(&e7, |kind| matches!(kind, EventKind::AttackStarted { .. })),
+        count(&e10, |kind| matches!(kind, EventKind::AttackStarted { .. })),
         1,
-        "tick 7 is off cooldown: {e7:?}"
+        "tick 10 is off cooldown: {e10:?}"
     );
-    match w7.agents[&1].action.clone() {
+    match w10.agents[&1].action.clone() {
         Some(Action::Attack {
             target_agent,
             target_pos,
@@ -1036,7 +1201,7 @@ fn attack_cooldown_until_after_windup() {
         }) => {
             assert_eq!(target_agent, 4);
             assert_eq!(target_pos, NORTH_OF_A);
-            assert_eq!(land_tick, 10);
+            assert_eq!(land_tick, 16);
         }
         other => panic!("expected a fresh attack, got {other:?}"),
     }
@@ -1053,8 +1218,8 @@ fn stunned_agent_can_be_swapped() {
     armed(&mut base, 2, B_POS, Need::Urine, 200);
     place(&mut base, 3, Pos::new(4, 1));
 
-    let (world, _) = run_until(&base, &[attack_intent(1, B_POS)], 4, 12, &cfg);
-    assert!(is_stunned(&world.agents[&2], 5));
+    let (world, _) = run_until(&base, &[attack_intent(1, B_POS)], 7, 12, &cfg);
+    assert!(is_stunned(&world.agents[&2], 8));
 
     let (next, events) = step(&world, &[move_intent(3, &[Dir::W])], 12, &cfg);
     let swapped = find_event(&events, |kind| {
@@ -1109,12 +1274,17 @@ fn restore_keeps_windup_stun_immunity_and_cooldowns() {
             ..
         }) => {
             assert_eq!(target_agent, 2);
-            assert_eq!(land_tick, 4);
+            assert_eq!(land_tick, 7);
         }
         other => panic!("the restored windup is {other:?}"),
     }
 
     // The landing plus a defence: every combat field must come back.
+    for _ in 0..3 {
+        let (next, _) = step(&live, &[], 15, &cfg);
+        live = next;
+    }
+    assert_eq!(live.tick, 6);
     let (landed, land_events) = step(&live, &[], 15, &cfg);
     assert_eq!(
         count(&land_events, |kind| matches!(
@@ -1130,15 +1300,16 @@ fn restore_keeps_windup_stun_immunity_and_cooldowns() {
     assert!(diffs.is_empty(), "combat restore differs: {diffs:?}");
 
     assert_eq!(deadline_of(&restored, 2), 194);
-    assert_eq!(restored.agents[&2].stun_until, 8);
-    assert_eq!(restored.agents[&2].immunity_until, 11);
-    assert_eq!(restored.agents[&1].attack_cooldown_until, 7);
-    assert_eq!(restored.agents[&3].defend_cooldown_until, 8);
+    assert_eq!(restored.agents[&2].stun_until, 11);
+    assert_eq!(restored.agents[&2].immunity_until, 14);
+    assert_eq!(restored.agents[&1].attack_cooldown_until, 10);
+    assert_eq!(restored.agents[&3].defend_cooldown_until, 11);
     assert_eq!(
         restored.agents[&3].defending,
         Some(B_POS),
-        "a defence stays observable until the next tick starts"
+        "a defence stays observable until its until tick"
     );
+    assert_eq!(restored.agents[&3].defend_until, 14);
     assert_eq!(after.agents[&3].defending, Some(B_POS));
 
     // The new serde shapes survive a round trip, including the action.
@@ -1362,17 +1533,17 @@ fn validation_at_tick_uses_the_settlement_tick() {
     place(&mut world, 1, A_POS);
     place(&mut world, 2, NORTH_OF_A);
 
-    // An attack started on tick 1 is off cooldown from tick 7.
+    // An attack started on tick 1 is off cooldown from tick 10.
     let (w1, _) = step(&world, &[attack_intent(1, NORTH_OF_A)], 6, &cfg);
-    assert_eq!(w1.agents[&1].attack_cooldown_until, 7);
+    assert_eq!(w1.agents[&1].attack_cooldown_until, 10);
     assert!(
-        validate_attack_at(&w1, 1, NORTH_OF_A, &cfg, 7).is_ok(),
-        "the cooldown is over on its own tick, so a command for tick 7 is legal"
+        validate_attack_at(&w1, 1, NORTH_OF_A, &cfg, 10).is_ok(),
+        "the cooldown is over on its own tick, so a command for tick 10 is legal"
     );
     let err =
-        validate_attack_at(&w1, 1, NORTH_OF_A, &cfg, 6).expect_err("tick 6 is one tick too early");
+        validate_attack_at(&w1, 1, NORTH_OF_A, &cfg, 9).expect_err("tick 9 is one tick too early");
     assert!(
-        err.contains("cooldown") && err.contains("until tick 7"),
+        err.contains("cooldown") && err.contains("until tick 10"),
         "{err}"
     );
     assert!(
@@ -1433,7 +1604,12 @@ fn last_intent_wins_and_defend_is_not_double_rejected() {
         "a later move replaces the defence"
     );
     assert_eq!(pos_of(&w2, 1), Pos::new(3, 1), "the move ran one cell east");
-    assert_eq!(w2.agents[&1].defending, None);
+    assert_eq!(
+        w2.agents[&1].defending,
+        Some(NORTH_OF_A),
+        "the shield settled on the previous tick still covers its cell"
+    );
+    assert_eq!(w2.agents[&1].defend_until, 7);
 
     // A stunned defender is rejected once: by the defence pass, not twice.
     let mut stunned = build(ARENA);
@@ -1451,7 +1627,7 @@ fn last_intent_wins_and_defend_is_not_double_rejected() {
 }
 
 #[test]
-fn defending_is_visible_between_ticks_and_cleared_on_the_next() {
+fn defending_is_visible_between_ticks_and_cleared_at_its_until() {
     let cfg = Config::default();
     let mut world = build(ARENA);
     world = claim(&world, &cfg, 1, 0);
@@ -1468,20 +1644,37 @@ fn defending_is_visible_between_ticks_and_cleared_on_the_next() {
         0
     );
 
-    let snapshot = Snapshot::new(w1.clone());
-    let (w2, e2) = step(&w1, &[], 1, &cfg);
-    assert_eq!(w2.agents[&1].defending, None, "the next tick clears it");
+    let mut world = w1;
+    for _ in 2..=6 {
+        let (next, events) = step(&world, &[], 1, &cfg);
+        assert_eq!(next.agents[&1].defending, Some(NORTH_OF_A));
+        assert_eq!(
+            count(&events, |kind| matches!(
+                kind,
+                EventKind::DefendEnded { .. }
+            )),
+            0
+        );
+        world = next;
+    }
+
+    let snapshot = Snapshot::new(world.clone());
+    let (w7, e7) = step(&world, &[], 1, &cfg);
     assert_eq!(
-        count(&e2, |kind| matches!(kind, EventKind::DefendEnded { .. })),
+        w7.agents[&1].defending, None,
+        "tick 7 is the shield's until tick"
+    );
+    assert_eq!(
+        count(&e7, |kind| matches!(kind, EventKind::DefendEnded { .. })),
         1
     );
-    assert!(matches!(e2[0].kind, EventKind::TickSettled));
+    assert!(matches!(e7[0].kind, EventKind::TickSettled));
     assert!(
-        matches!(e2[1].kind, EventKind::DefendEnded { .. }),
-        "the lapse is the first thing the tick does: {e2:?}"
+        matches!(e7[1].kind, EventKind::DefendEnded { .. }),
+        "the lapse is the first thing the tick does: {e7:?}"
     );
 
-    let restored = restore(&snapshot, &e2, &cfg).expect("the lapse restores");
-    let diffs = diff_worlds(&w2, &restored);
+    let restored = restore(&snapshot, &e7, &cfg).expect("the lapse restores");
+    let diffs = diff_worlds(&w7, &restored);
     assert!(diffs.is_empty(), "defence restore differs: {diffs:?}");
 }

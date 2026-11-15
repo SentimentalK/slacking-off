@@ -686,6 +686,12 @@ mod tests {
             wait_effective_default_seconds: 7.0,
             wait_max_seconds: 9.0,
             snapshot_interval_ticks: 120,
+            max_on_field: 12,
+            deadline_ticks_min: 36,
+            deadline_ticks_max: 60,
+            time_bonus_percent: 50,
+            windup_ticks: 6,
+            defend_ticks: 6,
         };
         let from_server = wait_limits_from(Some(config));
         assert_eq!(from_server, limits(7.0, 9.0));

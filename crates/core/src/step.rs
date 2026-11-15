@@ -211,12 +211,13 @@ fn new_agent(cmd: &JoinCommand, cfg: &Config, pos: Option<Pos>) -> Agent {
         attack_cooldown_until: 0,
         defend_cooldown_until: 0,
         defending: None,
+        defend_until: 0,
         score_total: cmd.score_total,
         level: agent_level(cmd.score_total, cfg),
     }
 }
 
-/// Settles one tick: last tick's defence lapses, the queue moves up, then every
+/// Settles one tick: defences whose window ended lapse, the queue moves up, then every
 /// agent in seeded order applies its last intent and advances one step of its
 /// final action.
 pub fn step(
@@ -247,7 +248,7 @@ pub fn step(
         .map(|(id, _)| *id)
         .collect();
     shuffle(&mut order, seed);
-    // Defences are a whole-tick posture: they must be in place before any
+    // Defences are a whole-window posture: they must be in place before any
     // agent settles, so an attack or a demolition sees them whatever the
     // shuffle order.
     collect_defends(&mut next, &mut log, &order, intents, cfg);
@@ -273,7 +274,7 @@ pub fn step(
 }
 
 /// Settles every defence intent of this tick before any agent acts, so a
-/// defence is in force for the whole tick whatever the shuffle order. Only an
+/// defence is in force from this tick whatever the shuffle order. Only an
 /// agent whose *last* intent is a defence defends; that is also the only place
 /// a defence is rejected.
 ///
@@ -375,8 +376,10 @@ fn collect_defends(
             ),
             None => {}
         }
+        let until = world.tick + u64::from(cfg.combat.defend_ticks);
         if let Some(agent) = world.agents.get_mut(agent_id) {
             agent.defending = Some(target);
+            agent.defend_until = until;
             agent.defend_cooldown_until = cooldown_until;
         }
         log.push(EventKind::DefendStarted {
@@ -384,18 +387,20 @@ fn collect_defends(
             agent: *agent_id,
             nick,
             target,
-            until: world.tick + 1,
+            until,
             cooldown_until,
         });
     }
 }
 
-/// A defence covers exactly the tick it was settled in. It is cleared at the
-/// start of the *next* tick, so it stays observable between ticks (`loo status`
-/// reads `Agent.defending`) and never influences a settle it does not belong to.
+/// A defence covers `defend_ticks` ticks, starting with the tick it settled in.
+/// It is cleared at the start of the first tick at or after `defend_until`, so
+/// a snapshot can carry it and `loo status` shows it until the window closes.
 fn expire_defends(world: &mut WorldState, log: &mut EventLog) {
     for agent in world.agents.values_mut() {
-        if agent.defending.take().is_some() {
+        if agent.defending.is_some() && world.tick >= agent.defend_until {
+            agent.defending = None;
+            agent.defend_until = 0;
             log.push(EventKind::DefendEnded {
                 agent: agent.id,
                 nick: agent.nick.to_string(),
@@ -603,6 +608,7 @@ fn assign_need(
     let entry = world.sessions.get_mut(&session)?;
     entry.need = Some(need);
     entry.deadline = deadline;
+    entry.deadline_span = deadline - world.tick;
     Some(EventKind::NeedAssigned {
         session,
         agent,
@@ -651,7 +657,7 @@ fn apply_intents(
     let Some(intent) = intents.iter().rfind(|intent| intent.agent == agent_id) else {
         return;
     };
-    // A defence is a whole-tick posture, settled by `collect_defends` before
+    // A defence is a whole-window posture, settled by `collect_defends` before
     // anyone acts — including its own rejection. Skipping it here keeps a
     // stunned defender from being rejected twice.
     if matches!(intent.kind, IntentKind::Defend { .. }) {
@@ -1148,7 +1154,7 @@ fn advance_action(
     }
 }
 
-/// The agent shielding `pos` for this tick. `BTreeMap` order makes the lowest
+/// The agent shielding `pos` while its window is active. `BTreeMap` order makes the lowest
 /// `AgentId` win when two agents shield the same cell.
 fn defender_at(world: &WorldState, pos: Pos) -> Option<AgentId> {
     world
@@ -1391,7 +1397,7 @@ fn collect_toilet_work(
     let checked = if up {
         validate_upgrade(world, agent_id, target, cfg)
     } else {
-        validate_downgrade(world, agent_id, target)
+        validate_downgrade(world, agent_id, target, cfg)
     };
     if let Err(reason) = checked {
         end_action(
@@ -2060,7 +2066,7 @@ fn progress_uses(world: &mut WorldState, log: &mut EventLog, order: &[AgentId], 
         if !matches!(agent.action, Some(Action::Use { .. })) {
             continue;
         }
-        // A defending agent is busy this tick: the use neither progresses nor
+        // A defending agent is busy while the shield holds: the use neither progresses nor
         // breaks, it simply waits.
         if agent.defending.is_some() {
             continue;
