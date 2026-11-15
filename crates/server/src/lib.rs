@@ -3334,7 +3334,6 @@ fn next_nonce() -> u64 {
     now_ms() ^ (count << 32) ^ (std::process::id() as u64)
 }
 
-/// Design §10: neutral list of every action and its consequence. No advice.
 fn check_toilet_pillars(world: &WorldState) -> Result<(), StoreError> {
     for y in 0..world.map.height() {
         for x in 0..world.map.width() {
@@ -3364,6 +3363,7 @@ fn check_toilet_pillars(world: &WorldState) -> Result<(), StoreError> {
     Ok(())
 }
 
+/// Design §10: neutral list of every action and its consequence. No advice.
 fn rules_text(cfg: &Config, map_width: i32, map_height: i32, official: bool) -> String {
     let upgrade_work = cfg
         .build
