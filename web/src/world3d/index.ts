@@ -3,6 +3,7 @@ import type { Terrain } from '../types';
 import { CameraControls, pick } from './camera';
 import { createDecor } from './decor';
 import { createForest } from './forest';
+import { createObjectsLayer } from './objects';
 import { createGround } from './ground';
 import { createLighting } from './lighting';
 import type { FrameInput, Layer, Quality, SceneCtx } from './types';
@@ -26,6 +27,7 @@ export interface WorldView {
 }
 
 export const extraLayers: Array<(ctx: SceneCtx) => Layer> = [];
+extraLayers.push((ctx) => createObjectsLayer(ctx));
 
 const EMPTY_TERRAIN: Terrain = { width: 0, height: 0, entrance: { x: 0, y: 0 }, rows: [] };
 
