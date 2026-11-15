@@ -55,7 +55,7 @@ export type SessionOutcome =
   | 'left'
   | 'abandoned';
 
-/** `GET /api/terrain` — rows are top-down, `.` buildable, `:` no-build. */
+/** `GET /api/terrain` — rows are top-down, `.` buildable, `:` no-build, `~` wilderness (static). */
 export interface Terrain {
   width: number;
   height: number;
