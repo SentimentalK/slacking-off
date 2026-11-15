@@ -263,3 +263,160 @@ export interface ProfileResponse {
   human_sessions: number;
   sessions: SessionRow[];
 }
+
+// --- §play (contract-J §3–§5) ----------------------------------------------
+// The browser's own view: `/api/play/*` never carries another player's `kind`,
+// score, level or `sent_by`.
+
+export type PlacementKind = 'inside' | 'waiting';
+
+export interface Briefing {
+  map_width: number;
+  map_height: number;
+  entrance: Pos;
+  view_width: number;
+  view_height: number;
+  tick: Tick;
+}
+
+/** `JoinResponse.placement` — externally tagged, variant names verbatim. */
+export type Placement =
+  | { Inside: { at: Pos; briefing: Briefing } }
+  | { Waiting: { ahead: number } };
+
+export interface JoinResponse {
+  session_id: SessionId;
+  placement: Placement;
+}
+
+export interface ActionState {
+  /** Server-generated, e.g. `move N 3`. */
+  description: string;
+  remaining: number;
+}
+
+export interface ActionQueued {
+  action: ActionState;
+  /** Tick at which the action first takes effect. */
+  effective_tick: Tick;
+}
+
+export interface LeaveResponse {
+  outcome: SessionOutcome;
+  score: number;
+}
+
+export interface Legend {
+  symbol: string;
+  meaning: string;
+}
+
+/** A rendered character grid (`MapResponse.grid`). */
+export interface Grid {
+  origin: Pos;
+  width: number;
+  height: number;
+  rows: string[];
+  legend: Legend[];
+}
+
+export interface MapResponse {
+  grid: Grid;
+  /** First tick each cell was seen; `0` means never seen. */
+  seen_at: Tick[][];
+}
+
+/** `AgentView` — the same shape the CLI's `status` prints. */
+export interface AgentView {
+  agent_id: AgentId;
+  nick: string;
+  tick: Tick;
+  session_id: SessionId | null;
+  placement: PlacementKind | null;
+  pos: Pos | null;
+  queue_ahead: number | null;
+  action: ActionState | null;
+  need: Need | null;
+  use_ticks_done: number;
+  use_ticks_total: number;
+  deadline_tick: Tick;
+  recovery_deadline: Tick | null;
+  score: number;
+  outcome: SessionOutcome | null;
+  score_total: number;
+  level: number;
+  stun_until: Tick;
+  immunity_until: Tick;
+  attack_cooldown_until: Tick;
+  defend_cooldown_until: Tick;
+  defending: Pos | null;
+}
+
+/** One event on an `Envelope` (`EventView`): it carries no `kind`. */
+export interface EventView {
+  tick: Tick;
+  seq: number;
+  text: string;
+}
+
+export type BuildKind = 'wall' | 'door' | 'toilet';
+
+/** `"here"` or one step in a direction; the page never sends absolutes. */
+export type TargetSpec = 'here' | { dir: Dir };
+
+export type MoveSpec =
+  | { Steps: { dir: Dir; count: number } }
+  | { Path: { path: string } };
+
+export interface PlayMe {
+  agent_id: AgentId;
+  nick: string;
+  color: number;
+}
+
+/** `GET`/`POST /api/play/agent`. */
+export interface PlayAgentResponse {
+  agent: PlayMe | null;
+}
+
+/** The visible 9×9 window, clipped to the map. */
+export interface PlayWindow {
+  origin: Pos;
+  width: number;
+  height: number;
+}
+
+export interface PlayAgent {
+  id: AgentId;
+  nick: string;
+  color: number;
+  session_id: SessionId;
+  pos: Pos;
+  pose: AgentPose;
+  facing: Dir;
+  need: Need | null;
+  use_done: number;
+  use_total: number;
+  deadline_tick: Tick;
+  defending: Pos | null;
+  stun_until: Tick;
+  immunity_until: Tick;
+}
+
+/** `GET /api/play/state`. */
+export interface PlayState {
+  me: PlayMe;
+  tick: Tick;
+  tick_seconds: number;
+  ms_to_next_tick: number;
+  joined: boolean;
+  placement: PlacementKind | null;
+  window: PlayWindow;
+  /** Window contents only. */
+  objects: ProjectionObject[];
+  /** Window contents only, the caller included. */
+  agents: PlayAgent[];
+  agent: AgentView | null;
+  /** The caller's remembered map, same as `loo map`. */
+  map: MapResponse | null;
+}

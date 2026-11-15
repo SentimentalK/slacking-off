@@ -5,10 +5,11 @@ import type { ComponentChildren } from 'preact';
 import { useAuth } from '../auth';
 import { Link } from './Link';
 
-export type NavKey = 'spectator' | 'replay' | 'leaderboard' | 'stats' | 'account';
+export type NavKey = 'spectator' | 'play' | 'replay' | 'leaderboard' | 'stats' | 'account';
 
 const LINKS: Array<{ key: NavKey; href: string; label: string }> = [
   { key: 'spectator', href: '/', label: '观战' },
+  { key: 'play', href: '/play', label: '入场' },
   { key: 'replay', href: '/replay', label: '回放' },
   { key: 'leaderboard', href: '/leaderboard', label: '排行榜' },
   { key: 'stats', href: '/stats', label: '统计' },

@@ -1,22 +1,48 @@
 // Same-origin API client. Every `/api/*` answer is an `Envelope<T>`:
 // `{ok, result?, error?}` (see `crates/proto/src/lib.rs`).
 
-import type { Pos, Projection, ProjectionObject } from './types';
+import type {
+  AgentView,
+  EventView,
+  Pos,
+  Projection,
+  ProjectionObject,
+} from './types';
+
+export interface EnvelopeError {
+  code: string;
+  message: string;
+  /** `ErrorCode::RateLimited` only: how long the caller should wait. */
+  retry_after_seconds?: number | null;
+}
 
 export interface Envelope<T> {
   ok: boolean;
   result?: T;
-  error?: { code: string; message: string };
+  error?: EnvelopeError;
+  /** The caller's own events since the previous response (contract §3). */
+  events?: EventView[];
+  state?: AgentView | null;
 }
 
 export class ApiError extends Error {
   readonly code: string;
+  /** `retry_after_seconds` from a rate-limited answer, otherwise `null`. */
+  readonly retryAfterSeconds: number | null;
 
-  constructor(code: string, message: string) {
+  constructor(code: string, message: string, retryAfterSeconds: number | null = null) {
     super(message);
     this.name = 'ApiError';
     this.code = code;
+    this.retryAfterSeconds = retryAfterSeconds;
   }
+}
+
+/** A `T` plus the envelope's side channels (`events`, `state`). */
+export interface EnvelopeResult<T> {
+  result: T;
+  events: EventView[];
+  state: AgentView | null;
 }
 
 function unwrap<T>(body: unknown, path: string): T {
@@ -26,6 +52,7 @@ function unwrap<T>(body: unknown, path: string): T {
       throw new ApiError(
         envelope.error?.code ?? 'unknown',
         envelope.error?.message ?? `${path} 返回失败`,
+        envelope.error?.retry_after_seconds ?? null,
       );
     }
     return envelope.result;
@@ -51,6 +78,93 @@ export async function getJSON<T>(path: string): Promise<T> {
     throw new ApiError(`http_${res.status}`, `${path} 返回 HTTP ${res.status}`);
   }
   return unwrap<T>(body, path);
+}
+
+const CSRF_COOKIE = 'loo_csrf';
+
+function readCookie(name: string): string | null {
+  for (const pair of document.cookie.split(';')) {
+    const [key, ...rest] = pair.trim().split('=');
+    if (key === name) return decodeURIComponent(rest.join('='));
+  }
+  return null;
+}
+
+/**
+ * One envelope-producing call. Non-GET mirrors the readable `loo_csrf` cookie
+ * into `X-Loo-CSRF` (contract §1), exactly like `auth.ts`.
+ */
+async function envelopeRequest<T>(
+  method: 'GET' | 'POST',
+  path: string,
+  body?: unknown,
+): Promise<EnvelopeResult<T>> {
+  const headers: Record<string, string> = { accept: 'application/json' };
+  if (body !== undefined) headers['content-type'] = 'application/json';
+  if (method !== 'GET') {
+    const csrf = readCookie(CSRF_COOKIE);
+    if (csrf) headers['X-Loo-CSRF'] = csrf;
+  }
+
+  let res: Response;
+  try {
+    res = await fetch(path, {
+      method,
+      headers,
+      credentials: 'same-origin',
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+  } catch {
+    throw new ApiError('network', `${path} 连不上服务端`);
+  }
+
+  let text = '';
+  try {
+    text = await res.text();
+  } catch {
+    text = '';
+  }
+  let parsed: unknown = null;
+  try {
+    parsed = text ? JSON.parse(text) : null;
+  } catch {
+    parsed = null;
+  }
+
+  if (!parsed || typeof parsed !== 'object' || !('ok' in parsed)) {
+    throw new ApiError(
+      `http_${res.status}`,
+      `${path} 返回 HTTP ${res.status}${text.trim() ? `: ${text.trim().slice(0, 120)}` : ''}`,
+    );
+  }
+
+  const envelope = parsed as Envelope<T>;
+  if (!envelope.ok || envelope.result === undefined) {
+    throw new ApiError(
+      envelope.error?.code ?? 'unknown',
+      envelope.error?.message ?? `${path} 返回失败`,
+      envelope.error?.retry_after_seconds ?? null,
+    );
+  }
+  return {
+    result: envelope.result,
+    events: envelope.events ?? [],
+    state: envelope.state ?? null,
+  };
+}
+
+export function getEnvelope<T>(path: string): Promise<EnvelopeResult<T>> {
+  return envelopeRequest<T>('GET', path);
+}
+
+export function postEnvelope<T>(path: string, body: unknown): Promise<EnvelopeResult<T>> {
+  return envelopeRequest<T>('POST', path, body);
+}
+
+/** `POST` helper the play page uses; errors carry `code` and `retryAfterSeconds`. */
+export async function postJSON<T>(path: string, body: unknown): Promise<T> {
+  const { result } = await postEnvelope<T>(path, body);
+  return result;
 }
 
 export type WatchStatus = 'live' | 'reconnecting' | 'closed';

@@ -5,6 +5,7 @@ import { useEffect, useState } from 'preact/hooks';
 
 export type Route =
   | { name: 'spectator' }
+  | { name: 'play' }
   | { name: 'replay' }
   | { name: 'agent'; id: number }
   | { name: 'leaderboard' }
@@ -19,6 +20,7 @@ const NAV_EVENT = 'loo:navigate';
 export function parseRoute(pathname: string): Route {
   const path = pathname.replace(/\/+$/, '') || '/';
   if (path === '/') return { name: 'spectator' };
+  if (path === '/play') return { name: 'play' };
   if (path === '/replay') return { name: 'replay' };
   if (path === '/leaderboard') return { name: 'leaderboard' };
   if (path === '/stats') return { name: 'stats' };
