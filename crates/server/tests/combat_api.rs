@@ -443,7 +443,7 @@ async fn attack_defend_status_fields_round_trip() {
         Some(format!("attack the agent at {}", loo_proto::Pos::new(3, 3)))
     );
 
-    tick_n(&server, 3).await;
+    tick_n(&server, 6).await;
     let events = all_events(&server).await;
     let (stun_until, immunity_until, deadline) = events
         .iter()
@@ -471,7 +471,7 @@ async fn attack_defend_status_fields_round_trip() {
     assert!(defended.ok, "defend rejected: {:?}", defended.error);
     assert_eq!(
         defended.result.expect("queued defend").action.description,
-        format!("defend {} this tick", loo_proto::Pos::new(2, 3))
+        format!("defend {} for 6 ticks", loo_proto::Pos::new(2, 3))
     );
     server.tick_once().await;
     let events = all_events(&server).await;
@@ -796,12 +796,17 @@ async fn defending_is_visible_in_status_between_ticks() {
     assert!(queued.ok, "defend rejected: {:?}", queued.error);
     server.tick_once().await;
 
-    // The defence covers the tick it settled in and stays readable between
-    // ticks.
+    // The defence covers six ticks and stays readable between ticks.
     let view = state(&server, &token_a).await;
     assert_eq!(view.defending, Some(loo_proto::Pos::new(2, 3)));
 
-    // The next tick clears it, and that tick's events say so.
+    // Ticks 2..=6 keep it; tick 7 is defend_until and clears it.
+    tick_n(&server, 5).await;
+    assert_eq!(
+        state(&server, &token_a).await.defending,
+        Some(loo_proto::Pos::new(2, 3)),
+        "the shield is still in force on tick 6"
+    );
     server.tick_once().await;
     let view = state(&server, &token_a).await;
     assert_eq!(view.defending, None);
@@ -906,12 +911,12 @@ async fn cooldown_precheck_uses_the_settlement_tick() {
             _ => None,
         })
         .expect("AttackStarted");
-    assert_eq!(cooldown_until, start + 6);
+    assert_eq!(cooldown_until, start + 9);
 
-    // Reach world tick start+5; the precheck runs at start+6. B is stunned
-    // until start+7 by the hit landing at start+3, so C is the target.
-    tick_n(&server, 5).await;
-    assert_eq!(server.world_state().await.tick, start + 5);
+    // Reach world tick start+8; the precheck runs at start+9. B is stunned
+    // until start+10 by the hit landing at start+6, so C is the target.
+    tick_n(&server, 8).await;
+    assert_eq!(server.world_state().await.tick, start + 8);
     let queued = server
         .attack_cmd(&token_a, AttackRequest { dir: Dir::E })
         .await;
@@ -923,7 +928,7 @@ async fn cooldown_precheck_uses_the_settlement_tick() {
     server.tick_once().await;
     let events = all_events(&server).await;
     assert!(
-        events.iter().any(|event| event.tick == start + 6
+        events.iter().any(|event| event.tick == start + 9
             && matches!(
                 event.kind,
                 EventKind::AttackStarted {

@@ -29,7 +29,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             tick_seconds: 5.0,
-            max_on_field: 50,
+            max_on_field: 12,
             view: ViewConfig::default(),
             build: BuildConfig::default(),
             toilet: ToiletConfig::default(),
@@ -102,6 +102,8 @@ pub struct BuildConfig {
     pub toilet_level1_demolish_work: u32,
     /// Level 1→2, 2→3, 3→4, 4→5.
     pub upgrade_work: [u32; 4],
+    /// Design §4.7: at most this many agents may work one toilet at a time.
+    pub max_toilet_workers: usize,
 }
 
 impl Default for BuildConfig {
@@ -115,6 +117,7 @@ impl Default for BuildConfig {
             toilet_demolish_per_tick: 2,
             toilet_level1_demolish_work: 3,
             upgrade_work: [6, 12, 24, 48],
+            max_toilet_workers: 5,
         }
     }
 }
@@ -142,7 +145,9 @@ pub struct NeedConfig {
     pub feces_use_ticks: u32,
     pub base_score_urine: u32,
     pub base_score_feces: u32,
-    pub time_bonus_per_tick: u32,
+    /// Percent of the base score paid at most for finishing at once; the
+    /// actual bonus scales with the fraction of the drawn deadline left.
+    pub time_bonus_percent: u32,
     pub deadline_ticks_min: u32,
     pub deadline_ticks_max: u32,
     pub interrupt_recovery_ticks: u32,
@@ -158,9 +163,9 @@ impl Default for NeedConfig {
             feces_use_ticks: 8,
             base_score_urine: 100,
             base_score_feces: 200,
-            time_bonus_per_tick: 1,
-            deadline_ticks_min: 120,
-            deadline_ticks_max: 240,
+            time_bonus_percent: 50,
+            deadline_ticks_min: 36,
+            deadline_ticks_max: 60,
             interrupt_recovery_ticks: 12,
             linger_ticks: 36,
             deadline_warning_ticks: 10,
@@ -177,17 +182,20 @@ pub struct CombatConfig {
     pub stun_ticks: u32,
     pub immunity_ticks: u32,
     pub attack_cooldown_ticks: u32,
+    /// Ticks a defend shields its target cell, starting at the settling tick.
+    pub defend_ticks: u32,
     pub defend_cooldown_ticks: u32,
 }
 
 impl Default for CombatConfig {
     fn default() -> Self {
         Self {
-            windup_ticks: 3,
+            windup_ticks: 6,
             penalty_ticks: 6,
             stun_ticks: 3,
             immunity_ticks: 6,
             attack_cooldown_ticks: 2,
+            defend_ticks: 6,
             defend_cooldown_ticks: 2,
         }
     }
@@ -224,7 +232,7 @@ impl Default for SessionConfig {
         Self {
             idle_cleanup_ticks: 60,
             queue_idle_seconds: 60,
-            queue_capacity: 50,
+            queue_capacity: 10,
             max_agents_per_user: 5,
         }
     }
@@ -295,14 +303,17 @@ mod tests {
     fn defaults_match_design_starting_values() {
         let cfg = Config::default();
         assert_eq!(cfg.tick_seconds, 5.0);
+        assert_eq!(cfg.max_on_field, 12);
         assert_eq!((cfg.view.width, cfg.view.height), (9, 9));
         assert_eq!(cfg.build.upgrade_work, [6, 12, 24, 48]);
+        assert_eq!(cfg.build.max_toilet_workers, 5);
         assert_eq!(cfg.toilet.multiplier, [1, 2, 3, 5, 10]);
         assert_eq!((cfg.need.urine_use_ticks, cfg.need.feces_use_ticks), (4, 8));
         assert_eq!(
             (cfg.need.deadline_ticks_min, cfg.need.deadline_ticks_max),
-            (120, 240)
+            (36, 60)
         );
+        assert_eq!(cfg.need.time_bonus_percent, 50);
         assert_eq!(
             (
                 cfg.need.interrupt_recovery_ticks,
@@ -311,7 +322,9 @@ mod tests {
             ),
             (12, 36, 10)
         );
-        assert_eq!(cfg.session.queue_capacity, 50);
+        assert_eq!(cfg.combat.windup_ticks, 6);
+        assert_eq!(cfg.combat.defend_ticks, 6);
+        assert_eq!(cfg.session.queue_capacity, 10);
         assert_eq!(
             (cfg.wait.default_seconds, cfg.wait.max_seconds),
             (25.0, 55.0)

@@ -161,10 +161,13 @@ pub struct Agent {
     /// Tick from which the next defence may start.
     #[serde(default)]
     pub defend_cooldown_until: Tick,
-    /// The adjacent cell this agent shields for the current tick only. Cleared
-    /// before the tick boundary, so a snapshot never carries it.
+    /// The adjacent cell this agent shields. The shield is in force while
+    /// `tick < defend_until`; `expire_defends` clears both fields together.
     #[serde(default)]
     pub defending: Option<Pos>,
+    /// Tick at which the shield ends (open interval: in force below it).
+    #[serde(default)]
+    pub defend_until: Tick,
     /// Cumulative score over every session of this agent (design §4.8).
     #[serde(default)]
     pub score_total: u32,
@@ -205,6 +208,11 @@ pub struct Session {
     /// Tick by which the need must be met; `0` means no deadline assigned.
     #[serde(default)]
     pub deadline: Tick,
+    /// Length of the deadline drawn at assignment (`deadline - join tick`).
+    /// The time bonus is a fraction of this span, so its scale does not depend
+    /// on how large a deadline the session happened to draw.
+    #[serde(default)]
+    pub deadline_span: Tick,
     #[serde(default)]
     pub use_ticks_done: u32,
     #[serde(default)]
@@ -244,6 +252,7 @@ impl Session {
             seen,
             need: None,
             deadline: 0,
+            deadline_span: 0,
             use_ticks_done: 0,
             use_levels: Vec::new(),
             recovery_deadline: None,
