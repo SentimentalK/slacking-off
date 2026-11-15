@@ -1,0 +1,1 @@
+export { default } from "../../web/node_modules/puppeteer-core/lib/puppeteer/puppeteer-core.js";
