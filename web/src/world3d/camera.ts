@@ -103,6 +103,17 @@ export class CameraControls {
     this.apply();
   }
 
+  setFocus(x: number, z: number): void {
+    this.focus.set(x, 0, z);
+    this.clampFocus();
+    this.apply();
+  }
+
+  setZoom(k: number): void {
+    this.dist = this.fit * Math.min(1, Math.max(0.3, k));
+    this.apply();
+  }
+
   dispose(): void {
     this.canvas.removeEventListener('wheel', this.onWheel);
     this.canvas.removeEventListener('pointerdown', this.onDown);

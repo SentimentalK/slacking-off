@@ -6,8 +6,29 @@ function level(s: string | null): Quality | null {
   return s !== null && LEVELS.includes(s) ? (s as Quality) : null;
 }
 
-export function chooseQuality(param: string | null, stored: string | null, width: number, cores: number): Quality {
-  return level(param) ?? level(stored) ?? (width < 700 || cores <= 4 ? 'low' : 'high');
+const SOFTWARE_RENDERER = /swiftshader|llvmpipe|softpipe|software/i;
+
+export function chooseQuality(
+  param: string | null,
+  stored: string | null,
+  width: number,
+  cores: number,
+  renderer = '',
+): Quality {
+  const software = SOFTWARE_RENDERER.test(renderer);
+  return level(param) ?? level(stored) ?? (software || width < 700 || cores <= 4 ? 'low' : 'high');
+}
+
+export function rendererName(): string {
+  const canvas = document.createElement('canvas');
+  const gl: WebGLRenderingContextBase | null = canvas.getContext('webgl2') ?? canvas.getContext('webgl');
+  if (!gl) return '';
+  try {
+    const info = gl.getExtension('WEBGL_debug_renderer_info');
+    return info ? String(gl.getParameter(info.UNMASKED_RENDERER_WEBGL)) : '';
+  } finally {
+    gl.getExtension('WEBGL_lose_context')?.loseContext();
+  }
 }
 
 const WINDOW_START_MS = 3000;

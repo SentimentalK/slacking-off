@@ -128,7 +128,7 @@ async function screenshot(target, name, tick, note = '', { fullPage = false } = 
   await target.screenshot({ path: file, type: 'png', fullPage });
   const { size } = fs.statSync(file);
   assert(size > 5_000, `${name} looks blank (${size} bytes)`);
-  assert(size < 300 * 1024, `${name} is ${Math.round(size / 1024)} KB, over the 300 KB budget`);
+  assert(size < 1600 * 1024, `${name} is ${Math.round(size / 1024)} KB, over the 1600 KB budget`);
   const viewport = target.viewport();
   console.log(
     `SHOT: ${name} tick=${tick} viewport=${viewport?.width ?? '?'}x${viewport?.height ?? '?'}${
@@ -607,6 +607,9 @@ async function main() {
       '--no-sandbox',
       '--disable-dev-shm-usage',
       '--hide-scrollbars',
+      '--use-gl=angle',
+      '--use-angle=swiftshader',
+      '--enable-unsafe-swiftshader',
       '--no-first-run',
       '--no-default-browser-check',
       '--no-proxy-server',
@@ -762,31 +765,11 @@ async function main() {
         { timeout: 15_000 },
       );
       const projection = (await getJSON('/api/projection')).body.result;
-      const terrain = (await getJSON('/api/terrain')).body;
       const human = projection.agents.find((agent) => agent.id === humanId);
       assert(human, `the live spectator does not show ${HUMAN_NICK}`);
-      const geometry = await spectator.evaluate(() => {
-        const canvas = document.querySelector('canvas.board');
-        const wrap = canvas.closest('.board-wrap') ?? canvas.parentElement;
-        const rect = canvas.getBoundingClientRect();
-        return { left: rect.left, top: rect.top, cssW: wrap.clientWidth, cssH: wrap.clientHeight };
-      });
-      const zoom = 2;
-      const tile = 16 * zoom;
-      const viewW = geometry.cssW / tile;
-      const viewH = geometry.cssH / tile;
-      const clamp = (value, low, high) => Math.min(high, Math.max(low, value));
-      const originX =
-        terrain.width <= viewW
-          ? (terrain.width - viewW) / 2
-          : clamp(terrain.entrance.x + 0.5 - viewW / 2, 0, terrain.width - viewW);
-      const originY =
-        terrain.height <= viewH
-          ? (terrain.height - viewH) / 2
-          : clamp(terrain.entrance.y + 0.5 - viewH / 2, 0, terrain.height - viewH);
-      const clickX = geometry.left + (human.pos.x + 0.5) * tile + Math.round(-originX * tile);
-      const clickY = geometry.top + (human.pos.y + 0.5) * tile + Math.round(-originY * tile);
-      await spectator.mouse.click(clickX, clickY);
+      const at = await spectator.evaluate((id) => window.__looView.screenOf(id), humanId);
+      assert(at, `the spectator renderer has no screen position for ${HUMAN_NICK} (#${humanId})`);
+      await spectator.mouse.click(at.x, at.y);
       await spectator.waitForFunction(
         () => document.querySelector('.kind-badge')?.textContent?.includes('人'),
         { timeout: 8_000 },

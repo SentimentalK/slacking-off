@@ -1,18 +1,30 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { getJSON, watch } from '../api';
 import type { WatchStatus } from '../api';
-import { useBoardControls } from '../board';
 import { AgentCard } from '../components/AgentCard';
 import { EventText, eventColors } from '../components/EventText';
 import { Link } from '../components/Link';
 import { Nav } from '../components/Nav';
 import { QueueStrip } from '../components/QueueStrip';
 import { EVENT_LABEL, formatNumber } from '../labels';
-import { drawWorld } from '../render';
 import { pickReplaySpan, REPLAY_TICKS_PER_SECOND } from '../replay-source';
-import type { LeaderRow, Projection, ProjectionEvent, Terrain, Timeline } from '../types';
+import { AutoQuality, chooseQuality, createWorldView, rendererName } from '../world3d';
+import type { Quality, UiState, WorldView } from '../world3d';
+import type { LeaderRow, Pos, Projection, ProjectionEvent, Terrain, Timeline } from '../types';
+
+declare global {
+  interface Window {
+    __looView?: {
+      capture: () => ReturnType<WorldView['capture']>;
+      screenOf: (id: number) => { x: number; y: number } | null;
+      tick: () => number;
+    };
+  }
+}
 
 const EVENT_LOG_LIMIT = 50;
+const QUALITY_KEY = 'loo.quality';
+const STILL_MODE = new URLSearchParams(location.search).get('still') === '1';
 
 function mergeEvents(previous: ProjectionEvent[], next: ProjectionEvent[]): ProjectionEvent[] {
   const seen = new Set(previous.map((event) => `${event.tick}:${event.seq}`));
@@ -23,10 +35,42 @@ function mergeEvents(previous: ProjectionEvent[], next: ProjectionEvent[]): Proj
   return merged.slice(0, EVENT_LOG_LIMIT);
 }
 
+function readStoredQuality(): string | null {
+  try {
+    return localStorage.getItem(QUALITY_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function writeStoredQuality(value: Quality): void {
+  try {
+    localStorage.setItem(QUALITY_KEY, value);
+  } catch {
+    return;
+  }
+}
+
+function toiletNear(frame: Projection, cell: Pos): Pos | null {
+  for (const object of frame.objects) {
+    if (object.kind === 'toilet' && Math.abs(object.pos.x - cell.x) <= 1 && Math.abs(object.pos.y - cell.y) <= 1) {
+      return object.pos;
+    }
+  }
+  return null;
+}
+
+const clamp01 = (value: number): number => Math.min(1, Math.max(0, value));
+
 interface LiveState {
   projection: Projection | null;
-  previous: Projection | null | undefined;
+  previous: Projection | null;
+  terrain: Terrain | null;
+  arrivedAt: number;
   selected: number | null;
+  hoverToilet: Pos | null;
+  dusk: boolean;
+  duskT: number;
   reduceMotion: boolean;
 }
 
@@ -47,19 +91,40 @@ export function Spectator() {
   const replayTick = useRef(0);
   const replayCache = useRef(new Map<number, Projection>());
   const startingReplay = useRef(false);
+  const [dusk, setDusk] = useState(false);
+  const [quality, setQuality] = useState<Quality>('high');
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const wrapRef = useRef<HTMLDivElement | null>(null);
+  const viewRef = useRef<WorldView | null>(null);
+  const autoRef = useRef<AutoQuality | null>(null);
+  const qualityRef = useRef<Quality>('high');
   const live = useRef<LiveState>({
     projection: null,
     previous: null,
+    terrain: null,
+    arrivedAt: 0,
     selected: null,
+    hoverToilet: null,
+    dusk: false,
+    duskT: 0,
     reduceMotion: false,
   });
 
   const select = (id: number | null) => {
     live.current.selected = id;
     setSelected(id);
+  };
+
+  const autoSelect = (id: number | null) => {
+    if (!STILL_MODE) select(id);
+  };
+
+  const showLive = (frame: Projection, previous: Projection | null) => {
+    live.current.previous = previous;
+    live.current.projection = frame;
+    live.current.arrivedAt = performance.now();
+    setProjection(frame);
   };
 
   const loadReplayFrame = (tick: number): Promise<Projection | null> => {
@@ -79,16 +144,13 @@ export function Spectator() {
   };
 
   const leaveReplay = (next: Projection) => {
-    const state = live.current;
-    state.previous = undefined;
-    state.projection = next;
-    setProjection(next);
+    showLive(next, null);
     setEvents(next.events);
     replayCache.current.clear();
     setReplay(null);
     modeRef.current = 'live';
     setMode('live');
-    select(next.agents[0]?.id ?? null);
+    autoSelect(next.agents[0]?.id ?? null);
   };
 
   const enterReplay = (liveTick: number) => {
@@ -106,9 +168,7 @@ export function Spectator() {
         setSelected(null);
         return loadReplayFrame(span.from).then((frame) => {
           if (!frame || modeRef.current !== 'replay') return;
-          live.current.previous = undefined;
-          live.current.projection = frame;
-          setProjection(frame);
+          showLive(frame, replayCache.current.get(frame.tick - 1) ?? null);
           setEvents(frame.events.slice().sort((a, b) => b.tick - a.tick || b.seq - a.seq).slice(0, EVENT_LOG_LIMIT));
         });
       })
@@ -118,17 +178,13 @@ export function Spectator() {
       });
   };
 
-  const cameraRef = useBoardControls({
-    canvasRef,
-    wrapRef,
-    terrain,
-    projection: () => live.current.projection,
-    onSelect: select,
-  });
-
   useEffect(() => {
     live.current.reduceMotion = reduceMotion;
   }, [reduceMotion]);
+
+  useEffect(() => {
+    live.current.terrain = terrain;
+  }, [terrain]);
 
   useEffect(() => {
     const query = window.matchMedia('(prefers-reduced-motion: reduce)');
@@ -164,13 +220,10 @@ export function Spectator() {
           if (next.counts.inside > 0) leaveReplay(next);
           return;
         }
-        const state = live.current;
-        state.previous = state.projection;
-        state.projection = next;
-        setProjection(next);
+        showLive(next, live.current.projection);
         setEvents((previous) => mergeEvents(previous, next.events));
-        const stillThere = next.agents.some((agent) => agent.id === state.selected);
-        if (!stillThere) select(next.agents[0]?.id ?? null);
+        const stillThere = next.agents.some((agent) => agent.id === live.current.selected);
+        if (!stillThere) autoSelect(next.agents[0]?.id ?? null);
         if (next.counts.inside === 0) enterReplay(next.tick);
       },
       (next) => setStatus(next),
@@ -182,26 +235,94 @@ export function Spectator() {
     };
   }, []);
 
-  // One animation loop; it only ever calls `drawWorld`.
   useEffect(() => {
+    const canvas = canvasRef.current;
+    const wrap = wrapRef.current;
+    if (!canvas || !wrap) return;
+
+    const params = new URLSearchParams(location.search);
+    const urlQuality = params.get('quality');
+    const stored = readStoredQuality();
+    const initial = chooseQuality(urlQuality, stored, innerWidth, navigator.hardwareConcurrency ?? 8, rendererName());
+    const view = createWorldView(canvas, { quality: initial, still: STILL_MODE, onSelect: select });
+    viewRef.current = view;
+    qualityRef.current = initial;
+    setQuality(initial);
+    autoRef.current = new AutoQuality(!STILL_MODE && urlQuality === null && stored === null);
+    const initialDusk = params.get('dusk') === '1';
+    live.current.dusk = initialDusk;
+    live.current.duskT = 0;
+    setDusk(initialDusk);
+    window.__looView = {
+      capture: () => view.capture(),
+      screenOf: (id) => view.screenOf(id),
+      tick: () => view.lastTick(),
+    };
+
+    const observer = new ResizeObserver(() => view.resize());
+    observer.observe(wrap);
+
+    const onMove = (event: PointerEvent) => {
+      if (STILL_MODE) return;
+      const current = live.current.projection;
+      const cell = view.groundCell(event.clientX, event.clientY);
+      live.current.hoverToilet = current && cell ? toiletNear(current, cell) : null;
+    };
+    const onLeave = () => {
+      live.current.hoverToilet = null;
+    };
+    canvas.addEventListener('pointermove', onMove);
+    canvas.addEventListener('pointerleave', onLeave);
+
     let frame = 0;
     const loop = (now: number) => {
-      const canvas = canvasRef.current;
       const state = live.current;
-      if (canvas && state.projection && terrain) {
-        drawWorld(canvas, state.projection, terrain, {
-          camera: cameraRef.current,
-          now,
-          reduceMotion: state.reduceMotion,
-          prev: state.previous ?? undefined,
-          selected: state.selected ?? undefined,
+      const auto = autoRef.current;
+      if (auto) {
+        const next = auto.frame(now, qualityRef.current);
+        if (next) {
+          qualityRef.current = next;
+          view.setQuality(next);
+          setQuality(next);
+        }
+      }
+      const cur = state.projection;
+      if (cur && state.terrain) {
+        const replaying = modeRef.current === 'replay';
+        const prev = replaying ? (replayCache.current.get(cur.tick - 1) ?? null) : state.previous;
+        const span = replaying ? 1000 / REPLAY_TICKS_PER_SECOND : cur.tick_seconds * 1000;
+        const motionless = STILL_MODE || state.reduceMotion;
+        const phase = motionless ? 1 : clamp01((now - state.arrivedAt) / span);
+        const ui: UiState = {
+          selected: STILL_MODE ? null : state.selected,
+          hoverToilet: STILL_MODE ? null : state.hoverToilet,
+          dusk: state.dusk,
+          duskT: state.duskT,
+        };
+        view.draw({
+          terrain: state.terrain,
+          prev,
+          cur,
+          phase,
+          clock: motionless ? 0 : now / 1000,
+          ui,
         });
       }
       frame = window.requestAnimationFrame(loop);
     };
     frame = window.requestAnimationFrame(loop);
-    return () => window.cancelAnimationFrame(frame);
-  }, [terrain]);
+
+    return () => {
+      window.cancelAnimationFrame(frame);
+      observer.disconnect();
+      canvas.removeEventListener('pointermove', onMove);
+      canvas.removeEventListener('pointerleave', onLeave);
+      view.dispose();
+      viewRef.current = null;
+      autoRef.current = null;
+      delete window.__looView;
+    };
+  }, []);
 
   useEffect(() => {
     if (mode !== 'replay' || !replay) return;
@@ -215,9 +336,7 @@ export function Spectator() {
       }
       void loadReplayFrame(tick).then((frame) => {
         if (cancelled || !frame || modeRef.current !== 'replay') return;
-        live.current.previous = undefined;
-        live.current.projection = frame;
-        setProjection(frame);
+        showLive(frame, replayCache.current.get(frame.tick - 1) ?? null);
         setEvents(frame.events.slice().sort((a, b) => b.tick - a.tick || b.seq - a.seq).slice(0, EVENT_LOG_LIMIT));
       });
       replayTick.current = tick >= replay.to ? replay.from : tick + 1;
@@ -229,6 +348,22 @@ export function Spectator() {
       window.clearInterval(timer);
     };
   }, [mode, replay]);
+
+  const toggleDusk = () => {
+    const on = !live.current.dusk;
+    live.current.dusk = on;
+    live.current.duskT = performance.now() / 1000;
+    setDusk(on);
+  };
+
+  const toggleQuality = () => {
+    const next: Quality = qualityRef.current === 'high' ? 'low' : 'high';
+    autoRef.current = null;
+    qualityRef.current = next;
+    viewRef.current?.setQuality(next);
+    setQuality(next);
+    writeStoredQuality(next);
+  };
 
   const agent = projection?.agents.find((entry) => entry.id === selected) ?? null;
 
@@ -307,12 +442,26 @@ export function Spectator() {
         <QueueStrip queue={projection?.queue ?? []} />
 
         <div class="board-wrap" ref={wrapRef}>
-          <canvas class="board" ref={canvasRef} role="img" aria-label={boardLabel} />
+          <canvas class="board" data-renderer="3d" ref={canvasRef} role="img" aria-label={boardLabel} />
+          <div class="board-vignette" />
           {mode === 'replay' ? (
             <div class="replay-badge" data-mode="replay">
               回放
             </div>
           ) : null}
+          <div class="board-tools">
+            <button
+              type="button"
+              class="chip board-tool"
+              aria-pressed={dusk ? 'true' : 'false'}
+              onClick={toggleDusk}
+            >
+              黄昏
+            </button>
+            <button type="button" class="chip board-tool" onClick={toggleQuality}>
+              画质：{quality === 'high' ? '高' : '低'}
+            </button>
+          </div>
           <div class="board-hint">滚轮缩放 · 拖拽平移 · 点击选人</div>
         </div>
 

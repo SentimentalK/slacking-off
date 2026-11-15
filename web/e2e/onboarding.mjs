@@ -585,7 +585,14 @@ async function main() {
   browser = await puppeteer.launch({
     executablePath: CHROME,
     headless: true,
-    args: ['--no-sandbox', '--disable-dev-shm-usage', '--hide-scrollbars'],
+    args: [
+      '--no-sandbox',
+      '--disable-dev-shm-usage',
+      '--hide-scrollbars',
+      '--use-gl=angle',
+      '--use-angle=swiftshader',
+      '--enable-unsafe-swiftshader',
+    ],
   });
   page = await browser.newPage();
   page.on('pageerror', (error) => pageErrors.push(error.message));

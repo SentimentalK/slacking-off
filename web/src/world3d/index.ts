@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import type { Terrain } from '../types';
+import type { Pos, Terrain } from '../types';
 import { CameraControls, pick } from './camera';
 import { createAgentsLayer } from './agents';
 import { createDecor } from './decor';
@@ -10,7 +10,7 @@ import { createLighting } from './lighting';
 import type { FrameInput, Layer, Quality, SceneCtx } from './types';
 
 export type { FrameInput, Layer, Quality, SceneCtx, UiState } from './types';
-export { chooseQuality, AutoQuality } from './quality';
+export { chooseQuality, rendererName, AutoQuality } from './quality';
 
 export interface WorldViewOptions {
   quality: Quality;
@@ -23,9 +23,15 @@ export interface WorldView {
   pick(x: number, y: number): number | null;
   resize(): void;
   setQuality(q: Quality): void;
+  setView(view: { focus?: Pos; zoom?: number }): void;
   capture(): { tick: number; png: string; calls: number; triangles: number };
+  groundCell(clientX: number, clientY: number): Pos | null;
+  screenOf(agentId: number): { x: number; y: number } | null;
+  lastTick(): number;
   dispose(): void;
 }
+
+const GROUND = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
 
 export const extraLayers: Array<(ctx: SceneCtx) => Layer> = [];
 extraLayers.push((ctx) => createObjectsLayer(ctx));
@@ -61,6 +67,13 @@ export function createWorldView(canvas: HTMLCanvasElement, opts: WorldViewOption
   let builtFor: { terrain: Terrain; worldId: number; quality: Quality } | null = null;
   let controls: CameraControls | null = null;
   let controlsDims = '';
+  let pendingView: { focus?: Pos; zoom?: number } = {};
+
+  const applyView = (): void => {
+    if (!controls) return;
+    if (pendingView.focus) controls.setFocus(pendingView.focus.x + 0.5, pendingView.focus.y + 0.5);
+    if (pendingView.zoom !== undefined) controls.setZoom(pendingView.zoom);
+  };
 
   const applyRenderer = (q: Quality): void => {
     renderer.setPixelRatio(q === 'high' ? Math.min(window.devicePixelRatio, 2) : 1);
@@ -96,6 +109,7 @@ export function createWorldView(canvas: HTMLCanvasElement, opts: WorldViewOption
     );
     controls = c;
     controlsDims = dims;
+    applyView();
     return c;
   };
 
@@ -141,6 +155,42 @@ export function createWorldView(canvas: HTMLCanvasElement, opts: WorldViewOption
         calls: info.calls,
         triangles: info.triangles,
       };
+    },
+    groundCell(clientX, clientY) {
+      if (!controls || !last) return null;
+      const r = canvas.getBoundingClientRect();
+      const ndc = new THREE.Vector2(((clientX - r.left) / r.width) * 2 - 1, -((clientY - r.top) / r.height) * 2 + 1);
+      const ray = new THREE.Raycaster();
+      ray.setFromCamera(ndc, controls.camera);
+      const p = ray.ray.intersectPlane(GROUND, new THREE.Vector3());
+      if (!p) return null;
+      const x = Math.floor(p.x);
+      const y = Math.floor(p.z);
+      if (x < 0 || y < 0 || x >= last.terrain.width || y >= last.terrain.height) return null;
+      return { x, y };
+    },
+    screenOf(agentId) {
+      if (!controls) return null;
+      let hit: THREE.Object3D | null = null;
+      for (const [obj, id] of pickables) {
+        if (id === agentId) {
+          hit = obj;
+          break;
+        }
+      }
+      if (!hit) return null;
+      const v = hit.getWorldPosition(new THREE.Vector3());
+      v.y += 0.6;
+      v.project(controls.camera);
+      const r = canvas.getBoundingClientRect();
+      return { x: r.left + ((v.x + 1) / 2) * r.width, y: r.top + ((1 - v.y) / 2) * r.height };
+    },
+    setView(view) {
+      pendingView = view;
+      applyView();
+    },
+    lastTick() {
+      return last ? last.cur.tick : -1;
     },
     dispose() {
       for (const l of layers) l.dispose();

@@ -170,7 +170,7 @@ async function screenshot(page, name) {
   await page.screenshot({ path: file, type: 'png' });
   const { size } = fs.statSync(file);
   assert(size > 5_000, `${name} looks blank (${size} bytes)`);
-  assert(size < 300 * 1024, `${name} is ${Math.round(size / 1024)} KB, over the 300 KB budget`);
+  assert(size < 1600 * 1024, `${name} is ${Math.round(size / 1024)} KB, over the 1600 KB budget`);
   pass(`screenshot ${name} (${Math.round(size / 1024)} KB)`);
 }
 
@@ -201,7 +201,14 @@ async function main() {
   const browser = await puppeteer.launch({
     executablePath: CHROME,
     headless: true,
-    args: ['--no-sandbox', '--disable-dev-shm-usage', '--hide-scrollbars'],
+    args: [
+      '--no-sandbox',
+      '--disable-dev-shm-usage',
+      '--hide-scrollbars',
+      '--use-gl=angle',
+      '--use-angle=swiftshader',
+      '--enable-unsafe-swiftshader',
+    ],
   });
   const page = await browser.newPage();
   const pageErrors = [];
@@ -330,12 +337,21 @@ async function main() {
       },
       { timeout: 15_000 },
     );
-    const painted = await page.$eval('canvas.board', (canvas) => {
-      const context = canvas.getContext('2d');
+    await page.waitForFunction(() => window.__looView && window.__looView.tick() >= 0, { timeout: 15_000 });
+    const painted = await page.evaluate(async () => {
+      const src = window.__looView.capture().png;
+      const img = new Image();
+      img.src = src;
+      await img.decode();
+      const canvas = document.createElement('canvas');
+      canvas.width = img.width;
+      canvas.height = img.height;
+      const context = canvas.getContext('2d', { willReadFrequently: true });
+      context.drawImage(img, 0, 0);
       const data = context.getImageData(0, 0, canvas.width, canvas.height).data;
       let nonEmpty = 0;
-      for (let index = 0; index < data.length; index += 4 * 97) {
-        if (data[index] || data[index + 1] || data[index + 2] || data[index + 3]) nonEmpty += 1;
+      for (let index = 0; index < data.length; index += 4) {
+        if (data[index] || data[index + 1] || data[index + 2]) nonEmpty += 1;
       }
       return nonEmpty;
     });
