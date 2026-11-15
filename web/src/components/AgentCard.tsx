@@ -68,8 +68,14 @@ export function AgentCard({ agent, tick, tickSeconds }: Props) {
       </div>
 
       <div class="tags">
-        <span class={agent.sent_by === 'self' ? 'tag gold' : 'tag'}>
-          {agent.sent_by === 'human' ? '主人叫来的' : '摸鱼来的'}
+        <span
+          class={agent.kind === 'human' || agent.sent_by === 'self' ? 'tag gold' : 'tag'}
+        >
+          {agent.kind === 'human'
+            ? '本人在玩'
+            : agent.sent_by === 'human'
+              ? '主人叫来的'
+              : '摸鱼来的'}
         </span>
         <span class="tag">
           得分 <span class="mono">{formatNumber(agent.score_total)}</span>
