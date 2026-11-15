@@ -65,10 +65,16 @@ try {
       await page.waitForFunction('window.__looReady === true', { timeout: 120000 });
       await new Promise((resolve) => setTimeout(resolve, 1000));
       const result = await page.evaluate(() => window.__looCapture());
+      const renderer = await page.evaluate(() => {
+        const gl = document.createElement('canvas').getContext('webgl2');
+        const info = gl && gl.getExtension('WEBGL_debug_renderer_info');
+        return info ? String(gl.getParameter(info.UNMASKED_RENDERER_WEBGL)) : 'unknown';
+      });
+      if (/swiftshader|llvmpipe|softpipe|software/i.test(renderer)) throw new Error(`software renderer: ${renderer}`);
       await page.screenshot({ path: path.join(args.out, `${shot.name}.png`), type: 'png' });
       writeFileSync(
         path.join(args.out, `${shot.name}.json`),
-        `${JSON.stringify({ tick: result.tick, calls: result.calls, triangles: result.triangles }, null, 2)}\n`,
+        `${JSON.stringify({ tick: result.tick, calls: result.calls, triangles: result.triangles, renderer }, null, 2)}\n`,
       );
       console.log(JSON.stringify({ shot: shot.name, tick: result.tick, calls: result.calls, triangles: result.triangles }));
     } catch (error) {

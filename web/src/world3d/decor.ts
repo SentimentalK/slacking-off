@@ -20,8 +20,8 @@ import { rand01 } from './rng';
 import type { Layer, SceneCtx } from './types';
 
 const PI = Math.PI;
-const GLOW_OPACITY = 0.9;
-const GLOW_SIZE = 8;
+const GLOW_OPACITY = 0.4;
+const GLOW_SIZE = 5;
 
 interface Item {
   x: number;

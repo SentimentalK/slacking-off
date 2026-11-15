@@ -43,7 +43,7 @@ const backgroundArgs = [
 const headlessArgs = args.headed
   ? backgroundArgs
   : args.gpu
-    ? ['--headless=new', '--use-angle=gl', '--enable-gpu', '--ignore-gpu-blocklist', ...backgroundArgs]
+    ? ['--headless=new', '--use-angle=gl', '--enable-gpu', '--ignore-gpu-blocklist', '--disable-gpu-vsync', '--disable-frame-rate-limit', ...backgroundArgs]
     : ['--headless=new', '--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader'];
 
 const results = [];
@@ -51,7 +51,13 @@ let chromeVersion = '';
 let gpu = '';
 
 const ONLY = process.env.L_PERF_ONLY;
-for (const config of CONFIGS.filter((c) => !ONLY || `${c.width}-${c.quality}` === ONLY)) {
+const selected = CONFIGS.filter((c) => !ONLY || `${c.width}-${c.quality}` === ONLY);
+if (selected.length === 0) {
+  console.error(`L_PERF_ONLY=${ONLY} matches nothing; use one of ${CONFIGS.map((c) => `${c.width}-${c.quality}`).join(', ')}`);
+  process.exit(2);
+}
+const SOFTWARE = /swiftshader|llvmpipe|softpipe|software|no webgl2/i;
+for (const config of selected) {
   const browser = await puppeteer.launch({
     executablePath,
     headless: !args.headed,
@@ -99,6 +105,10 @@ for (const config of CONFIGS.filter((c) => !ONLY || `${c.width}-${c.quality}` ==
       calls: capture.calls,
       triangles: capture.triangles,
     });
+    if ((args.gpu || args.headed) && SOFTWARE.test(gpu)) {
+      console.error(`asked for a real GPU but Chrome rendered with: ${gpu}`);
+      process.exit(1);
+    }
     console.log(JSON.stringify(results[results.length - 1]));
   } finally {
     await browser.close();
@@ -106,7 +116,7 @@ for (const config of CONFIGS.filter((c) => !ONLY || `${c.width}-${c.quality}` ==
 }
 
 const report = {
-  mode: args.headed ? 'headed-gpu' : args.gpu ? 'headless-gpu' : 'headless-swiftshader',
+  mode: SOFTWARE.test(gpu) ? (args.headed ? 'headed-software' : 'headless-software') : args.headed ? 'headed-gpu' : 'headless-gpu',
   results,
   chrome: chromeVersion,
   gpu,
