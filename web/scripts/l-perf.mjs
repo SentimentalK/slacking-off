@@ -43,7 +43,7 @@ const backgroundArgs = [
 const headlessArgs = args.headed
   ? backgroundArgs
   : args.gpu
-    ? ['--headless=new', '--use-angle=gl', '--enable-gpu', '--ignore-gpu-blocklist', '--disable-gpu-vsync', '--disable-frame-rate-limit', ...backgroundArgs]
+    ? ['--headless=new', '--use-angle=gl', '--enable-gpu', '--ignore-gpu-blocklist', ...backgroundArgs]
     : ['--headless=new', '--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader'];
 
 const results = [];

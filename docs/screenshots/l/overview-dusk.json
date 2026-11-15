@@ -1,5 +1,6 @@
 {
   "tick": 23,
-  "calls": 460,
-  "triangles": 1162558
+  "calls": 481,
+  "triangles": 1042396,
+  "renderer": "ANGLE (Intel, Mesa Intel(R) UHD Graphics (CML GT2), OpenGL ES 3.2)"
 }
