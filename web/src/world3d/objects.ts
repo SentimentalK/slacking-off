@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import type { ProjectionAgent, ProjectionObject, Terrain } from '../types';
 import { cellAt, cellKey } from './grid';
 import { duskK } from './lighting';
+import { clearLampSources, setLampSources, type LampSource } from './lamplight';
 import {
   ACCENT,
   barrier,
@@ -53,6 +54,11 @@ const FLAG_NORTH_H = ROOF_RIDGE - ROOF_EAVE + 0.7;
 const BADGE_Z = 0.18;
 const BADGE_LIFT = 0.22;
 const BADGE_SHOWN = 0.5;
+const SHACK_LIGHT_Y = 1.0;
+const SHACK_LIGHT_DIST = 5;
+const SHACK_LIGHT_INTENSITY = 2.2;
+const SHACK_LIGHT_COLOR: [number, number, number] = [1, 0xb0 / 255, 0x60 / 255];
+const SHACK_OWNER = 'shack-lamps';
 
 const SIDES = [
   { dx: 0, dy: -1, rot: 0 },
@@ -179,6 +185,7 @@ export function createObjectsLayer(ctx: SceneCtx): Layer {
     const terrain: Terrain = input.terrain;
     const e = phase * phase * (3 - 2 * phase);
     const k = duskK(ui, clock);
+    const shackSources: LampSource[] = [];
     const cIdx = indexObjects(cur.objects);
     const pIdx = prev ? indexObjects(prev.objects) : null;
     const curAgents = cur.agents;
@@ -255,6 +262,10 @@ export function createObjectsLayer(ctx: SceneCtx): Layer {
             halo.material.opacity = lit ? HALO_LIT : HALO_DIM;
           }
         }
+      }
+
+      if (t.site !== 'toilet' && t.level >= 1) {
+        shackSources.push({ x: tx, z: tz, y: SHACK_LIGHT_Y, color: SHACK_LIGHT_COLOR, intensity: SHACK_LIGHT_INTENSITY, distance: SHACK_LIGHT_DIST });
       }
 
       const prevT = pIdx ? sameKind(pIdx.get(cellKey(t.pos.x, t.pos.y)), t) : undefined;
@@ -416,6 +427,8 @@ export function createObjectsLayer(ctx: SceneCtx): Layer {
       }
     }
 
+    setLampSources(SHACK_OWNER, shackSources);
+
     for (const obj of cur.objects) {
       const ck = cellKey(obj.pos.x, obj.pos.y);
       if (wild(obj.pos.x, obj.pos.y) || obj.kind === 'toilet') continue;
@@ -473,6 +486,7 @@ export function createObjectsLayer(ctx: SceneCtx): Layer {
     },
     dispose() {
       reg.dispose();
+      clearLampSources(SHACK_OWNER);
       root.removeFromParent();
     },
   };
