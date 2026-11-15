@@ -6,6 +6,7 @@ export interface UiState {
   hoverToilet: Pos | null;
   dusk: boolean;
   duskT: number;
+  visionOf?: number | null;
 }
 
 export interface FrameInput {
@@ -17,7 +18,7 @@ export interface FrameInput {
   ui: UiState;
 }
 
-export type Quality = 'high' | 'low';
+export type Quality = 'high' | 'medium' | 'low';
 
 export interface SceneCtx {
   scene: THREE.Scene;

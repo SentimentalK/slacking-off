@@ -130,7 +130,7 @@ function buildPines(terrain: Terrain, worldId: number, quality: SceneCtx['qualit
     stumps.push({ x, y, mats: [local(x + 0.5, 0.125, y + 0.5)] });
   });
 
-  const expected = quality === 'high' ? 1.3 : 0.65;
+  const expected = quality === 'low' ? 0.65 : 1.3;
   const whole = Math.floor(expected);
   const frac = expected - whole;
   for (let y = -MG; y < H + MG; y++) {

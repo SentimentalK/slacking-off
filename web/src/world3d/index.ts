@@ -5,6 +5,7 @@ import { createAgentsLayer } from './agents';
 import { createDecor } from './decor';
 import { createForest } from './forest';
 import { createObjectsLayer } from './objects';
+import { createVisionBoxLayer } from './visionbox';
 import { createGround } from './ground';
 import { createLighting } from './lighting';
 import type { FrameInput, Layer, Quality, SceneCtx } from './types';
@@ -36,12 +37,13 @@ const GROUND = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
 export const extraLayers: Array<(ctx: SceneCtx) => Layer> = [];
 extraLayers.push((ctx) => createObjectsLayer(ctx));
 extraLayers.push((ctx) => createAgentsLayer(ctx));
+extraLayers.push((ctx) => createVisionBoxLayer(ctx));
 
 const EMPTY_TERRAIN: Terrain = { width: 0, height: 0, entrance: { x: 0, y: 0 }, rows: [] };
 
 export function createWorldView(canvas: HTMLCanvasElement, opts: WorldViewOptions): WorldView {
   let quality: Quality = opts.quality;
-  const renderer = new THREE.WebGLRenderer({ canvas, antialias: quality === 'high' });
+  const renderer = new THREE.WebGLRenderer({ canvas, antialias: quality !== 'low' });
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
   renderer.toneMappingExposure = 1.12;
@@ -77,7 +79,7 @@ export function createWorldView(canvas: HTMLCanvasElement, opts: WorldViewOption
 
   const applyRenderer = (q: Quality): void => {
     renderer.setPixelRatio(q === 'high' ? Math.min(window.devicePixelRatio, 2) : 1);
-    renderer.shadowMap.enabled = q === 'high';
+    renderer.shadowMap.enabled = q !== 'low';
     renderer.shadowMap.type = THREE.PCFShadowMap;
     resize();
   };

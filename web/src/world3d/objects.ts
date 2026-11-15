@@ -6,10 +6,15 @@ import {
   ACCENT,
   barrier,
   cornerPost,
+  doorFlag,
   doorSide,
+  flagMaterial,
   gate,
+  levelBadge,
   plankCount,
   plankWall,
+  ROOF_EAVE,
+  ROOF_RIDGE,
   roof,
   roofPalette,
   sandbagWall,
@@ -43,6 +48,11 @@ const HALO_LIT = 0.8;
 const HALO_DIM = 0.15;
 const MAX_LEVEL = 5;
 const DOOR_SWING = 0.45 * PI;
+const FLAG_H = 0.6;
+const FLAG_NORTH_H = ROOF_RIDGE - ROOF_EAVE + 0.7;
+const BADGE_Z = 0.18;
+const BADGE_LIFT = 0.22;
+const BADGE_SHOWN = 0.5;
 
 const SIDES = [
   { dx: 0, dy: -1, rot: 0 },
@@ -337,6 +347,10 @@ export function createObjectsLayer(ctx: SceneCtx): Layer {
           pivot.rotation.y = -a;
           (dr.userData.sign as THREE.Mesh).material = signMaterial(o.open);
           (dr.userData.top as THREE.Mesh).material = signMaterial(o.open);
+          const flag = reg.get(`flag:${ck}@${tk}`, () => doorFlag(s.dy < 0 ? FLAG_NORTH_H : FLAG_H));
+          flag.position.set(ox, WH + ROOF_EAVE, oz);
+          flag.rotation.y = faceRot;
+          (flag.userData.cloth as THREE.Mesh).material = flagMaterial(phase < 0.5 && prevO ? prevO.open : o.open);
         } else if (o.kind === 'door') {
           const pd = prevO ? lerp(progressOf(prevO), progressOf(o), e) : progressOf(o);
           const site = reg.get(`siteDoor:${ck}@${tk}`, () => {
@@ -393,6 +407,12 @@ export function createObjectsLayer(ctx: SceneCtx): Layer {
         r.traverse((c) => {
           if ((c as THREE.Mesh).isMesh) c.castShadow = alpha > 0.5;
         });
+      }
+
+      if (t.site !== 'toilet' && t.level >= 1) {
+        const badge = reg.get(`badge:${tk}:${level}`, () => levelBadge(level));
+        badge.position.set(tx, y + ROOF_RIDGE + BADGE_LIFT, tz + BADGE_Z);
+        badge.visible = alpha >= BADGE_SHOWN;
       }
     }
 
