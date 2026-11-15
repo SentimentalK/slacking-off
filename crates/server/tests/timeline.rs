@@ -3,8 +3,9 @@
 
 use loo_core::{map, Config};
 use loo_proto::{
-    Envelope, JoinRequest, JoinResponse, LeaveResponse, Placement, RegisterRequest, SentBy,
-    SessionOutcome, Tick, TimelineSpan,
+    BuildKind, BuildRequest, DemolishRequest, Dir, Envelope, JoinRequest, JoinResponse,
+    LeaveResponse, Placement, RegisterRequest, SentBy, SessionOutcome, TargetSpec, Tick,
+    TimelineSpan,
 };
 use loo_server::Server;
 use std::path::PathBuf;
@@ -198,7 +199,7 @@ async fn touching_spans_merge_into_one() {
 }
 
 #[tokio::test]
-async fn a_queued_session_starts_its_span_at_the_entrance() {
+async fn a_queued_session_covers_its_time_in_the_queue() {
     let server = open(
         "queue",
         Config {
@@ -209,7 +210,10 @@ async fn a_queued_session_starts_its_span_at_the_entrance() {
     let inside = register(&server, "alpha-one").await;
     let queued = register(&server, "beta-one").await;
     assert!(join(&server, &inside).await.ok);
+    tick_n(&server, 2).await;
+
     let queued_join = tick(&server).await;
+    assert_eq!(queued_join, 2);
     let waiting = join(&server, &queued).await;
     assert!(waiting.ok, "queued join: {:?}", waiting.error);
     assert!(matches!(
@@ -217,34 +221,39 @@ async fn a_queued_session_starts_its_span_at_the_entrance() {
         Some(Placement::Waiting { .. })
     ));
 
-    tick_n(&server, 1).await;
+    // A body in the queue is on the map, so the join tick itself replays even
+    // though this session has not entered the field yet.
+    assert_eq!(
+        spans(&server, queued_join, queued_join).await,
+        vec![TimelineSpan {
+            from: queued_join,
+            to: queued_join,
+        }],
+        "queue time must replay from the join tick"
+    );
+
     leave(&server, &inside).await;
     tick_n(&server, 1).await;
     let entered = tick(&server).await;
     assert_eq!(
-        spans(&server, 0, entered).await,
-        vec![
-            TimelineSpan { from: 0, to: 0 },
-            TimelineSpan {
-                from: entered,
-                to: entered,
-            },
-        ],
-        "a standing session's span runs to the current tick"
+        entered, 3,
+        "the queued session takes the entrance next tick"
+    );
+    assert_eq!(
+        spans(&server, 0, queued_join).await,
+        vec![TimelineSpan {
+            from: 0,
+            to: queued_join,
+        }],
+        "the inside session's span and the queue span are contiguous"
     );
 
     tick_n(&server, 2).await;
     leave(&server, &queued).await;
     assert_eq!(
         spans(&server, 0, tick(&server).await).await,
-        vec![
-            TimelineSpan { from: 0, to: 0 },
-            TimelineSpan {
-                from: entered,
-                to: 3,
-            },
-        ],
-        "the waiter's span begins at the entrance, not at join tick {queued_join}"
+        vec![TimelineSpan { from: 0, to: 4 }],
+        "entering from the queue does not move the start forward"
     );
 }
 
@@ -344,4 +353,54 @@ async fn an_open_session_does_not_swallow_the_empty_gap_before_it() {
             "tick {empty} held nobody but a span covers it: {spans:?}"
         );
     }
+}
+
+#[tokio::test]
+async fn an_omitted_to_reaches_the_current_tick() {
+    let server = open("default-to", Config::default());
+    let token = register(&server, "alpha-one").await;
+    assert!(join(&server, &token).await.ok);
+    assert!(
+        server
+            .build_cmd(
+                &token,
+                BuildRequest {
+                    kind: BuildKind::Wall,
+                    target: TargetSpec::Dir(Dir::N),
+                },
+            )
+            .await
+            .ok
+    );
+    tick_n(&server, 3).await;
+    assert!(
+        server
+            .demolish_cmd(
+                &token,
+                DemolishRequest {
+                    target: TargetSpec::Dir(Dir::N),
+                },
+            )
+            .await
+            .ok
+    );
+    tick_n(&server, 3).await;
+    let now = tick(&server).await;
+
+    // The HTTP layer sends `Tick::MAX` when `to` is omitted.
+    let env = server.timeline(0, Tick::MAX).await;
+    assert!(env.ok, "timeline: {:?}", env.error);
+    let timeline = env.result.expect("timeline result");
+    assert_eq!(
+        timeline.to, now,
+        "an omitted `to` is clamped to the current tick"
+    );
+    assert!(
+        !timeline.spans.is_empty(),
+        "spans survive the default window"
+    );
+    assert!(
+        !timeline.markers.is_empty(),
+        "markers survive the default window (the demolish produced a marker)"
+    );
 }

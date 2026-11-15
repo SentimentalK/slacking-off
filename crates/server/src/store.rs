@@ -1469,10 +1469,12 @@ impl Store {
     /// [`crate::Server::projection_at`]: a tick replays at least one session
     /// when, after it settles, at least one session stands in the world.
     ///
-    /// The tick a session enters counts (`Joined { inside: true }` and
-    /// `EnteredWorld`); the tick it ends does not, so a session that enters at
-    /// `t` and ends at `e > t` covers `[t, e - 1]`. A session still present
-    /// after `current_tick` covers `[start, max(start, current_tick)]`. Spans
+    /// The tick a session joins counts, including the queue: a queued player is
+    /// still a body on the map, so its stretch starts at `Joined` and
+    /// `EnteredWorld` only keeps that start. The tick a session ends does not
+    /// count, so a session that joins at `t` and ends at `e > t` covers
+    /// `[t, e - 1]`. A session still present after `current_tick` covers
+    /// `[start, max(start, current_tick)]`. Spans
     /// are trimmed to `[from, to]`, sorted ascending, and merged when they
     /// overlap or touch.
     pub fn timeline_spans(
@@ -1492,18 +1494,15 @@ impl Store {
         for payload in rows {
             let event: Event = serde_json::from_str(&payload?)?;
             match &event.kind {
-                EventKind::Joined {
-                    session,
-                    inside: true,
-                    ..
-                } => {
-                    starts.insert(*session, event.tick);
+                // Both an immediate entry and a queued join put a body on the
+                // map, so the replayable stretch begins at the join tick.
+                EventKind::Joined { session, .. } => {
+                    starts.entry(*session).or_insert(event.tick);
                 }
-                // A queued session joins outside the world; its replayable
-                // stretch begins when it takes the entrance.
-                EventKind::Joined { .. } => {}
+                // Entering from the queue must not move the start forward: the
+                // queue ticks were already replayable.
                 EventKind::EnteredWorld { session, .. } => {
-                    starts.insert(*session, event.tick);
+                    starts.entry(*session).or_insert(event.tick);
                 }
                 EventKind::SessionEnded { session, .. } => {
                     if let Some(start) = starts.remove(session) {

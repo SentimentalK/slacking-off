@@ -724,6 +724,10 @@ impl Server {
             let inner = self.inner.lock().await;
             inner.world.tick
         };
+        // An omitted `to` arrives as `Tick::MAX`; using it raw would become -1
+        // in SQLite and match nothing. Only the sentinel is clamped: an
+        // explicit future bound stays as given (tests and tooling use it).
+        let to = if to == Tick::MAX { current_tick } else { to };
         let markers = match self.store.timeline_markers(from, to) {
             Ok(markers) => markers,
             Err(error) => {
