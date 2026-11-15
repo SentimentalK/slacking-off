@@ -79,6 +79,7 @@ interface LiveState {
   dusk: boolean;
   duskT: number;
   reduceMotion: boolean;
+  vision: boolean;
 }
 
 export function useWorld(canvasRef: RefObject<HTMLCanvasElement | null>) {
@@ -112,6 +113,7 @@ export function useWorld(canvasRef: RefObject<HTMLCanvasElement | null>) {
     dusk: false,
     duskT: 0,
     reduceMotion: false,
+    vision: true,
   });
 
   const select = (id: number | null) => {
@@ -301,6 +303,7 @@ export function useWorld(canvasRef: RefObject<HTMLCanvasElement | null>) {
           hoverToilet: STILL_MODE ? null : state.hoverToilet,
           dusk: state.dusk,
           duskT: state.duskT,
+          visionOf: STILL_MODE || !state.vision ? null : state.selected,
         };
         view.draw({
           terrain: state.terrain,
@@ -404,7 +407,12 @@ export function useWorld(canvasRef: RefObject<HTMLCanvasElement | null>) {
     return { from, to, marks, pointer: ((tick - from) / (to - from)) * 100 };
   }, [tick]);
 
+  const setVision = (on: boolean) => {
+    live.current.vision = on;
+  };
+
   return {
+    setVision,
     projection,
     terrain,
     status,

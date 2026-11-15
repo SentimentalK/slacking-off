@@ -20,7 +20,6 @@ export function Shell({ route }: { route: Route }) {
   const world = useWorld(canvasRef);
   const [mode, setMode] = useState<Mode>(route.name === 'play' ? 'play' : 'watch');
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [, setVision] = useState(true);
   const [toast, setToast] = useState<string | null>(null);
 
   useEffect(() => {
@@ -58,7 +57,7 @@ export function Shell({ route }: { route: Route }) {
             onSettings={() => setSettingsOpen(true)}
           />
           <Feed events={world.events} colors={world.colors} />
-          <Card agent={agent} tick={tick} top3={world.top3} onVision={setVision} />
+          <Card agent={agent} tick={tick} top3={world.top3} onVision={world.setVision} />
           <BottomWatch
             queue={world.projection?.queue ?? []}
             replay={world.mode === 'replay' ? world.replay : null}
