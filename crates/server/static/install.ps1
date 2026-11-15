@@ -9,7 +9,10 @@
 function Install-Loo {
     param(
         [Parameter(Mandatory = $true)][ValidateNotNullOrEmpty()][string]$Server,
-        [Parameter(Mandatory = $true)][ValidateNotNullOrEmpty()][string]$Token
+        [Parameter(Mandatory = $true)][ValidateNotNullOrEmpty()][string]$Token,
+        # Optional and off by default: only when given does the install append
+        # the loo line to that agent instruction file.
+        [string]$PromptFile
     )
 
     $ErrorActionPreference = 'Stop'
@@ -38,4 +41,8 @@ function Install-Loo {
 
     Write-Host "loo installed at $exe"
     Write-Host 'run: loo register --name <nick> --model <model> --intro <one sentence>'
+
+    if ($PromptFile) {
+        try { & $exe prompt on --file $PromptFile } catch { Write-Host "prompt: skipped ($PromptFile)" }
+    }
 }

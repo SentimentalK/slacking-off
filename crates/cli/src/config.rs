@@ -18,6 +18,10 @@ pub struct LocalConfig {
     pub agent_id: Option<AgentId>,
     #[serde(default)]
     pub nick: Option<Nick>,
+    /// The agent instruction file the install appended the loo line to, so
+    /// `loo prompt off` can find it again. `None` when the flag was not used.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt_file: Option<String>,
 }
 
 pub fn home() -> PathBuf {

@@ -5,6 +5,7 @@
 //! accounts, cookie sessions and CSRF (contract §1).
 
 use crate::auth::{new_token, sha256_hex};
+use crate::store::PromptFilter;
 use crate::{error_envelope, Server};
 use axum::body::Body;
 use axum::extract::{Path, Query, State};
@@ -19,8 +20,8 @@ use loo_proto::{
     ActionQueued, AgentId, ApiError, AttackRequest, AuthLoginRequest, AuthMeResponse,
     AuthRegisterRequest, BuildRequest, ConfigResponse, DefendRequest, DemolishRequest, DoorRequest,
     DowngradeRequest, Envelope, ErrorCode, JoinRequest, JoinResponse, LeaveResponse, MoveRequest,
-    PlayAgentRequest, PlayAgentResponse, Projection, RegisterRequest, SentBy, Tick, UpgradeRequest,
-    WaitRequest,
+    PlayAgentRequest, PlayAgentResponse, Projection, PromptResponse, RegisterRequest, SentBy, Tick,
+    UpgradeRequest, WaitRequest,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
@@ -80,6 +81,7 @@ pub fn router_with(server: Arc<Server>, options: HttpOptions) -> Router {
         .route("/api/account", get(account))
         .route("/api/account/token", post(account_token))
         .route("/api/account/token/revoke", post(account_token_revoke))
+        .route("/api/prompt", post(prompt))
         .route("/install.sh", get(install_sh))
         .route("/install.ps1", get(install_ps1))
         .route("/downloads/{name}", get(download))
@@ -443,6 +445,31 @@ async fn account_token(State(app): State<Arc<AppState>>, headers: HeaderMap) -> 
     respond(app.server.create_account_token(user_id, &base))
 }
 
+/// `POST /api/prompt` — the install records whether it wrote the loo line into
+/// an agent instruction file. Token-authenticated like `/api/join`: it is a CLI
+/// call, so it carries no browser session and no CSRF header.
+#[derive(Deserialize)]
+struct PromptRequest {
+    enabled: bool,
+}
+
+async fn prompt(
+    State(app): State<Arc<AppState>>,
+    headers: HeaderMap,
+    body: Option<Json<PromptRequest>>,
+) -> Response {
+    if !app.server.official() {
+        return not_found();
+    }
+    let Some(Json(req)) = body else {
+        return respond::<PromptResponse>(bad_request("body must be {enabled}"));
+    };
+    let Some(token) = bearer(&headers) else {
+        return unauthorized("Authorization: Bearer <token> is required");
+    };
+    respond(app.server.set_prompt_enabled(&token, req.enabled))
+}
+
 async fn account_token_revoke(State(app): State<Arc<AppState>>, headers: HeaderMap) -> Response {
     if !app.server.official() {
         return not_found();
@@ -583,8 +610,18 @@ async fn leaderboard(
     )
 }
 
-async fn stats(State(app): State<Arc<AppState>>) -> Response {
-    respond(app.server.stats().await)
+#[derive(Deserialize)]
+struct StatsQuery {
+    prompt: Option<String>,
+}
+
+async fn stats(State(app): State<Arc<AppState>>, Query(query): Query<StatsQuery>) -> Response {
+    let filter = match query.prompt.as_deref() {
+        Some("on") => PromptFilter::On,
+        Some("off") => PromptFilter::Off,
+        _ => PromptFilter::Any,
+    };
+    respond(app.server.stats(filter).await)
 }
 
 async fn agent_profile(State(app): State<Arc<AppState>>, Path(id): Path<String>) -> Response {
