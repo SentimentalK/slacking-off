@@ -985,6 +985,18 @@ pub struct Timeline {
     pub from: Tick,
     pub to: Tick,
     pub markers: Vec<TimelineMarker>,
+    /// Closed intervals whose ticks replay at least one session, ascending and
+    /// non-overlapping.
+    #[serde(default)]
+    pub spans: Vec<TimelineSpan>,
+}
+
+/// One closed interval of replayable ticks: every tick in `[from, to]` has at
+/// least one session in the world after it settles.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TimelineSpan {
+    pub from: Tick,
+    pub to: Tick,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

@@ -11,6 +11,7 @@ import {
   NICK_RE,
   describeCell,
   menuFor,
+  moveAction,
   ownPos,
   useOffer,
 } from '../play/actions';
@@ -31,12 +32,11 @@ import {
   leaveWorld,
   loadMe,
   loadState,
-  move,
   submit,
 } from '../play/client';
 import { AGENT_COLORS } from '../sprites';
 import type {
-  Dir,
+  ActionState,
   EventView,
   Need,
   PlayMe,
@@ -100,6 +100,49 @@ function untilText(until: number, tick: number): string {
   return `还有 ${until - tick} tick`;
 }
 
+/** An accepted command waiting for the server to settle it. */
+interface PendingAction {
+  label: string;
+  effectiveTick: number;
+}
+
+type PendingTone = 'rejected' | 'executing' | 'pending' | 'idle';
+
+interface PendingBar {
+  tone: PendingTone;
+  title: string;
+  detail: string;
+}
+
+/**
+ * The bar under the board: one line of truth per state. A failed command wins
+ * over a running action, which wins over a queued one, which wins over "idle",
+ * so the player never reads an older success next to a fresh rejection.
+ */
+function pendingBar(
+  error: string | null,
+  executing: ActionState | null,
+  pending: PendingAction | null,
+  countdown: string,
+): PendingBar {
+  if (error) return { tone: 'rejected', title: `被拒绝：${error}`, detail: '' };
+  if (executing) {
+    return {
+      tone: 'executing',
+      title: `正在执行：${executing.description}`,
+      detail: `剩 ${executing.remaining} tick`,
+    };
+  }
+  if (pending) {
+    return {
+      tone: 'pending',
+      title: `已提交：${pending.label}`,
+      detail: `下一次结算执行 · ${countdown}`,
+    };
+  }
+  return { tone: 'idle', title: '没有待执行动作', detail: `下一次结算 · ${countdown}` };
+}
+
 function useCompactBoard(): boolean {
   const [compact, setCompact] = useState(() => window.matchMedia('(max-width: 520px)').matches);
   useEffect(() => {
@@ -125,6 +168,7 @@ export function Play() {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [msLeft, setMsLeft] = useState(0);
+  const [pending, setPending] = useState<PendingAction | null>(null);
   const [outcome, setOutcome] = useState<{ outcome: SessionOutcome; score: number | null } | null>(null);
   const [nick, setNick] = useState('');
   const [color, setColor] = useState(0);
@@ -141,6 +185,11 @@ export function Play() {
   const applyState = (next: PlayState, incoming: EventView[]) => {
     stateRef.current = next;
     setState(next);
+    // The server settled the queued command: its tick reached `effective_tick`,
+    // so the bar must stop claiming "已提交".
+    setPending((current) =>
+      current && next.tick >= current.effectiveTick ? null : current,
+    );
     if (incoming.length > 0) setEvents((previous) => mergeEvents(previous, incoming));
     deadlineRef.current = performance.now() + next.ms_to_next_tick;
     setMsLeft(next.ms_to_next_tick);
@@ -317,13 +366,7 @@ export function Play() {
       if (envelope.events.length > 0) {
         setEvents((previous) => mergeEvents(previous, envelope.events));
       }
-      await refresh();
-      setNotice(`${action.label}已提交`);
-    });
-
-  const doMove = (dir: Dir) =>
-    withBusy(async () => {
-      await move(dir);
+      setPending({ label: action.label, effectiveTick: envelope.result.effective_tick });
       await refresh();
     });
 
@@ -390,7 +433,7 @@ export function Play() {
     const current = stateRef.current;
     if (!current || !current.joined || current.placement !== 'inside') return;
     event.preventDefault();
-    void doMove(dir);
+    void runAction(moveAction(dir));
   };
 
   useEffect(() => {
@@ -427,6 +470,9 @@ export function Play() {
   const countdown = msLeft <= 0 ? '结算中' : `${(msLeft / 1000).toFixed(1)}s`;
   const canMove = Boolean(state?.joined && state.placement === 'inside' && !busy);
   const selectedText = state && selected ? describeCell(state, selected) : '';
+  // A multi-tick server action (the same `action` the status panel reads).
+  const executing = state?.joined ? (state.agent?.action ?? null) : null;
+  const bar = pendingBar(error, executing, pending, countdown);
 
   if (phase === 'loading') {
     return (
@@ -582,6 +628,15 @@ export function Play() {
               )}
             </div>
 
+            <div
+              class={`play-pending play-pending-${bar.tone}`}
+              data-testid="play-pending"
+              data-state={bar.tone}
+            >
+              <span class="play-pending-label">{bar.title}</span>
+              <span class="play-pending-detail">{bar.detail}</span>
+            </div>
+
             <div class="play-controls">
               <div class="play-dpad" role="group" aria-label="移动">
                 <span class="play-dpad-blank" />
@@ -591,7 +646,7 @@ export function Play() {
                   aria-label="向北移动（W / ↑）"
                   data-testid="play-move-n"
                   disabled={!canMove}
-                  onClick={() => void doMove('N')}
+                  onClick={() => void runAction(moveAction('N'))}
                 >
                   北
                 </button>
@@ -602,7 +657,7 @@ export function Play() {
                   aria-label="向西移动（A / ←）"
                   data-testid="play-move-w"
                   disabled={!canMove}
-                  onClick={() => void doMove('W')}
+                  onClick={() => void runAction(moveAction('W'))}
                 >
                   西
                 </button>
@@ -613,7 +668,7 @@ export function Play() {
                   aria-label="向东移动（D / →）"
                   data-testid="play-move-e"
                   disabled={!canMove}
-                  onClick={() => void doMove('E')}
+                  onClick={() => void runAction(moveAction('E'))}
                 >
                   东
                 </button>
@@ -624,7 +679,7 @@ export function Play() {
                   aria-label="向南移动（S / ↓）"
                   data-testid="play-move-s"
                   disabled={!canMove}
-                  onClick={() => void doMove('S')}
+                  onClick={() => void runAction(moveAction('S'))}
                 >
                   南
                 </button>
@@ -664,11 +719,6 @@ export function Play() {
             </div>
 
             {offer?.reason ? <p class="play-notice">使用不可用：{offer.reason}</p> : null}
-            {error ? (
-              <p class="form-error play-error" role="alert">
-                {error}
-              </p>
-            ) : null}
             {notice ? (
               <p class="play-notice" role="status">
                 {notice}

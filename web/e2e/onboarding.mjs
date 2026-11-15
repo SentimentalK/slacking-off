@@ -1,7 +1,9 @@
 // Real-Chrome end-to-end for the empty-world replay on `/`: a fresh database
 // shows no replay badge, one CLI agent leaves behind a `demolish` highlight, the
-// empty spectator page replays the window around it, and a second agent walking
-// in switches the page back to live within two ticks.
+// empty spectator page loops the last replayable span, and a second agent
+// walking in switches the page back to live within two ticks. The spans from
+// `/api/timeline` are checked against the empty stretch between the two agents,
+// and `/replay` is driven through its span navigation.
 //
 // `scripts/e2e-k.sh` starts the official server and passes `BASE`, `ROOT` and
 // `LOO`. Every successful step prints `PASS: ...`; a failure exits non-zero and
@@ -27,9 +29,6 @@ const USERNAME = 'k2-e2e';
 const PASSWORD = 'k2-password-1';
 const NICK1 = 'k2-ai';
 const NICK2 = 'k2-ai-2';
-
-/** Same width the page uses, only to keep the tick samples off the wrap edge. */
-const REPLAY_WINDOW_TICKS = 120;
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -130,6 +129,36 @@ async function pageInside() {
   });
 }
 
+/** The whole recording: `{ from, to, markers, spans }`. */
+async function timeline() {
+  const { body } = await getJSON('/api/timeline?from=0&to=999999');
+  if (!body.ok || !Array.isArray(body.result?.spans)) {
+    fail(`/api/timeline carries no spans: ${JSON.stringify(body).slice(0, 300)}`);
+  }
+  return body.result;
+}
+
+function spanOf(spans, tick) {
+  return spans.find((span) => tick >= span.from && tick <= span.to) ?? null;
+}
+
+/** `/replay` keeps its tick in the numeric field next to the transport. */
+async function replayPageTick() {
+  const value = await page.$eval('.tick-input', (input) => input.value);
+  return value === '' ? null : Number(value);
+}
+
+async function clickReplayButton(label) {
+  const clicked = await page.evaluate((aria) => {
+    const button = document.querySelector(`button[aria-label="${aria}"]`);
+    if (!button || button.disabled) return false;
+    button.click();
+    return true;
+  }, label);
+  if (!clicked) fail(`the ${label} button is missing or disabled`);
+}
+
+
 // --- accounts --------------------------------------------------------------
 
 /** Register the account, take a plaintext token, and seed a `LOO_HOME` with it. */
@@ -213,6 +242,30 @@ async function phaseEmptyHome() {
   if (await replayBadge()) fail('a fresh database shows the replay badge');
   pass(`fresh database: the spectator stays live at tick ${await liveTick()} with no replay badge`);
   await screenshot('home-empty-1440.png');
+
+  // No spans yet: `/replay` says so instead of drawing a fake rail, and only the
+  // transport is disabled (the tick field still takes a jump).
+  await page.goto(`${BASE}/replay`, { waitUntil: 'domcontentloaded' });
+  await page.waitForSelector('.replay-timeline', { timeout: 10_000 });
+  await until(async () => (await page.$('.timeline-empty')) !== null, {
+    timeout: 10_000,
+    interval: 50,
+    label: 'the empty replay notice',
+  });
+  const notice = await page.$eval('.timeline-empty', (element) => element.textContent.trim());
+  if (notice !== '没有可回放的区间') fail(`the empty replay notice reads ${notice}`);
+  const emptyState = await page.evaluate(() => ({
+    rail: document.querySelector('.marker-track') !== null,
+    play: document.querySelector('button.transport')?.disabled ?? null,
+    field: document.querySelector('.tick-input')?.disabled ?? null,
+  }));
+  if (emptyState.rail) fail('a world without spans still draws the rail');
+  if (emptyState.play !== true) fail('the transport is not disabled without spans');
+  if (emptyState.field !== false) fail('the tick field is disabled without spans');
+  pass('/replay without spans shows 没有可回放的区间, no rail, and a disabled transport');
+
+  await page.goto(`${BASE}/`, { waitUntil: 'domcontentloaded' });
+  await page.waitForSelector('.home-intro', { timeout: 15_000 });
 }
 
 async function phaseHistory() {
@@ -297,44 +350,91 @@ async function phaseHistory() {
     fail(`the timeline has no demolish marker: ${JSON.stringify(markers).slice(0, 300)}`);
   }
   pass(`the timeline carries ${markers.length} marker(s), including demolish`);
+
+  // A tick is replayable while somebody stands in the world. One agent joined,
+  // worked and left, so there is exactly one settled span, and the ticks after
+  // its end hold nobody.
+  const spans = body.result?.spans ?? [];
+  if (spans.length === 0) fail('the timeline has replayable ticks but no spans');
+  spans.forEach((span, index) => {
+    if (!(span.from <= span.to)) fail(`span ${index} is inverted: ${JSON.stringify(span)}`);
+    if (span.from < 0) fail(`span ${index} starts before tick 0: ${JSON.stringify(span)}`);
+  });
+  for (let index = 1; index < spans.length; index += 1) {
+    const previous = spans[index - 1];
+    const next = spans[index];
+    if (next.from <= previous.to) {
+      fail(`spans ${index - 1} and ${index} overlap: ${JSON.stringify(spans)}`);
+    }
+    if (!(next.from > previous.to + 1)) {
+      fail(`spans ${index - 1} and ${index} touch with no empty tick between them: ${JSON.stringify(spans)}`);
+    }
+  }
+  pass(`spans are closed, ascending and separated: ${JSON.stringify(spans)}`);
+
+  // The field is empty right now: its ticks must not sit in any span.
+  const lastSpan = spans[spans.length - 1];
+  const emptyTo = await liveTick();
+  if (emptyTo <= lastSpan.to) {
+    fail(`the field is empty at tick ${emptyTo} but the last span runs to ${lastSpan.to}`);
+  }
+  for (let probe = lastSpan.to + 1; probe <= emptyTo; probe += 1) {
+    if (spanOf(spans, probe)) {
+      fail(`tick ${probe} holds nobody but sits in a span: ${JSON.stringify(spans)}`);
+    }
+  }
+  pass(`the empty ticks ${lastSpan.to + 1}..${emptyTo} are in no span`);
   return markers;
 }
 
-async function phaseReplay(markers) {
+async function phaseReplay() {
   phase('replay');
   await page.reload({ waitUntil: 'domcontentloaded' });
   await page.waitForSelector('.replay-badge', { timeout: 3_000 });
   pass('the empty spectator page started replaying within 3s of the reload');
 
-  // The window is `[to - 120, to]` and wraps every 30s; start the two samples
-  // away from the wrap so a fresh cycle cannot hide the advance.
-  const highlight = Math.max(...markers.map((marker) => marker.tick));
-  const windowTo = Math.min(highlight, await liveTick());
-  const windowFrom = Math.max(0, windowTo - REPLAY_WINDOW_TICKS);
-  const wrapFloor = windowTo - 8;
-  if (wrapFloor > windowFrom) {
-    await until(async () => (await pageTick()) < wrapFloor, {
-      timeout: 10_000,
-      interval: 100,
-      label: 'the replay to pass the window end',
-    });
+  const { spans } = await timeline();
+  if (spans.length === 0) fail('the empty world has no replayable span to loop');
+  const span = spans[spans.length - 1];
+  const live = await liveTick();
+  if (span.to > live) {
+    fail(`the looped span [${span.from}, ${span.to}] reaches past the live tick ${live}`);
   }
 
-  const firstTick = await pageTick();
-  await sleep(1_000);
-  const secondTick = await pageTick();
-  const live = await liveTick();
-  if (firstTick === null || secondTick === null) {
-    fail(`the header carried no tick (${firstTick}, ${secondTick})`);
+  // The auto replay loops exactly this span. Sample the four-tick-per-second
+  // loop until it wraps once: every tick must sit inside the span, every step
+  // must be the next tick, and the wrap must go back to the span's first tick
+  // instead of walking into the empty ticks after the last one.
+  const samples = [];
+  let wrapped = false;
+  const deadline = Date.now() + 30_000;
+  while (!wrapped) {
+    if (Date.now() > deadline) {
+      fail(`the replay never wrapped back to tick ${span.from}; samples: ${samples.slice(-12).join(',')}`);
+    }
+    const tick = await pageTick();
+    if (tick === null) fail('the header carried no tick while replaying');
+    if (samples.length > 0) {
+      const previous = samples[samples.length - 1];
+      if (previous === span.to && tick === span.from) {
+        wrapped = true;
+      } else if (tick !== previous && tick !== previous + 1) {
+        fail(
+          `the replay jumped from tick ${previous} to ${tick} inside span [${span.from}, ${span.to}]`,
+        );
+      }
+    }
+    if (!spanOf([span], tick)) {
+      fail(`the replay showed tick ${tick}, which is not in the last span [${span.from}, ${span.to}]`);
+    }
+    samples.push(tick);
+    await sleep(40);
   }
-  if (!(secondTick > firstTick)) {
-    fail(`the replay did not advance: ${firstTick} then ${secondTick} (live ${live})`);
-  }
-  if (secondTick > live) {
-    fail(`the replayed tick ${secondTick} is ahead of the live tick ${live}`);
-  }
-  pass(`replay advanced from tick ${firstTick} to ${secondTick} while live is at ${live}`);
+  pass(
+    `the replay looped span [${span.from}, ${span.to}] tick by tick and wrapped back to ${span.from} after ${samples.length} samples`,
+  );
   await screenshot('replay-empty-1440.png');
+  pass(`replay-empty-1440.png is replay frame tick ${await pageTick()} while live is at ${await liveTick()}`);
 }
 
 async function phaseBackLive() {
@@ -369,6 +469,7 @@ async function phaseBackLive() {
   const elapsed = Date.now() - startedAt;
   const t1 = await liveTick();
   const inside = await pageInside();
+  const status = await page.$eval('.live', (element) => element.getAttribute('data-status'));
 
   if (t1 - t0 > 2) {
     fail(`the page left replay ${t1 - t0} ticks after the join (t0 ${t0}, t1 ${t1}, ${elapsed} ms)`);
@@ -376,10 +477,107 @@ async function phaseBackLive() {
   if (!(inside >= 1)) {
     fail(`the page still shows ${inside} agents inside after the join`);
   }
+  if (status !== 'live') {
+    fail(`the page status is ${status} after the join, not live`);
+  }
   pass(
-    `replay switched back within ${t1 - t0} ticks (${elapsed} ms) at tick ${t1}; the page shows ${inside} inside`,
+    `replay switched back within ${t1 - t0} ticks (${elapsed} ms) at tick ${t1}; the page shows ${inside} inside and status=live`,
   );
   await screenshot('replay-back-live-1440.png');
+}
+
+async function phaseReplayPage() {
+  phase('replay page');
+  const { spans } = await timeline();
+  if (spans.length < 2) {
+    fail(`/replay needs at least two spans to navigate, got ${JSON.stringify(spans)}`);
+  }
+  const first = spans[0];
+  const second = spans[1];
+  const last = spans[spans.length - 1];
+
+  // No `?tick=`: the page opens on the first tick of the last span.
+  await page.goto(`${BASE}/replay`, { waitUntil: 'domcontentloaded' });
+  await page.waitForSelector('.marker-track', { timeout: 10_000 });
+  await until(async () => (await replayPageTick()) === last.from, {
+    timeout: 10_000,
+    interval: 50,
+    label: `the default tick to be the last span start ${last.from}`,
+  });
+  pass(`/replay without ?tick= opens at tick ${last.from}, the first tick of the last span`);
+
+  const segments = await page.$$eval('.span-segment', (nodes) => nodes.length);
+  if (segments !== spans.length) {
+    fail(`the rail drew ${segments} segment(s) for ${spans.length} span(s)`);
+  }
+
+  // 第一段 jumps to the first span's start; playback then walks one tick at a
+  // time (the server ticks every 0.5s, so a step lands well inside 5s).
+  await clickReplayButton('第一段');
+  await until(async () => (await replayPageTick()) === first.from, {
+    timeout: 5_000,
+    interval: 50,
+    label: `第一段 to land on tick ${first.from}`,
+  });
+  pass(`第一段 jumped to tick ${first.from}`);
+  await screenshot('replay-spans-1440.png');
+  pass(`replay-spans-1440.png shows span 1/${spans.length} at tick ${await replayPageTick()}`);
+
+  await clickReplayButton('播放');
+  let previous = await replayPageTick();
+  for (let step = 1; step <= 3; step += 1) {
+    const next = await until(
+      async () => {
+        const current = await replayPageTick();
+        return current !== null && current !== previous ? current : null;
+      },
+      { timeout: 5_000, interval: 30, label: `playback step ${step}` },
+    );
+    if (next !== previous + 1) {
+      fail(`playback moved from tick ${previous} to ${next}, not one tick at a time`);
+    }
+    previous = next;
+  }
+  await clickReplayButton('暂停');
+  pass(`playback advanced three ticks one by one to tick ${previous}`);
+
+  // 下一段 jumps to the next span's start, and the label names that span.
+  await clickReplayButton('下一段');
+  await until(async () => (await replayPageTick()) === second.from, {
+    timeout: 5_000,
+    interval: 50,
+    label: `下一段 to land on tick ${second.from}`,
+  });
+  const labels = await page.$eval('.replay-timeline', (element) => element.innerText);
+  if (labels.includes('高光')) fail(`the timeline still shows 高光: ${labels.slice(0, 240)}`);
+  if (!labels.includes(`第 2/${spans.length} 段`)) {
+    fail(`the span label is missing from ${JSON.stringify(labels.slice(0, 240))}`);
+  }
+  pass(`下一段 jumped to tick ${second.from} and the label reads 第 2/${spans.length} 段`);
+
+  // A shared link to an empty tick still works: it snaps to the end of the span
+  // before it instead of opening on a stretch nobody can replay.
+  const gapTick = first.to + 1;
+  if (spanOf(spans, gapTick)) fail(`tick ${gapTick} was meant to be empty: ${JSON.stringify(spans)}`);
+  await page.goto(`${BASE}/replay?tick=${gapTick}`, { waitUntil: 'domcontentloaded' });
+  await page.waitForSelector('.marker-track', { timeout: 10_000 });
+  await until(async () => (await replayPageTick()) === first.to, {
+    timeout: 10_000,
+    interval: 50,
+    label: `?tick=${gapTick} to snap to ${first.to}`,
+  });
+  pass(`?tick=${gapTick} (nobody inside) snapped to tick ${first.to}, the end of the span before it`);
+
+  // The rail and the four span buttons must fit a phone without sideways scroll.
+  await page.setViewport({ width: 390, height: 844, deviceScaleFactor: 1 });
+  await page.goto(`${BASE}/replay`, { waitUntil: 'domcontentloaded' });
+  await page.waitForSelector('.marker-track', { timeout: 10_000 });
+  const overflow = await page.evaluate(
+    () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+  );
+  if (overflow > 0) fail(`/replay overflows horizontally at 390px by ${overflow}px`);
+  pass('/replay fits 390px without horizontal overflow');
+  await page.setViewport({ width: 1440, height: 900, deviceScaleFactor: 1 });
 }
 
 async function main() {
@@ -397,6 +595,7 @@ async function main() {
   const markers = await phaseHistory();
   await phaseReplay(markers);
   await phaseBackLive();
+  await phaseReplayPage();
 
   console.log('PASS: onboarding replay checks completed');
 }

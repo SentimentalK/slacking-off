@@ -2,8 +2,9 @@
 # Empty-world replay acceptance (K2): build the web bundle, the release binaries
 # and an official server on port 18143 with an empty data directory, then drive a
 # real Chrome through `web/e2e/onboarding.mjs` (no replay on a fresh database,
-# replay of the last highlight once the field empties, switch back to live within
-# two ticks when an agent walks in).
+# `/api/timeline` spans that skip the empty stretch, the loop of the last span
+# once the field empties, the return to live within two ticks when an agent walks
+# in, and `/replay` driven through its span navigation).
 #
 # The server embeds `web/dist` at compile time, so the web build runs before
 # `cargo build`. Everything the run creates lives in `.conductor/k/k2/` and is

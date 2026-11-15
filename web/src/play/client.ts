@@ -5,10 +5,8 @@ import { ApiError, getEnvelope, postEnvelope } from '../api';
 import type { EnvelopeResult } from '../api';
 import type {
   ActionQueued,
-  Dir,
   JoinResponse,
   LeaveResponse,
-  MoveSpec,
   PlayAgentResponse,
   PlayState,
 } from '../types';
@@ -42,14 +40,13 @@ export function joinWorld(): Promise<EnvelopeResult<JoinResponse>> {
   return postEnvelope<JoinResponse>('/api/play/join', {});
 }
 
-export function move(dir: Dir): Promise<EnvelopeResult<ActionQueued>> {
-  const spec: MoveSpec = { Steps: { dir, count: 1 } };
-  return postEnvelope<ActionQueued>('/api/play/move', { spec });
-}
-
 /** One command per menu button; shapes follow contract-J §4. */
 export function submit(action: PlayAction): Promise<EnvelopeResult<ActionQueued>> {
   switch (action.kind) {
+    case 'move':
+      return postEnvelope<ActionQueued>('/api/play/move', {
+        spec: { Steps: { dir: action.dir, count: 1 } },
+      });
     case 'build':
       return postEnvelope<ActionQueued>('/api/play/build', {
         kind: action.build,
