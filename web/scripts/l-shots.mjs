@@ -36,6 +36,7 @@ const SHOTS = [
   { name: 'states-overview', fixture: 'states.json', query: '', w: 1440, h: 900 },
   { name: 'portrait-390', fixture: 'crowd.json', query: 'quality=medium', w: 390, h: 844 },
   { name: 'vision', fixture: 'crowd.json', query: 'focus=16,14&zoom=0.5&vision=1', w: 1440, h: 900 },
+  { name: 'play-vision', fixture: 'crowd.json', query: 'focus=16,14&zoom=0.5&play=1', w: 1440, h: 900 },
 ];
 
 const executablePath = execSync('which google-chrome', { encoding: 'utf8' }).trim();
@@ -62,6 +63,9 @@ try {
     const page = await browser.newPage();
     const errors = [];
     page.on('pageerror', (error) => errors.push(error.message));
+    page.on('console', (message) => {
+      if (message.type() === 'error') errors.push(`console: ${message.text()}`);
+    });
     try {
       await page.setViewport({ width: shot.w, height: shot.h, deviceScaleFactor: 1 });
       await page.goto(`${args.base}/scene.html?${query}`, { waitUntil: 'load' });

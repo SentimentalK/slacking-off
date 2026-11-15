@@ -73,6 +73,7 @@ export class CameraControls {
   private readonly onWheel = (e: WheelEvent): void => {
     e.preventDefault();
     this.zoomBy(e.deltaY < 0 ? 0.9 : 1.1);
+    this.onUserCamera();
   };
   private readonly onDown = (e: PointerEvent): void => this.down(e);
   private readonly onMove = (e: PointerEvent): void => this.move(e);
@@ -92,6 +93,7 @@ export class CameraControls {
     private readonly H: number,
     private readonly onClick: (x: number, y: number) => void,
     still: boolean,
+    private readonly onUserCamera: () => void,
   ) {
     this.center = new THREE.Vector3(W / 2, 0, H / 2);
     this.focus = this.center.clone();
@@ -201,6 +203,7 @@ export class CameraControls {
       this.dist = Math.min(this.fit, Math.max(0.3 * this.fit, this.dist * (this.pinchPrev / d)));
       this.pinchPrev = d;
       this.apply();
+      this.onUserCamera();
       return;
     }
     if (!this.anchor) return;
@@ -210,6 +213,7 @@ export class CameraControls {
     this.focus.z += this.anchor.z - cur.z;
     this.clampFocus();
     this.apply();
+    this.onUserCamera();
   }
 
   private up(e: PointerEvent): void {

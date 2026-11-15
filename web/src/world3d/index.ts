@@ -8,15 +8,25 @@ import { createObjectsLayer } from './objects';
 import { createVisionBoxLayer } from './visionbox';
 import { createGround } from './ground';
 import { createLighting } from './lighting';
+import { applyVision, installVisionShader } from './vision';
 import type { FrameInput, Layer, Quality, SceneCtx } from './types';
 
-export type { FrameInput, Layer, Quality, SceneCtx, UiState } from './types';
+export type { FrameInput, Layer, Quality, SceneCtx, UiState, VisionGrid } from './types';
 export { chooseQuality, rendererName, AutoQuality } from './quality';
+
+export interface ClickHit {
+  clientX: number;
+  clientY: number;
+  agentId: number | null;
+  cell: Pos | null;
+}
 
 export interface WorldViewOptions {
   quality: Quality;
   still: boolean;
   onSelect?: (id: number | null) => void;
+  onClick?: (hit: ClickHit) => void;
+  onUserCamera?: () => void;
 }
 
 export interface WorldView {
@@ -28,6 +38,7 @@ export interface WorldView {
   capture(): { tick: number; png: string; calls: number; triangles: number };
   groundCell(clientX: number, clientY: number): Pos | null;
   screenOf(agentId: number): { x: number; y: number } | null;
+  screenOfCell(x: number, y: number): { x: number; y: number } | null;
   lastTick(): number;
   dispose(): void;
 }
@@ -41,7 +52,13 @@ extraLayers.push((ctx) => createVisionBoxLayer(ctx));
 
 const EMPTY_TERRAIN: Terrain = { width: 0, height: 0, entrance: { x: 0, y: 0 }, rows: [] };
 
+const projectToPage = (v: THREE.Vector3, canvas: HTMLCanvasElement): { x: number; y: number } => {
+  const r = canvas.getBoundingClientRect();
+  return { x: r.left + ((v.x + 1) / 2) * r.width, y: r.top + ((1 - v.y) / 2) * r.height };
+};
+
 export function createWorldView(canvas: HTMLCanvasElement, opts: WorldViewOptions): WorldView {
+  const vision = installVisionShader();
   let quality: Quality = opts.quality;
   const renderer = new THREE.WebGLRenderer({ canvas, antialias: quality !== 'low' });
   renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -98,6 +115,20 @@ export function createWorldView(canvas: HTMLCanvasElement, opts: WorldViewOption
     builtFor = { terrain, worldId, quality };
   };
 
+  const cellAt = (clientX: number, clientY: number, camera: THREE.Camera): Pos | null => {
+    if (!last) return null;
+    const r = canvas.getBoundingClientRect();
+    const ndc = new THREE.Vector2(((clientX - r.left) / r.width) * 2 - 1, -((clientY - r.top) / r.height) * 2 + 1);
+    const ray = new THREE.Raycaster();
+    ray.setFromCamera(ndc, camera);
+    const p = ray.ray.intersectPlane(GROUND, new THREE.Vector3());
+    if (!p) return null;
+    const x = Math.floor(p.x);
+    const y = Math.floor(p.z);
+    if (x < 0 || y < 0 || x >= last.terrain.width || y >= last.terrain.height) return null;
+    return { x, y };
+  };
+
   const ensureControls = (terrain: Terrain): CameraControls => {
     const dims = terrain.width + 'x' + terrain.height;
     if (controls && controlsDims === dims) return controls;
@@ -106,8 +137,13 @@ export function createWorldView(canvas: HTMLCanvasElement, opts: WorldViewOption
       canvas,
       terrain.width,
       terrain.height,
-      (x, y) => opts.onSelect?.(pick(c.camera, canvas, x, y, pickables)),
+      (x, y) => {
+        const agentId = pick(c.camera, canvas, x, y, pickables);
+        opts.onClick?.({ clientX: x, clientY: y, agentId, cell: cellAt(x, y, c.camera) });
+        opts.onSelect?.(agentId);
+      },
       opts.still,
+      () => opts.onUserCamera?.(),
     );
     controls = c;
     controlsDims = dims;
@@ -131,6 +167,7 @@ export function createWorldView(canvas: HTMLCanvasElement, opts: WorldViewOption
       for (const l of layers) l.update(input, ctx);
       lighting.update(input, quality);
       cam.apply();
+      applyVision(vision, input.ui.vision);
       renderer.render(scene, cam.camera);
     },
     pick(x, y) {
@@ -149,6 +186,7 @@ export function createWorldView(canvas: HTMLCanvasElement, opts: WorldViewOption
       ensureLayers(last);
       lighting.update(last, quality);
       controls.apply();
+      applyVision(vision, last.ui.vision);
       renderer.render(scene, controls.camera);
       const info = renderer.info.render;
       return {
@@ -159,17 +197,8 @@ export function createWorldView(canvas: HTMLCanvasElement, opts: WorldViewOption
       };
     },
     groundCell(clientX, clientY) {
-      if (!controls || !last) return null;
-      const r = canvas.getBoundingClientRect();
-      const ndc = new THREE.Vector2(((clientX - r.left) / r.width) * 2 - 1, -((clientY - r.top) / r.height) * 2 + 1);
-      const ray = new THREE.Raycaster();
-      ray.setFromCamera(ndc, controls.camera);
-      const p = ray.ray.intersectPlane(GROUND, new THREE.Vector3());
-      if (!p) return null;
-      const x = Math.floor(p.x);
-      const y = Math.floor(p.z);
-      if (x < 0 || y < 0 || x >= last.terrain.width || y >= last.terrain.height) return null;
-      return { x, y };
+      if (!controls) return null;
+      return cellAt(clientX, clientY, controls.camera);
     },
     screenOf(agentId) {
       if (!controls) return null;
@@ -184,8 +213,12 @@ export function createWorldView(canvas: HTMLCanvasElement, opts: WorldViewOption
       const v = hit.getWorldPosition(new THREE.Vector3());
       v.y += 0.6;
       v.project(controls.camera);
-      const r = canvas.getBoundingClientRect();
-      return { x: r.left + ((v.x + 1) / 2) * r.width, y: r.top + ((1 - v.y) / 2) * r.height };
+      return projectToPage(v, canvas);
+    },
+    screenOfCell(x, y) {
+      if (!controls) return null;
+      const v = new THREE.Vector3(x + 0.5, 0, y + 0.5).project(controls.camera);
+      return projectToPage(v, canvas);
     },
     setView(view) {
       pendingView = view;
