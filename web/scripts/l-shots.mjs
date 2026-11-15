@@ -26,6 +26,7 @@ const SHOTS = [
   { name: 'using', fixture: 'using.json', query: 'focus=13,10&zoom=0.4', w: 1440, h: 900 },
   { name: 'windup', fixture: 'windup.json', query: 'focus=18,12&zoom=0.35', w: 1440, h: 900 },
   { name: 'queue', fixture: 'crowd.json', query: 'focus=6,15&zoom=0.45', w: 1440, h: 900 },
+  { name: 'levels', fixture: 'levels.json', query: 'focus=24,16&zoom=0.75&hover=13,10', w: 1440, h: 900 },
   { name: 'states', fixture: 'states.json', query: 'focus=37.25,13.75&zoom=0.69', w: 1440, h: 900 },
   { name: 'overview-day', fixture: 'crowd.json', query: '', w: 1440, h: 900 },
   { name: 'overview-dusk', fixture: 'crowd.json', query: 'dusk=1', w: 1440, h: 900 },
@@ -42,9 +43,9 @@ const browser = await puppeteer.launch({
   args: [
     '--headless=new',
     '--no-sandbox',
-    '--use-gl=angle',
-    '--use-angle=swiftshader',
-    '--enable-unsafe-swiftshader',
+    '--use-angle=gl',
+    '--enable-gpu',
+    '--ignore-gpu-blocklist',
     '--hide-scrollbars',
     '--window-size=1440,900',
   ],
@@ -64,8 +65,7 @@ try {
       await page.waitForFunction('window.__looReady === true', { timeout: 120000 });
       await new Promise((resolve) => setTimeout(resolve, 1000));
       const result = await page.evaluate(() => window.__looCapture());
-      const png = result.png.replace(/^data:image\/png;base64,/, '');
-      writeFileSync(path.join(args.out, `${shot.name}.png`), Buffer.from(png, 'base64'));
+      await page.screenshot({ path: path.join(args.out, `${shot.name}.png`), type: 'png' });
       writeFileSync(
         path.join(args.out, `${shot.name}.json`),
         `${JSON.stringify({ tick: result.tick, calls: result.calls, triangles: result.triangles }, null, 2)}\n`,
