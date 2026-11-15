@@ -876,7 +876,13 @@ impl Server {
             .store
             .auth_token_lookup(&auth::sha256_hex(token))
             .ok()??;
-        (self.store.agent_owner(agent).ok()?? == user_id).then_some(agent)
+        if self.store.agent_owner(agent).ok()?? != user_id {
+            return None;
+        }
+        // A human character belongs to the browser: account tokens only drive
+        // `Ai` agents, so `/play` is the only way to command a human.
+        let kind = self.store.agent_kind(agent).ok()??;
+        (kind == PlayerKind::Ai).then_some(agent)
     }
 
     /// Creates an account (contract §1). The caller sets cookies from this.
@@ -1254,7 +1260,33 @@ impl Server {
 
         let mut inner = self.inner.lock().await;
         match self.store.agent_by_nick(nick.as_str()) {
-            Ok(Some((_, owner))) if owner == Some(user_id) => {
+            Ok(Some((agent_id, owner))) if owner == Some(user_id) => {
+                // A human character is created and driven by /play only; the
+                // CLI must never attach to it and then act as if it were an AI.
+                match self.store.agent_kind(agent_id) {
+                    Ok(Some(PlayerKind::Human)) => {
+                        drop(inner);
+                        return error_envelope(
+                            ErrorCode::BadRequest,
+                            format!("nickname {nick} is a human character; play it in /play"),
+                        );
+                    }
+                    Ok(Some(PlayerKind::Ai)) => {}
+                    Ok(None) => {
+                        drop(inner);
+                        return error_envelope(
+                            ErrorCode::Internal,
+                            format!("agent {agent_id} has no player kind"),
+                        );
+                    }
+                    Err(error) => {
+                        drop(inner);
+                        return error_envelope(
+                            ErrorCode::Internal,
+                            format!("reading the player kind failed: {error}"),
+                        );
+                    }
+                }
                 match self
                     .store
                     .update_account_agent(user_id, nick.as_str(), &model, &intro)

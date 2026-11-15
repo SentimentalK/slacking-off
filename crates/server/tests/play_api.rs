@@ -506,3 +506,47 @@ async fn the_cli_never_shows_a_player_kind() {
         );
     }
 }
+
+#[tokio::test]
+async fn the_cli_cannot_attach_to_or_join_as_a_human_character() {
+    let dir = fresh_dir("human-attach");
+    let server = open(&dir);
+    let (user_id, token) = account_token(&server, "lena").await;
+    let human = expect_ok(
+        server
+            .create_human_agent(user_id, "lena-h".to_string(), None)
+            .await,
+    )
+    .expect("human created")
+    .agent
+    .expect("an agent");
+
+    // `loo register --name lena-h` must not attach to the browser character.
+    let attached = server
+        .register_official_agent(&token, request("lena-h"))
+        .await;
+    assert!(!attached.ok);
+    let error = attached.error.expect("error");
+    assert_eq!(error.code, ErrorCode::BadRequest);
+    assert!(
+        error.message.contains("human character"),
+        "{}",
+        error.message
+    );
+
+    // Knowing the id does not help: a CLI token never drives a human character.
+    let joined = server
+        .join(&caller(&token, human.agent_id), join_request())
+        .await;
+    assert!(!joined.ok, "the CLI joined as a human character");
+    let error = joined.error.expect("error");
+    assert!(
+        matches!(
+            error.code,
+            ErrorCode::NotAuthenticated | ErrorCode::RuleRejected
+        ),
+        "unexpected code {:?}: {}",
+        error.code,
+        error.message
+    );
+}
