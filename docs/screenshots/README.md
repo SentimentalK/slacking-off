@@ -24,3 +24,4 @@
 - 人类第二局在 tick 86 时 `e2e-ai` 的会话已因 deadline 结束，所以 390 的棋盘只画人类；混合统计仍来自第一局成功会话与 `e2e-ai` 会话的重叠区间。
 - 其它目录里的截图（`account-*`、`spectator-*`、`replay-*`、`profile-*` 等）由 `scripts/e2e-full.sh` 和性能脚本产生，不在本组 `/play` 场景里。
 - `home-empty-1440.png`、`replay-empty-1440.png`、`replay-back-live-1440.png` 来自 `scripts/e2e-k.sh`（`web/e2e/onboarding.mjs`，端口 18143、0.5 秒/tick、空数据目录）：账号 `k2-e2e`，CLI Agent `k2-ai` 建墙再拆墙后离场，第二个 Agent `k2-ai-2` 再入场。
+- `stats-prompt-1440.png` 来自 Master 的验收（端口 18147，数据目录由 `scripts/e2e-k.sh` 那一局拷来，再加一个装了摸鱼提示的账号 `k-stats-b`）：`/stats` 上「摸鱼提示」这一组切到「装了提示」，总会话 `1`；另两组标签「全部 / 装了提示 / 没装提示」与上面的「全部会话 / 有另一类在场」是各自独立的选择器。
