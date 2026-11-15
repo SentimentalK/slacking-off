@@ -14,11 +14,11 @@ use loo_proto::{
     AgentView, ApiError, AttackRequest, AuthMeResponse, Briefing, BuildKind, BuildRequest,
     ConfigResponse, DefendRequest, DemolishRequest, DoorRequest, DowngradeRequest, Envelope,
     ErrorCode, EventView, InstallCommands, JoinRequest, JoinResponse, LeaderRow, LeaveResponse,
-    LookResponse, MapResponse, MetricsResponse, MoveRequest, Need, Placement, PlacementKind, Pos,
-    ProfileResponse, Projection, RegisterRequest, RegisterResponse, RulesResponse, SentBy,
-    SessionId, SessionOutcome, SettleMs, StatsResponse, TargetSpec, TerrainResponse, Tick,
-    Timeline, TokenCreateResponse, UpgradeRequest, WaitRequest, WaitResponse, WaitWake,
-    WorldSummary,
+    LookResponse, MapResponse, MetricsResponse, MoveRequest, Need, Placement, PlacementKind,
+    PlayAgentResponse, PlayMe, PlayState, PlayerKind, Pos, ProfileResponse, Projection,
+    RegisterRequest, RegisterResponse, RulesResponse, SentBy, SessionId, SessionOutcome, SettleMs,
+    StatsResponse, TargetSpec, TerrainResponse, Tick, Timeline, TokenCreateResponse,
+    UpgradeRequest, WaitRequest, WaitResponse, WaitWake, WorldSummary,
 };
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::path::Path;
@@ -83,6 +83,9 @@ struct Inner {
     current_events: Vec<loo_core::Event>,
     /// The public half of each agent's meta; `why`/`intro`/`model` stay private.
     agent_public: BTreeMap<AgentId, AgentPublic>,
+    /// When the last settlement finished, so the browser can animate the tick
+    /// countdown (`/api/play/state`).
+    last_settle_at: Instant,
 }
 
 struct AgentMeta {
@@ -97,6 +100,8 @@ struct AgentMeta {
     why: String,
     /// Cumulative score carried across sessions, persisted in `agents`.
     score_total: u32,
+    kind: PlayerKind,
+    color: Option<u8>,
 }
 
 /// One open long-poll slot; released when the handler returns.
@@ -250,6 +255,8 @@ impl Server {
                 stored.id,
                 AgentPublic {
                     sent_by: meta.sent_by,
+                    kind: stored.kind,
+                    color: stored.color,
                 },
             );
             agents.insert(stored.id, meta);
@@ -302,6 +309,7 @@ impl Server {
                 need_use_ticks,
                 current_events,
                 agent_public,
+                last_settle_at: Instant::now(),
             }),
             tick_tx,
             watch_tx,
@@ -428,6 +436,7 @@ impl Server {
     pub async fn tick_once(&self) -> Tick {
         let started = Instant::now();
         let mut inner = self.inner.lock().await;
+        inner.last_settle_at = Instant::now();
         let intents: Vec<Intent> = inner
             .pending
             .iter()
@@ -645,11 +654,13 @@ impl Server {
         }
     }
 
-    /// `GET /api/leaderboard` (contract §3). Only `score|best|successes` are
-    /// metrics; `limit` is clamped to 1..=100.
+    /// `GET /api/leaderboard` (contract-J §6). `metric` is one of
+    /// `score|best|successes`, `kind` one of `ai|human|mixed`; `limit` is
+    /// clamped to 1..=100.
     pub async fn leaderboard(
         &self,
         metric: &str,
+        kind: &str,
         model: Option<&str>,
         limit: usize,
     ) -> Envelope<Vec<LeaderRow>> {
@@ -659,9 +670,15 @@ impl Server {
                 "metric must be one of score, best, successes",
             );
         }
+        if !matches!(kind, "ai" | "human" | "mixed") {
+            return error_envelope(
+                ErrorCode::BadRequest,
+                "kind must be one of ai, human, mixed",
+            );
+        }
         let limit = limit.clamp(1, 100);
         let model = model.filter(|model| !model.is_empty());
-        match self.store.leaderboard(metric, model, limit) {
+        match self.store.leaderboard(metric, kind, model, limit) {
             Ok(rows) => Envelope::ok(rows, Vec::new(), None),
             Err(error) => error_envelope(
                 ErrorCode::Internal,
@@ -867,7 +884,13 @@ impl Server {
             .store
             .auth_token_lookup(&auth::sha256_hex(token))
             .ok()??;
-        (self.store.agent_owner(agent).ok()?? == user_id).then_some(agent)
+        if self.store.agent_owner(agent).ok()?? != user_id {
+            return None;
+        }
+        // A human character belongs to the browser: account tokens only drive
+        // `Ai` agents, so `/play` is the only way to command a human.
+        let kind = self.store.agent_kind(agent).ok()??;
+        (kind == PlayerKind::Ai).then_some(agent)
     }
 
     /// Creates an account (contract §1). The caller sets cookies from this.
@@ -1022,6 +1045,192 @@ impl Server {
         self.store.auth_token_revoke_all(user_id).map(|_| ())
     }
 
+    /// The account's human character as the browser sees it (contract §3).
+    pub fn human_agent(&self, user_id: u64) -> Envelope<PlayAgentResponse> {
+        match self.store.human_agent_of_user(user_id) {
+            Ok(agent) => Envelope::ok(
+                PlayAgentResponse {
+                    agent: agent.as_ref().map(play_me),
+                },
+                Vec::new(),
+                None,
+            ),
+            Err(error) => error_envelope(
+                ErrorCode::Internal,
+                format!("reading the human character failed: {error}"),
+            ),
+        }
+    }
+
+    /// The account's human character id, if it has one.
+    pub fn human_agent_id(&self, user_id: u64) -> Option<AgentId> {
+        self.store
+            .human_agent_of_user(user_id)
+            .ok()
+            .flatten()
+            .map(|stored| stored.id)
+    }
+
+    /// Creates the account's one browser character (contract §3). It is not
+    /// counted against `session.max_agents_per_user`.
+    pub async fn create_human_agent(
+        &self,
+        user_id: u64,
+        nick: String,
+        color: Option<u8>,
+    ) -> Envelope<PlayAgentResponse> {
+        let nick = match loo_proto::Nick::parse(&nick) {
+            Ok(nick) => nick,
+            Err(message) => return error_envelope(ErrorCode::BadRequest, message),
+        };
+        if color.is_some_and(|color| color > 11) {
+            return error_envelope(ErrorCode::BadRequest, "color must be between 0 and 11");
+        }
+        match self.store.human_agent_of_user(user_id) {
+            Ok(Some(_)) => {
+                return error_envelope(
+                    ErrorCode::RuleRejected,
+                    "this account already has a human character",
+                )
+            }
+            Ok(None) => {}
+            Err(error) => {
+                return error_envelope(
+                    ErrorCode::Internal,
+                    format!("reading the human character failed: {error}"),
+                )
+            }
+        }
+        match self.store.agent_by_nick(nick.as_str()) {
+            Ok(Some(_)) => {
+                return error_envelope(
+                    ErrorCode::BadRequest,
+                    format!("nickname {nick} is already taken"),
+                )
+            }
+            Ok(None) => {}
+            Err(error) => {
+                return error_envelope(
+                    ErrorCode::Internal,
+                    format!("reading the nickname failed: {error}"),
+                )
+            }
+        }
+        let agent_id = match self.store.create_human_agent(user_id, nick.as_str(), color) {
+            Ok(agent_id) => agent_id,
+            Err(StoreError::Conflict(message)) => {
+                return error_envelope(ErrorCode::RuleRejected, message)
+            }
+            Err(error) => {
+                return error_envelope(
+                    ErrorCode::Internal,
+                    format!("creating the human character failed: {error}"),
+                )
+            }
+        };
+        let color = color.unwrap_or((agent_id % crate::projection::COLOR_COUNT as u64) as u8);
+        let mut inner = self.inner.lock().await;
+        inner.agents.insert(
+            agent_id,
+            AgentMeta {
+                nick: nick.clone(),
+                model: String::new(),
+                intro: String::new(),
+                token: String::new(),
+                sent_by: None,
+                why: String::new(),
+                score_total: 0,
+                kind: PlayerKind::Human,
+                color: Some(color),
+            },
+        );
+        inner.agent_public.insert(
+            agent_id,
+            AgentPublic {
+                sent_by: None,
+                kind: PlayerKind::Human,
+                color: Some(color),
+            },
+        );
+        inner.next_agent_id = inner.next_agent_id.max(agent_id + 1);
+        drop(inner);
+        Envelope::ok(
+            PlayAgentResponse {
+                agent: Some(PlayMe {
+                    agent_id,
+                    nick: nick.to_string(),
+                    color,
+                }),
+            },
+            Vec::new(),
+            None,
+        )
+    }
+
+    /// `GET /api/play/state`: the browser's 9×9 window (contract §5). This is a
+    /// view, not a command: it spends a rate token and marks the player active,
+    /// but writes no command log entry.
+    pub async fn play_state(&self, agent: AgentId) -> Envelope<PlayState> {
+        let mut inner = self.inner.lock().await;
+        if let Err(error) = self.check_rate(agent) {
+            return failed_env(&self.cfg, &mut inner, Some(agent), error);
+        }
+        self.touch_waiting(&mut inner, agent);
+        let (nick, color) = match inner.agents.get(&agent) {
+            Some(meta) => (
+                meta.nick.to_string(),
+                crate::play::color_of(agent, inner.agent_public.get(&agent)),
+            ),
+            None => return failed_env(&self.cfg, &mut inner, None, not_authenticated()),
+        };
+        let session_id = inner.sessions.get(&agent).copied();
+        let joined = session_id.is_some();
+        let placement = session_id
+            .and_then(|id| inner.world.sessions.get(&id))
+            .map(|session| match session.status {
+                loo_core::SessionStatus::Inside => PlacementKind::Inside,
+                loo_core::SessionStatus::Waiting => PlacementKind::Waiting,
+            });
+        let center = if joined {
+            inner.world.agents.get(&agent).and_then(|agent| agent.pos)
+        } else {
+            None
+        }
+        .unwrap_or(inner.world.entrance);
+        let window = play::window_around(&inner.world, center);
+        let objects = play::objects_in(&inner.world, &self.cfg, &window);
+        let agents = play::agents_in(&inner.world, &self.cfg, &window, &inner.agent_public);
+        let state = agent_view(&self.cfg, &inner, agent);
+        let map = loo_core::map_memory(&inner.world, agent);
+        let tick = inner.world.tick;
+        let elapsed = inner.last_settle_at.elapsed().as_secs_f64();
+        let ms_to_next_tick =
+            ((self.cfg.tick_seconds.max(0.05) - elapsed).max(0.0) * 1000.0) as u64;
+        let events = take_events(&mut inner, agent);
+        drop(inner);
+        Envelope::ok(
+            PlayState {
+                me: PlayMe {
+                    agent_id: agent,
+                    nick,
+                    color,
+                },
+                tick,
+                tick_seconds: self.cfg.tick_seconds,
+                ms_to_next_tick,
+                joined,
+                placement,
+                window,
+                objects,
+                agents,
+                agent: state,
+                map,
+            },
+            events,
+            None,
+        )
+    }
+
     /// Official agent registration (contract §1): attach, create, or refuse.
     /// `caller_token` is the account token from `Authorization: Bearer`.
     pub async fn register_official_agent(
@@ -1059,7 +1268,33 @@ impl Server {
 
         let mut inner = self.inner.lock().await;
         match self.store.agent_by_nick(nick.as_str()) {
-            Ok(Some((_, owner))) if owner == Some(user_id) => {
+            Ok(Some((agent_id, owner))) if owner == Some(user_id) => {
+                // A human character is created and driven by /play only; the
+                // CLI must never attach to it and then act as if it were an AI.
+                match self.store.agent_kind(agent_id) {
+                    Ok(Some(PlayerKind::Human)) => {
+                        drop(inner);
+                        return error_envelope(
+                            ErrorCode::BadRequest,
+                            format!("nickname {nick} is a human character; play it in /play"),
+                        );
+                    }
+                    Ok(Some(PlayerKind::Ai)) => {}
+                    Ok(None) => {
+                        drop(inner);
+                        return error_envelope(
+                            ErrorCode::Internal,
+                            format!("agent {agent_id} has no player kind"),
+                        );
+                    }
+                    Err(error) => {
+                        drop(inner);
+                        return error_envelope(
+                            ErrorCode::Internal,
+                            format!("reading the player kind failed: {error}"),
+                        );
+                    }
+                }
                 match self
                     .store
                     .update_account_agent(user_id, nick.as_str(), &model, &intro)
@@ -1148,6 +1383,8 @@ impl Server {
                 sent_by: None,
                 why: String::new(),
                 score_total: 0,
+                kind: PlayerKind::Ai,
+                color: None,
             },
         );
         inner.next_agent_id = inner.next_agent_id.max(agent_id + 1);
@@ -1231,6 +1468,8 @@ impl Server {
                 sent_by: None,
                 why: String::new(),
                 score_total: 0,
+                kind: PlayerKind::Ai,
+                color: None,
             },
         );
         if let Err(error) = self
@@ -1266,12 +1505,20 @@ impl Server {
 
     pub async fn join(&self, token: &str, req: JoinRequest) -> Envelope<JoinResponse> {
         let started = Instant::now();
-        let mut inner = self.inner.lock().await;
         let Some(agent) = self.authenticate(token) else {
+            let mut inner = self.inner.lock().await;
             let env = failed_env(&self.cfg, &mut inner, None, not_authenticated());
             drop(inner);
             return self.finish("join", None, 0, env, started, "not authenticated", None);
         };
+        self.join_for_agent(agent, req).await
+    }
+
+    /// The single implementation behind the CLI token entry and the browser:
+    /// rules, rate limit, persistence and event delivery all live here.
+    pub async fn join_for_agent(&self, agent: AgentId, req: JoinRequest) -> Envelope<JoinResponse> {
+        let started = Instant::now();
+        let mut inner = self.inner.lock().await;
         let tick = inner.world.tick;
         if let Err(error) = self.check_rate(agent) {
             let env = failed_env(&self.cfg, &mut inner, Some(agent), error);
@@ -1335,6 +1582,8 @@ impl Server {
             drop(inner);
             return self.finish("join", None, 0, env, started, "no agent", None);
         };
+        let agent_kind = meta.kind;
+        let agent_color = meta.color;
         let session_id = inner.next_session_id;
         let cmd = JoinCommand {
             agent,
@@ -1377,6 +1626,8 @@ impl Server {
                     agent,
                     AgentPublic {
                         sent_by: Some(req.sent_by),
+                        kind: agent_kind,
+                        color: agent_color,
                     },
                 );
                 // Join events belong to the current tick, so the live projection
@@ -1463,12 +1714,19 @@ impl Server {
 
     pub async fn look(&self, token: &str) -> Envelope<LookResponse> {
         let started = Instant::now();
-        let mut inner = self.inner.lock().await;
         let Some(agent) = self.authenticate(token) else {
+            let mut inner = self.inner.lock().await;
             let env = failed_env(&self.cfg, &mut inner, None, not_authenticated());
             drop(inner);
             return self.finish("look", None, 0, env, started, "not authenticated", None);
         };
+        self.look_for_agent(agent).await
+    }
+
+    /// See [`Server::join_for_agent`].
+    pub async fn look_for_agent(&self, agent: AgentId) -> Envelope<LookResponse> {
+        let started = Instant::now();
+        let mut inner = self.inner.lock().await;
         let tick = inner.world.tick;
         if let Err(error) = self.check_rate(agent) {
             let env = failed_env(&self.cfg, &mut inner, Some(agent), error);
@@ -1498,12 +1756,19 @@ impl Server {
 
     pub async fn map_view(&self, token: &str) -> Envelope<MapResponse> {
         let started = Instant::now();
-        let mut inner = self.inner.lock().await;
         let Some(agent) = self.authenticate(token) else {
+            let mut inner = self.inner.lock().await;
             let env = failed_env(&self.cfg, &mut inner, None, not_authenticated());
             drop(inner);
             return self.finish("map", None, 0, env, started, "not authenticated", None);
         };
+        self.map_view_for_agent(agent).await
+    }
+
+    /// See [`Server::join_for_agent`].
+    pub async fn map_view_for_agent(&self, agent: AgentId) -> Envelope<MapResponse> {
+        let started = Instant::now();
+        let mut inner = self.inner.lock().await;
         let tick = inner.world.tick;
         if let Err(error) = self.check_rate(agent) {
             let env = failed_env(&self.cfg, &mut inner, Some(agent), error);
@@ -1525,12 +1790,19 @@ impl Server {
 
     pub async fn status(&self, token: &str) -> Envelope<()> {
         let started = Instant::now();
-        let mut inner = self.inner.lock().await;
         let Some(agent) = self.authenticate(token) else {
+            let mut inner = self.inner.lock().await;
             let env = failed_env(&self.cfg, &mut inner, None, not_authenticated());
             drop(inner);
             return self.finish("status", None, 0, env, started, "not authenticated", None);
         };
+        self.status_for_agent(agent).await
+    }
+
+    /// See [`Server::join_for_agent`].
+    pub async fn status_for_agent(&self, agent: AgentId) -> Envelope<()> {
+        let started = Instant::now();
+        let mut inner = self.inner.lock().await;
         let tick = inner.world.tick;
         if let Err(error) = self.check_rate(agent) {
             let env = failed_env(&self.cfg, &mut inner, Some(agent), error);
@@ -1593,12 +1865,23 @@ impl Server {
 
     pub async fn move_cmd(&self, token: &str, req: MoveRequest) -> Envelope<ActionQueued> {
         let started = Instant::now();
-        let mut inner = self.inner.lock().await;
         let Some(agent) = self.authenticate(token) else {
+            let mut inner = self.inner.lock().await;
             let env = failed_env(&self.cfg, &mut inner, None, not_authenticated());
             drop(inner);
             return self.finish("move", None, 0, env, started, "not authenticated", None);
         };
+        self.move_cmd_for_agent(agent, req).await
+    }
+
+    /// See [`Server::join_for_agent`].
+    pub async fn move_cmd_for_agent(
+        &self,
+        agent: AgentId,
+        req: MoveRequest,
+    ) -> Envelope<ActionQueued> {
+        let started = Instant::now();
+        let mut inner = self.inner.lock().await;
         let tick = inner.world.tick;
         if let Err(error) = self.check_rate(agent) {
             let env = failed_env(&self.cfg, &mut inner, Some(agent), error);
@@ -1701,12 +1984,23 @@ impl Server {
 
     pub async fn build_cmd(&self, token: &str, req: BuildRequest) -> Envelope<ActionQueued> {
         let started = Instant::now();
-        let mut inner = self.inner.lock().await;
         let Some(agent) = self.authenticate(token) else {
+            let mut inner = self.inner.lock().await;
             let env = failed_env(&self.cfg, &mut inner, None, not_authenticated());
             drop(inner);
             return self.finish("build", None, 0, env, started, "not authenticated", None);
         };
+        self.build_cmd_for_agent(agent, req).await
+    }
+
+    /// See [`Server::join_for_agent`].
+    pub async fn build_cmd_for_agent(
+        &self,
+        agent: AgentId,
+        req: BuildRequest,
+    ) -> Envelope<ActionQueued> {
+        let started = Instant::now();
+        let mut inner = self.inner.lock().await;
         let tick = inner.world.tick;
         if let Err(error) = self.check_rate(agent) {
             let env = failed_env(&self.cfg, &mut inner, Some(agent), error);
@@ -1777,12 +2071,23 @@ impl Server {
 
     pub async fn demolish_cmd(&self, token: &str, req: DemolishRequest) -> Envelope<ActionQueued> {
         let started = Instant::now();
-        let mut inner = self.inner.lock().await;
         let Some(agent) = self.authenticate(token) else {
+            let mut inner = self.inner.lock().await;
             let env = failed_env(&self.cfg, &mut inner, None, not_authenticated());
             drop(inner);
             return self.finish("demolish", None, 0, env, started, "not authenticated", None);
         };
+        self.demolish_cmd_for_agent(agent, req).await
+    }
+
+    /// See [`Server::join_for_agent`].
+    pub async fn demolish_cmd_for_agent(
+        &self,
+        agent: AgentId,
+        req: DemolishRequest,
+    ) -> Envelope<ActionQueued> {
+        let started = Instant::now();
+        let mut inner = self.inner.lock().await;
         let tick = inner.world.tick;
         if let Err(error) = self.check_rate(agent) {
             let env = failed_env(&self.cfg, &mut inner, Some(agent), error);
@@ -1859,12 +2164,23 @@ impl Server {
 
     pub async fn door_cmd(&self, token: &str, req: DoorRequest) -> Envelope<ActionQueued> {
         let started = Instant::now();
-        let mut inner = self.inner.lock().await;
         let Some(agent) = self.authenticate(token) else {
+            let mut inner = self.inner.lock().await;
             let env = failed_env(&self.cfg, &mut inner, None, not_authenticated());
             drop(inner);
             return self.finish("door", None, 0, env, started, "not authenticated", None);
         };
+        self.door_cmd_for_agent(agent, req).await
+    }
+
+    /// See [`Server::join_for_agent`].
+    pub async fn door_cmd_for_agent(
+        &self,
+        agent: AgentId,
+        req: DoorRequest,
+    ) -> Envelope<ActionQueued> {
+        let started = Instant::now();
+        let mut inner = self.inner.lock().await;
         let tick = inner.world.tick;
         if let Err(error) = self.check_rate(agent) {
             let env = failed_env(&self.cfg, &mut inner, Some(agent), error);
@@ -1936,12 +2252,23 @@ impl Server {
 
     pub async fn attack_cmd(&self, token: &str, req: AttackRequest) -> Envelope<ActionQueued> {
         let started = Instant::now();
-        let mut inner = self.inner.lock().await;
         let Some(agent) = self.authenticate(token) else {
+            let mut inner = self.inner.lock().await;
             let env = failed_env(&self.cfg, &mut inner, None, not_authenticated());
             drop(inner);
             return self.finish("attack", None, 0, env, started, "not authenticated", None);
         };
+        self.attack_cmd_for_agent(agent, req).await
+    }
+
+    /// See [`Server::join_for_agent`].
+    pub async fn attack_cmd_for_agent(
+        &self,
+        agent: AgentId,
+        req: AttackRequest,
+    ) -> Envelope<ActionQueued> {
+        let started = Instant::now();
+        let mut inner = self.inner.lock().await;
         let tick = inner.world.tick;
         if let Err(error) = self.check_rate(agent) {
             let env = failed_env(&self.cfg, &mut inner, Some(agent), error);
@@ -2020,12 +2347,23 @@ impl Server {
 
     pub async fn defend_cmd(&self, token: &str, req: DefendRequest) -> Envelope<ActionQueued> {
         let started = Instant::now();
-        let mut inner = self.inner.lock().await;
         let Some(agent) = self.authenticate(token) else {
+            let mut inner = self.inner.lock().await;
             let env = failed_env(&self.cfg, &mut inner, None, not_authenticated());
             drop(inner);
             return self.finish("defend", None, 0, env, started, "not authenticated", None);
         };
+        self.defend_cmd_for_agent(agent, req).await
+    }
+
+    /// See [`Server::join_for_agent`].
+    pub async fn defend_cmd_for_agent(
+        &self,
+        agent: AgentId,
+        req: DefendRequest,
+    ) -> Envelope<ActionQueued> {
+        let started = Instant::now();
+        let mut inner = self.inner.lock().await;
         let tick = inner.world.tick;
         if let Err(error) = self.check_rate(agent) {
             let env = failed_env(&self.cfg, &mut inner, Some(agent), error);
@@ -2102,12 +2440,23 @@ impl Server {
 
     pub async fn upgrade_cmd(&self, token: &str, req: UpgradeRequest) -> Envelope<ActionQueued> {
         let started = Instant::now();
-        let mut inner = self.inner.lock().await;
         let Some(agent) = self.authenticate(token) else {
+            let mut inner = self.inner.lock().await;
             let env = failed_env(&self.cfg, &mut inner, None, not_authenticated());
             drop(inner);
             return self.finish("upgrade", None, 0, env, started, "not authenticated", None);
         };
+        self.upgrade_cmd_for_agent(agent, req).await
+    }
+
+    /// See [`Server::join_for_agent`].
+    pub async fn upgrade_cmd_for_agent(
+        &self,
+        agent: AgentId,
+        req: UpgradeRequest,
+    ) -> Envelope<ActionQueued> {
+        let started = Instant::now();
+        let mut inner = self.inner.lock().await;
         let tick = inner.world.tick;
         if let Err(error) = self.check_rate(agent) {
             let env = failed_env(&self.cfg, &mut inner, Some(agent), error);
@@ -2188,8 +2537,8 @@ impl Server {
         req: DowngradeRequest,
     ) -> Envelope<ActionQueued> {
         let started = Instant::now();
-        let mut inner = self.inner.lock().await;
         let Some(agent) = self.authenticate(token) else {
+            let mut inner = self.inner.lock().await;
             let env = failed_env(&self.cfg, &mut inner, None, not_authenticated());
             drop(inner);
             return self.finish(
@@ -2202,6 +2551,17 @@ impl Server {
                 None,
             );
         };
+        self.downgrade_cmd_for_agent(agent, req).await
+    }
+
+    /// See [`Server::join_for_agent`].
+    pub async fn downgrade_cmd_for_agent(
+        &self,
+        agent: AgentId,
+        req: DowngradeRequest,
+    ) -> Envelope<ActionQueued> {
+        let started = Instant::now();
+        let mut inner = self.inner.lock().await;
         let tick = inner.world.tick;
         if let Err(error) = self.check_rate(agent) {
             let env = failed_env(&self.cfg, &mut inner, Some(agent), error);
@@ -2278,12 +2638,19 @@ impl Server {
 
     pub async fn use_cmd(&self, token: &str) -> Envelope<ActionQueued> {
         let started = Instant::now();
-        let mut inner = self.inner.lock().await;
         let Some(agent) = self.authenticate(token) else {
+            let mut inner = self.inner.lock().await;
             let env = failed_env(&self.cfg, &mut inner, None, not_authenticated());
             drop(inner);
             return self.finish("use", None, 0, env, started, "not authenticated", None);
         };
+        self.use_cmd_for_agent(agent).await
+    }
+
+    /// See [`Server::join_for_agent`].
+    pub async fn use_cmd_for_agent(&self, agent: AgentId) -> Envelope<ActionQueued> {
+        let started = Instant::now();
+        let mut inner = self.inner.lock().await;
         let tick = inner.world.tick;
         if let Err(error) = self.check_rate(agent) {
             let env = failed_env(&self.cfg, &mut inner, Some(agent), error);
@@ -2335,12 +2702,19 @@ impl Server {
 
     pub async fn cancel_cmd(&self, token: &str) -> Envelope<ActionQueued> {
         let started = Instant::now();
-        let mut inner = self.inner.lock().await;
         let Some(agent) = self.authenticate(token) else {
+            let mut inner = self.inner.lock().await;
             let env = failed_env(&self.cfg, &mut inner, None, not_authenticated());
             drop(inner);
             return self.finish("cancel", None, 0, env, started, "not authenticated", None);
         };
+        self.cancel_cmd_for_agent(agent).await
+    }
+
+    /// See [`Server::join_for_agent`].
+    pub async fn cancel_cmd_for_agent(&self, agent: AgentId) -> Envelope<ActionQueued> {
+        let started = Instant::now();
+        let mut inner = self.inner.lock().await;
         let tick = inner.world.tick;
         if let Err(error) = self.check_rate(agent) {
             let env = failed_env(&self.cfg, &mut inner, Some(agent), error);
@@ -2386,12 +2760,19 @@ impl Server {
 
     pub async fn leave_cmd(&self, token: &str) -> Envelope<LeaveResponse> {
         let started = Instant::now();
-        let mut inner = self.inner.lock().await;
         let Some(agent) = self.authenticate(token) else {
+            let mut inner = self.inner.lock().await;
             let env = failed_env(&self.cfg, &mut inner, None, not_authenticated());
             drop(inner);
             return self.finish("leave", None, 0, env, started, "not authenticated", None);
         };
+        self.leave_cmd_for_agent(agent).await
+    }
+
+    /// See [`Server::join_for_agent`].
+    pub async fn leave_cmd_for_agent(&self, agent: AgentId) -> Envelope<LeaveResponse> {
+        let started = Instant::now();
+        let mut inner = self.inner.lock().await;
         let tick = inner.world.tick;
         if let Err(error) = self.check_rate(agent) {
             let env = failed_env(&self.cfg, &mut inner, Some(agent), error);
@@ -2832,7 +3213,21 @@ fn agent_meta(stored: &StoredAgent) -> Result<AgentMeta, StoreError> {
         sent_by,
         why: stored.why.clone(),
         score_total: stored.score_total,
+        kind: stored.kind,
+        color: stored.color,
     })
+}
+
+/// The browser's own character; `color` falls back to `id % 12` exactly as the
+/// projection does.
+fn play_me(stored: &StoredAgent) -> PlayMe {
+    PlayMe {
+        agent_id: stored.id,
+        nick: stored.nick.clone(),
+        color: stored
+            .color
+            .unwrap_or((stored.id % crate::projection::COLOR_COUNT as u64) as u8),
+    }
 }
 
 fn ok_env<T>(cfg: &Config, inner: &mut Inner, agent: AgentId, result: T) -> Envelope<T> {
@@ -3030,6 +3425,7 @@ World facts
 
 pub mod auth;
 pub mod http;
+mod play;
 pub mod projection;
 pub mod store;
 

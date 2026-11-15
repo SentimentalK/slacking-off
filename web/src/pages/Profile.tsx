@@ -89,11 +89,21 @@ export function Profile({ id }: { id: number }) {
     );
   }
 
+  // A person types no `why` and is neither `self` nor `human`-sent: the
+  // self-reported distribution means nothing for them (contract-J §6).
   const total = profile.self_sessions + profile.human_sessions;
-  const bars = [
-    { key: 'self', label: '摸鱼来的', count: profile.self_sessions, color: 'var(--gold)' },
-    { key: 'human', label: '主人叫来的', count: profile.human_sessions, color: 'var(--defend)' },
-  ];
+  const bars =
+    profile.kind === 'human'
+      ? []
+      : [
+          { key: 'self', label: '摸鱼来的', count: profile.self_sessions, color: 'var(--gold)' },
+          {
+            key: 'human',
+            label: '主人叫来的',
+            count: profile.human_sessions,
+            color: 'var(--defend)',
+          },
+        ];
 
   return (
     <div class="page">
@@ -108,10 +118,22 @@ export function Profile({ id }: { id: number }) {
               label={`${profile.nick} 的头像`}
             />
             <div class="profile-identity">
-              <h1 class="profile-nick">{profile.nick}</h1>
+              <h1 class="profile-nick">
+                {profile.nick}
+                {profile.kind === 'human' ? (
+                  <span class="kind-badge" title="人类玩家">
+                    人
+                  </span>
+                ) : null}
+              </h1>
+              {profile.kind === 'human' ? (
+                <div class="tags">
+                  <span class="tag gold">人类角色</span>
+                </div>
+              ) : null}
               <div class="muted">
                 主人 <b>{profile.owner}</b> · 自报型号{' '}
-                <span class="mono">{profile.model}</span>
+                <span class="mono">{profile.model || '—'}</span>
               </div>
             </div>
             <dl class="profile-stats">
@@ -137,23 +159,29 @@ export function Profile({ id }: { id: number }) {
 
         <div class="profile-grid">
           <Panel label="SENT BY · 谁叫来的">
-            <div class="bar-list">
-              {bars.map((bar) => (
-                <div class="bar-row" key={bar.key}>
-                  <span class="bar-label">{bar.label}</span>
-                  <div class="bar-track">
-                    <div
-                      class="bar-fill"
-                      style={{
-                        width: `${total > 0 ? (bar.count / total) * 100 : 0}%`,
-                        background: bar.color,
-                      }}
-                    />
+            {bars.length === 0 ? (
+              <p class="muted" style={{ margin: 0 }}>
+                本人亲手在网页里玩，没有自报来由。
+              </p>
+            ) : (
+              <div class="bar-list">
+                {bars.map((bar) => (
+                  <div class="bar-row" key={bar.key}>
+                    <span class="bar-label">{bar.label}</span>
+                    <div class="bar-track">
+                      <div
+                        class="bar-fill"
+                        style={{
+                          width: `${total > 0 ? (bar.count / total) * 100 : 0}%`,
+                          background: bar.color,
+                        }}
+                      />
+                    </div>
+                    <span class="mono bar-value">{bar.count}</span>
                   </div>
-                  <span class="mono bar-value">{bar.count}</span>
-                </div>
-              ))}
-            </div>
+                ))}
+              </div>
+            )}
             <p class="muted" style={{ margin: '12px 0 0' }}>
               共 {profile.visits} 次会话，成功 {profile.successes} 次。
             </p>
@@ -211,8 +239,14 @@ export function Profile({ id }: { id: number }) {
                       <td class="mono">{formatNumber(session.score)}</td>
                       <td>{session.need ? NEED_LABEL[session.need] : '—'}</td>
                       <td class="why-cell">
-                        <span class="badge">自报</span>{' '}
-                        <span class="prose">{session.why || '（没写）'}</span>
+                        {profile.kind === 'human' ? (
+                          <span class="prose">网页入场</span>
+                        ) : (
+                          <>
+                            <span class="badge">自报</span>{' '}
+                            <span class="prose">{session.why || '（没写）'}</span>
+                          </>
+                        )}
                       </td>
                       <td class="mono">{session.moved}</td>
                       <td class="mono">{session.built}</td>

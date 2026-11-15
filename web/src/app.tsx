@@ -3,6 +3,7 @@ import { Account } from './pages/Account';
 import { Leaderboard } from './pages/Leaderboard';
 import { Login } from './pages/Login';
 import { Placeholder } from './pages/Placeholder';
+import { Play } from './pages/Play';
 import { Profile } from './pages/Profile';
 import { Register } from './pages/Register';
 import { Replay } from './pages/Replay';
@@ -15,6 +16,8 @@ export function App() {
   switch (route.name) {
     case 'spectator':
       return <Spectator />;
+    case 'play':
+      return <Play />;
     case 'replay':
       return <Replay />;
     case 'agent':

@@ -8,7 +8,7 @@ use loo_core::{
     Action, Config, Event, EventKind, Object, ObjectCause, Session, SiteKind, WorldState,
 };
 use loo_proto::{
-    AgentId, AgentPose, Dir, EventTag, Need, ObjectKind, ObjectsMode, Pos, Projection,
+    AgentId, AgentPose, Dir, EventTag, Need, ObjectKind, ObjectsMode, PlayerKind, Pos, Projection,
     ProjectionAgent, ProjectionCounts, ProjectionEvent, ProjectionObject, ProjectionQueueEntry,
     SentBy, SessionOutcome, TerrainResponse, Tick,
 };
@@ -24,6 +24,9 @@ const WORLD_ID: u64 = 1;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct AgentPublic {
     pub sent_by: Option<SentBy>,
+    pub kind: PlayerKind,
+    /// Explicit colour `0..=11`; `None` means `id % 12`.
+    pub color: Option<u8>,
 }
 
 /// Builds the projection for one settled tick.
@@ -52,7 +55,7 @@ pub fn build(
         objects: project_objects(cfg, world),
         objects_mode: ObjectsMode::Full,
         objects_removed: Vec::new(),
-        queue: project_queue(world),
+        queue: project_queue(world, agents),
         // Contract §2: settlement markers and queue heartbeats have no
         // user-facing meaning and would flood the live log.
         events: events
@@ -119,10 +122,6 @@ pub fn terrain_rows(world: &WorldState) -> TerrainResponse {
     }
 }
 
-fn color(id: AgentId) -> u8 {
-    (id % COLOR_COUNT as u64) as u8
-}
-
 fn project_agents(
     cfg: &Config,
     world: &WorldState,
@@ -145,10 +144,12 @@ fn project_agents(
             Some(Need::Feces) => cfg.need.feces_use_ticks,
             None => 0,
         };
+        let public = agents.get(&agent.id);
         out.push(ProjectionAgent {
             id: agent.id,
             nick: agent.nick.to_string(),
-            color: color(agent.id),
+            color: crate::play::color_of(agent.id, public),
+            kind: public.map_or(PlayerKind::Ai, |public| public.kind),
             session_id: session.id,
             pos,
             pose: pose(agent, session, world.tick),
@@ -157,7 +158,7 @@ fn project_agents(
             use_done: session.use_ticks_done,
             use_total,
             deadline_tick: session.deadline,
-            sent_by: agents.get(&agent.id).and_then(|public| public.sent_by),
+            sent_by: public.and_then(|public| public.sent_by),
             level: agent.level,
             score_total: agent.score_total,
             defending: agent.defending,
@@ -168,7 +169,7 @@ fn project_agents(
     out
 }
 
-fn pose(agent: &loo_core::Agent, session: &Session, tick: Tick) -> AgentPose {
+pub(crate) fn pose(agent: &loo_core::Agent, session: &Session, tick: Tick) -> AgentPose {
     if tick < agent.stun_until {
         return AgentPose::Stunned;
     }
@@ -192,7 +193,7 @@ fn pose(agent: &loo_core::Agent, session: &Session, tick: Tick) -> AgentPose {
 }
 
 /// The first direction of a move, else south (contract §2).
-fn facing(agent: &loo_core::Agent) -> Dir {
+pub(crate) fn facing(agent: &loo_core::Agent) -> Dir {
     match &agent.action {
         Some(Action::Move { dirs, .. }) => dirs.front().copied().unwrap_or(Dir::S),
         _ => Dir::S,
@@ -213,7 +214,7 @@ fn project_objects(cfg: &Config, world: &WorldState) -> Vec<ProjectionObject> {
     out
 }
 
-fn project_object(cfg: &Config, pos: Pos, object: Object) -> ProjectionObject {
+pub(crate) fn project_object(cfg: &Config, pos: Pos, object: Object) -> ProjectionObject {
     match object {
         Object::Wall { damage } => ProjectionObject {
             pos,
@@ -277,7 +278,10 @@ fn toilet_progress_total(cfg: &Config, level: u8) -> u32 {
     cfg.build.upgrade_work[index]
 }
 
-fn project_queue(world: &WorldState) -> Vec<ProjectionQueueEntry> {
+fn project_queue(
+    world: &WorldState,
+    agents: &BTreeMap<AgentId, AgentPublic>,
+) -> Vec<ProjectionQueueEntry> {
     let mut out = Vec::new();
     // The physical queue decides the order; `queue_position` counts the same
     // sequence, so `index` and `queue_ahead` always agree.
@@ -295,7 +299,7 @@ fn project_queue(world: &WorldState) -> Vec<ProjectionQueueEntry> {
         out.push(ProjectionQueueEntry {
             id: agent.id,
             nick: agent.nick.to_string(),
-            color: color(agent.id),
+            color: crate::play::color_of(agent.id, agents.get(&agent.id)),
             pos,
             index: index as u32 + 1,
         });

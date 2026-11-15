@@ -16,10 +16,11 @@ use axum::{Json, Router};
 use futures_util::stream::unfold;
 use include_dir::{include_dir, Dir};
 use loo_proto::{
-    ActionQueued, ApiError, AttackRequest, AuthLoginRequest, AuthMeResponse, AuthRegisterRequest,
-    BuildRequest, ConfigResponse, DefendRequest, DemolishRequest, DoorRequest, DowngradeRequest,
-    Envelope, ErrorCode, JoinRequest, JoinResponse, LeaveResponse, MoveRequest, Projection,
-    RegisterRequest, Tick, UpgradeRequest, WaitRequest,
+    ActionQueued, AgentId, ApiError, AttackRequest, AuthLoginRequest, AuthMeResponse,
+    AuthRegisterRequest, BuildRequest, ConfigResponse, DefendRequest, DemolishRequest, DoorRequest,
+    DowngradeRequest, Envelope, ErrorCode, JoinRequest, JoinResponse, LeaveResponse, MoveRequest,
+    PlayAgentRequest, PlayAgentResponse, Projection, RegisterRequest, SentBy, Tick, UpgradeRequest,
+    WaitRequest,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
@@ -109,6 +110,20 @@ pub fn router_with(server: Arc<Server>, options: HttpOptions) -> Router {
         .route("/api/cancel", post(cancel_cmd))
         .route("/api/leave", post(leave_cmd))
         .route("/api/wait", post(wait))
+        .route("/api/play/agent", get(play_agent).post(play_agent_create))
+        .route("/api/play/state", get(play_state))
+        .route("/api/play/join", post(play_join))
+        .route("/api/play/move", post(play_move))
+        .route("/api/play/build", post(play_build))
+        .route("/api/play/demolish", post(play_demolish))
+        .route("/api/play/door", post(play_door))
+        .route("/api/play/attack", post(play_attack))
+        .route("/api/play/defend", post(play_defend))
+        .route("/api/play/upgrade", post(play_upgrade))
+        .route("/api/play/downgrade", post(play_downgrade))
+        .route("/api/play/use", post(play_use))
+        .route("/api/play/cancel", post(play_cancel))
+        .route("/api/play/leave", post(play_leave))
         .fallback(static_site)
         .with_state(state)
 }
@@ -549,6 +564,7 @@ async fn worlds(State(app): State<Arc<AppState>>) -> Response {
 #[derive(Deserialize)]
 struct LeaderboardQuery {
     metric: Option<String>,
+    kind: Option<String>,
     model: Option<String>,
     limit: Option<usize>,
 }
@@ -558,10 +574,11 @@ async fn leaderboard(
     Query(query): Query<LeaderboardQuery>,
 ) -> Response {
     let metric = query.metric.as_deref().unwrap_or("score");
+    let kind = query.kind.as_deref().unwrap_or("mixed");
     let limit = query.limit.unwrap_or(50);
     respond(
         app.server
-            .leaderboard(metric, query.model.as_deref(), limit)
+            .leaderboard(metric, kind, query.model.as_deref(), limit)
             .await,
     )
 }
@@ -979,6 +996,244 @@ async fn cancel_cmd(State(app): State<Arc<AppState>>, headers: HeaderMap) -> Res
 
 async fn leave_cmd(State(app): State<Arc<AppState>>, headers: HeaderMap) -> Response {
     respond::<LeaveResponse>(app.server.leave_cmd(&caller(&app.server, &headers)).await)
+}
+
+// --- the browser's human character (contract §3) ---------------------------
+//
+// Every route here exists only in official mode; in dev mode they are a plain
+// 404. A write needs the CSRF mirror, a live `loo_session`, and the account's
+// human character. All of them call the same `*_for_agent` the CLI uses, so
+// rules, rate limits and the command log cannot diverge.
+
+/// Official mode, CSRF, session and the account's human character, in that
+/// order. `csrf` is false for the two GET routes.
+fn play_session(app: &AppState, headers: &HeaderMap, csrf: bool) -> Result<AgentId, Box<Response>> {
+    if !app.server.official() {
+        return Err(Box::new(not_found()));
+    }
+    if csrf && !csrf_ok(headers) {
+        return Err(Box::new(forbidden(
+            "X-Loo-CSRF must match the loo_csrf cookie",
+        )));
+    }
+    let user_id = session_user(app, headers)?;
+    match app.server.human_agent_id(user_id) {
+        Some(agent) => Ok(agent),
+        None => Err(Box::new(respond::<()>(error_envelope(
+            ErrorCode::RuleRejected,
+            "create a human character first",
+        )))),
+    }
+}
+
+async fn play_agent(State(app): State<Arc<AppState>>, headers: HeaderMap) -> Response {
+    let user_id = match play_user(&app, &headers) {
+        Ok(user_id) => user_id,
+        Err(response) => return *response,
+    };
+    respond(app.server.human_agent(user_id))
+}
+
+async fn play_agent_create(
+    State(app): State<Arc<AppState>>,
+    headers: HeaderMap,
+    body: Option<Json<PlayAgentRequest>>,
+) -> Response {
+    if !app.server.official() {
+        return not_found();
+    }
+    if !csrf_ok(&headers) {
+        return forbidden("X-Loo-CSRF must match the loo_csrf cookie");
+    }
+    let user_id = match session_user(&app, &headers) {
+        Ok(user_id) => user_id,
+        Err(response) => return *response,
+    };
+    let Some(Json(req)) = body else {
+        return respond::<PlayAgentResponse>(bad_request("body must be {nick, color}"));
+    };
+    respond(
+        app.server
+            .create_human_agent(user_id, req.nick, req.color)
+            .await,
+    )
+}
+
+/// Official mode plus a live session, for the two GET routes.
+fn play_user(app: &AppState, headers: &HeaderMap) -> Result<u64, Box<Response>> {
+    if !app.server.official() {
+        return Err(Box::new(not_found()));
+    }
+    session_user(app, headers)
+}
+
+async fn play_state(State(app): State<Arc<AppState>>, headers: HeaderMap) -> Response {
+    let agent = match play_session(&app, &headers, false) {
+        Ok(agent) => agent,
+        Err(response) => return *response,
+    };
+    respond(app.server.play_state(agent).await)
+}
+
+/// The interface never asks the player why: the server records the browser as
+/// the sender (contract §4).
+fn browser_join() -> JoinRequest {
+    JoinRequest {
+        sent_by: SentBy::Human,
+        why: "played in the browser".to_string(),
+    }
+}
+
+async fn play_join(State(app): State<Arc<AppState>>, headers: HeaderMap) -> Response {
+    let agent = match play_session(&app, &headers, true) {
+        Ok(agent) => agent,
+        Err(response) => return *response,
+    };
+    respond::<JoinResponse>(app.server.join_for_agent(agent, browser_join()).await)
+}
+
+async fn play_move(
+    State(app): State<Arc<AppState>>,
+    headers: HeaderMap,
+    body: Option<Json<MoveRequest>>,
+) -> Response {
+    let agent = match play_session(&app, &headers, true) {
+        Ok(agent) => agent,
+        Err(response) => return *response,
+    };
+    let Some(Json(req)) = body else {
+        return respond::<ActionQueued>(bad_request("body must be {spec}"));
+    };
+    respond(app.server.move_cmd_for_agent(agent, req).await)
+}
+
+async fn play_build(
+    State(app): State<Arc<AppState>>,
+    headers: HeaderMap,
+    body: Option<Json<BuildRequest>>,
+) -> Response {
+    let agent = match play_session(&app, &headers, true) {
+        Ok(agent) => agent,
+        Err(response) => return *response,
+    };
+    let Some(Json(req)) = body else {
+        return respond::<ActionQueued>(bad_request("body must be {kind, target}"));
+    };
+    respond(app.server.build_cmd_for_agent(agent, req).await)
+}
+
+async fn play_demolish(
+    State(app): State<Arc<AppState>>,
+    headers: HeaderMap,
+    body: Option<Json<DemolishRequest>>,
+) -> Response {
+    let agent = match play_session(&app, &headers, true) {
+        Ok(agent) => agent,
+        Err(response) => return *response,
+    };
+    let Some(Json(req)) = body else {
+        return respond::<ActionQueued>(bad_request("body must be {target}"));
+    };
+    respond(app.server.demolish_cmd_for_agent(agent, req).await)
+}
+
+async fn play_door(
+    State(app): State<Arc<AppState>>,
+    headers: HeaderMap,
+    body: Option<Json<DoorRequest>>,
+) -> Response {
+    let agent = match play_session(&app, &headers, true) {
+        Ok(agent) => agent,
+        Err(response) => return *response,
+    };
+    let Some(Json(req)) = body else {
+        return respond::<ActionQueued>(bad_request("body must be {target, open}"));
+    };
+    respond(app.server.door_cmd_for_agent(agent, req).await)
+}
+
+async fn play_attack(
+    State(app): State<Arc<AppState>>,
+    headers: HeaderMap,
+    body: Option<Json<AttackRequest>>,
+) -> Response {
+    let agent = match play_session(&app, &headers, true) {
+        Ok(agent) => agent,
+        Err(response) => return *response,
+    };
+    let Some(Json(req)) = body else {
+        return respond::<ActionQueued>(bad_request("body must be {dir}"));
+    };
+    respond(app.server.attack_cmd_for_agent(agent, req).await)
+}
+
+async fn play_defend(
+    State(app): State<Arc<AppState>>,
+    headers: HeaderMap,
+    body: Option<Json<DefendRequest>>,
+) -> Response {
+    let agent = match play_session(&app, &headers, true) {
+        Ok(agent) => agent,
+        Err(response) => return *response,
+    };
+    let Some(Json(req)) = body else {
+        return respond::<ActionQueued>(bad_request("body must be {dir}"));
+    };
+    respond(app.server.defend_cmd_for_agent(agent, req).await)
+}
+
+async fn play_upgrade(
+    State(app): State<Arc<AppState>>,
+    headers: HeaderMap,
+    body: Option<Json<UpgradeRequest>>,
+) -> Response {
+    let agent = match play_session(&app, &headers, true) {
+        Ok(agent) => agent,
+        Err(response) => return *response,
+    };
+    let Some(Json(req)) = body else {
+        return respond::<ActionQueued>(bad_request("body must be {target}"));
+    };
+    respond(app.server.upgrade_cmd_for_agent(agent, req).await)
+}
+
+async fn play_downgrade(
+    State(app): State<Arc<AppState>>,
+    headers: HeaderMap,
+    body: Option<Json<DowngradeRequest>>,
+) -> Response {
+    let agent = match play_session(&app, &headers, true) {
+        Ok(agent) => agent,
+        Err(response) => return *response,
+    };
+    let Some(Json(req)) = body else {
+        return respond::<ActionQueued>(bad_request("body must be {target}"));
+    };
+    respond(app.server.downgrade_cmd_for_agent(agent, req).await)
+}
+
+async fn play_use(State(app): State<Arc<AppState>>, headers: HeaderMap) -> Response {
+    let agent = match play_session(&app, &headers, true) {
+        Ok(agent) => agent,
+        Err(response) => return *response,
+    };
+    respond(app.server.use_cmd_for_agent(agent).await)
+}
+
+async fn play_cancel(State(app): State<Arc<AppState>>, headers: HeaderMap) -> Response {
+    let agent = match play_session(&app, &headers, true) {
+        Ok(agent) => agent,
+        Err(response) => return *response,
+    };
+    respond(app.server.cancel_cmd_for_agent(agent).await)
+}
+
+async fn play_leave(State(app): State<Arc<AppState>>, headers: HeaderMap) -> Response {
+    let agent = match play_session(&app, &headers, true) {
+        Ok(agent) => agent,
+        Err(response) => return *response,
+    };
+    respond::<LeaveResponse>(app.server.leave_cmd_for_agent(agent).await)
 }
 
 // --- helpers ----------------------------------------------------------------

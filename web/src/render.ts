@@ -340,12 +340,16 @@ function drawLabel(
   topPy: number,
   layout: Layout,
   selected: boolean,
+  human: boolean,
 ): void {
   const fontPx = Math.max(10, 5 * layout.zoom);
   ctx.font = `400 ${fontPx}px Silkscreen, ui-monospace, monospace`;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  const textWidth = Math.ceil(ctx.measureText(nick).width);
+  const badgeGap = human ? Math.max(2, Math.round(fontPx * 0.25)) : 0;
+  const nickWidth = Math.ceil(ctx.measureText(nick).width);
+  const badgeWidth = human ? Math.ceil(ctx.measureText('人').width) : 0;
+  const textWidth = nickWidth + (human ? badgeGap + badgeWidth : 0);
   const pad = Math.max(3, Math.round(fontPx * 0.3));
   const width = textWidth + pad * 2;
   const height = fontPx + 2;
@@ -353,8 +357,16 @@ function drawLabel(
   const top = Math.round(topPy);
   ctx.fillStyle = LABEL_BG;
   ctx.fillRect(left, top, width, height);
+  const textLeft = left + pad;
+  const baseline = top + height / 2 + 1;
+  ctx.textAlign = 'left';
   ctx.fillStyle = selected ? GOLD : LABEL_FG;
-  ctx.fillText(nick, centerPx, top + height / 2 + 1);
+  ctx.fillText(nick, textLeft, baseline);
+  if (human) {
+    // A person in the browser: the same gold 「人」 the HTML pages use.
+    ctx.fillStyle = GOLD;
+    ctx.fillText('人', textLeft + nickWidth + badgeGap, baseline);
+  }
 }
 
 export function drawWorld(
@@ -552,7 +564,15 @@ export function drawWorld(
     const px = offX + frame.x * tile;
     const py = offY + frame.y * tile;
     if (px > cssW + tile || py > cssH + tile || px + tile < -tile || py + tile < -tile) continue;
-    drawLabel(ctx, frame.agent.nick, px + tile / 2, py + tile + 3, layout, frame.agent.id === selected);
+    drawLabel(
+      ctx,
+      frame.agent.nick,
+      px + tile / 2,
+      py + tile + 3,
+      layout,
+      frame.agent.id === selected,
+      frame.agent.kind === 'human',
+    );
   }
 
   // --- selection and vision ----------------------------------------------

@@ -3,8 +3,8 @@
 
 use loo_core::{map, Config, Event, EventKind, ObjectCause};
 use loo_proto::{
-    Envelope, EventTag, JoinRequest, MoveRequest, MoveSpec, Need, Pos, RegisterRequest, SentBy,
-    SessionOutcome, Tick,
+    Envelope, EventTag, JoinRequest, KindStats, MoveRequest, MoveSpec, Need, PlayerKind, Pos,
+    RegisterRequest, SentBy, SessionOutcome, Tick,
 };
 use loo_server::Server;
 use std::path::{Path, PathBuf};
@@ -159,16 +159,17 @@ async fn leaderboards_rank_by_each_metric_and_respect_the_limit() {
         "why",
     );
 
-    let score = expect_ok(server.leaderboard("score", None, 50).await).expect("rows");
+    let score = expect_ok(server.leaderboard("score", "mixed", None, 50).await).expect("rows");
     assert_eq!(ids(&score), vec![alpha, beta], "score_total descending");
     assert_eq!((score[0].rank, score[1].rank), (1, 2));
     assert_eq!((score[0].score_total, score[1].score_total), (300, 200));
 
-    let best = expect_ok(server.leaderboard("best", None, 50).await).expect("rows");
+    let best = expect_ok(server.leaderboard("best", "mixed", None, 50).await).expect("rows");
     assert_eq!(ids(&best), vec![beta, alpha], "best score descending");
     assert_eq!((best[0].best_score, best[1].best_score), (250, 100));
 
-    let successes = expect_ok(server.leaderboard("successes", None, 50).await).expect("rows");
+    let successes =
+        expect_ok(server.leaderboard("successes", "mixed", None, 50).await).expect("rows");
     assert_eq!(
         ids(&successes),
         vec![alpha, beta],
@@ -176,12 +177,12 @@ async fn leaderboards_rank_by_each_metric_and_respect_the_limit() {
     );
     assert_eq!((successes[0].successes, successes[1].successes), (2, 1));
 
-    let limited = expect_ok(server.leaderboard("score", None, 1).await).expect("rows");
+    let limited = expect_ok(server.leaderboard("score", "mixed", None, 1).await).expect("rows");
     assert_eq!(limited.len(), 1, "limit is enforced");
     assert_eq!(limited[0].agent_id, alpha);
     assert_eq!(limited[0].rank, 1);
 
-    let clamped = expect_ok(server.leaderboard("score", None, 0).await).expect("rows");
+    let clamped = expect_ok(server.leaderboard("score", "mixed", None, 0).await).expect("rows");
     assert_eq!(clamped.len(), 1, "limit clamps to at least one row");
 }
 
@@ -194,13 +195,19 @@ async fn leaderboard_model_filter_is_exact() {
     let alpha = register_account_agent(&server, &alice, "alpha-one", "alpha", "intro").await;
     let beta = register_account_agent(&server, &bob, "beta-one", "beta", "intro").await;
 
-    let filtered = expect_ok(server.leaderboard("score", Some("alpha"), 50).await).expect("rows");
+    let filtered = expect_ok(
+        server
+            .leaderboard("score", "mixed", Some("alpha"), 50)
+            .await,
+    )
+    .expect("rows");
     assert_eq!(ids(&filtered), vec![alpha], "only the alpha model");
 
-    let partial = expect_ok(server.leaderboard("score", Some("alp"), 50).await).expect("rows");
+    let partial =
+        expect_ok(server.leaderboard("score", "mixed", Some("alp"), 50).await).expect("rows");
     assert!(partial.is_empty(), "matching is exact, not a prefix");
 
-    let empty = expect_ok(server.leaderboard("score", Some(""), 50).await).expect("rows");
+    let empty = expect_ok(server.leaderboard("score", "mixed", Some(""), 50).await).expect("rows");
     assert_eq!(
         ids(&empty),
         vec![alpha, beta],
@@ -208,7 +215,7 @@ async fn leaderboard_model_filter_is_exact() {
     );
 
     assert!(
-        !server.leaderboard("points", None, 50).await.ok,
+        !server.leaderboard("points", "mixed", None, 50).await.ok,
         "unknown metric is refused"
     );
 }
@@ -236,13 +243,15 @@ async fn a_dev_world_feeds_no_boards() {
         "dev why",
     );
 
-    let rows = expect_ok(server.leaderboard("score", None, 50).await).expect("rows");
+    let rows = expect_ok(server.leaderboard("score", "mixed", None, 50).await).expect("rows");
     assert!(rows.is_empty(), "official = 0 feeds no leaderboard");
     let stats = expect_ok(server.stats().await).expect("stats");
-    assert_eq!(stats.total_sessions, 0);
-    assert_eq!(stats.self_sessions, 0);
-    assert_eq!(stats.human_sessions, 0);
-    assert_eq!(stats.success_rate, 0.0);
+    assert_eq!(stats.all.total_sessions, 0);
+    assert_eq!(stats.all.success_rate, 0.0);
+    assert_eq!(stats.all.ai, KindStats::default());
+    assert_eq!(stats.all.human, KindStats::default());
+    assert_eq!(stats.mixed.total_sessions, 0);
+    assert_eq!(stats.mixed.ai, KindStats::default());
     assert!(stats.models.is_empty(), "no models in a dev world");
 
     // A dev agent is still queryable by id; its owner is empty.
@@ -252,7 +261,7 @@ async fn a_dev_world_feeds_no_boards() {
 }
 
 #[tokio::test]
-async fn stats_count_senders_and_group_models() {
+async fn stats_count_kinds_and_group_models() {
     let dir = fresh_dir("stats");
     let server = open_official(&dir);
     let (_, alice) = account(&server, "alice").await;
@@ -304,10 +313,22 @@ async fn stats_count_senders_and_group_models() {
     );
 
     let stats = expect_ok(server.stats().await).expect("stats");
-    assert_eq!(stats.total_sessions, 4);
-    assert_eq!(stats.self_sessions, 2);
-    assert_eq!(stats.human_sessions, 1, "NULL sent_by counts in total only");
-    assert_eq!(stats.success_rate, 0.75, "3 successes out of 4 ended");
+    assert_eq!(stats.all.total_sessions, 4);
+    assert_eq!(stats.all.ai.agents, 2, "both characters are AI");
+    assert_eq!(stats.all.ai.sessions, 4);
+    assert_eq!(stats.all.ai.successes, 3);
+    assert_eq!(
+        stats.all.ai.success_rate, 0.75,
+        "3 successes out of 4 ended"
+    );
+    assert_eq!(stats.all.ai.total_score, 180, "100 + 0 + 50 + 30");
+    assert_eq!(stats.all.ai.best_score, 100);
+    assert_eq!(stats.all.human, KindStats::default(), "no human characters");
+    assert_eq!(stats.all.success_rate, 0.75);
+    assert_eq!(
+        stats.mixed.total_sessions, 0,
+        "one player kind never counts as mixed"
+    );
 
     let models: Vec<(&str, u64, u64, u64, u64, f64)> = stats
         .models
@@ -328,6 +349,187 @@ async fn stats_count_senders_and_group_models() {
         vec![("alpha", 1, 2, 1, 300, 0.5), ("beta", 1, 2, 2, 200, 1.0),],
         "models sort by total_score descending"
     );
+}
+
+#[tokio::test]
+async fn boards_split_ai_human_and_mixed() {
+    let dir = fresh_dir("kinds");
+    let server = open_official(&dir);
+    let (_, alice) = account(&server, "alice").await;
+    let (bob_user, _) = account(&server, "bob").await;
+    let ai = register_account_agent(&server, &alice, "alpha-one", "alpha", "intro").await;
+    let human = server
+        .store()
+        .create_human_agent(bob_user, "beta-human", None)
+        .expect("human character");
+    server.store().set_agent_score(ai, 300).unwrap();
+    server.store().set_agent_score(human, 120).unwrap();
+    add_session(
+        &server,
+        1,
+        ai,
+        10,
+        100,
+        SessionOutcome::Success,
+        Some(SentBy::Self_),
+        "why",
+    );
+    add_session(
+        &server,
+        2,
+        human,
+        30,
+        60,
+        SessionOutcome::FailedDeadline,
+        None,
+        "",
+    );
+
+    let ai_board = expect_ok(server.leaderboard("score", "ai", None, 50).await).expect("ai rows");
+    assert_eq!(ids(&ai_board), vec![ai], "the AI board hides humans");
+    assert_eq!(ai_board[0].kind, PlayerKind::Ai);
+
+    let human_board =
+        expect_ok(server.leaderboard("score", "human", None, 50).await).expect("human rows");
+    assert_eq!(ids(&human_board), vec![human], "the human board hides AI");
+    assert_eq!(human_board[0].kind, PlayerKind::Human);
+
+    let mixed = expect_ok(server.leaderboard("score", "mixed", None, 50).await).expect("rows");
+    assert_eq!(ids(&mixed), vec![ai, human], "the mixed board keeps both");
+    assert_eq!(
+        mixed.iter().map(|row| row.kind).collect::<Vec<_>>(),
+        vec![PlayerKind::Ai, PlayerKind::Human],
+        "each row names its own kind"
+    );
+
+    assert!(
+        !server.leaderboard("score", "bots", None, 50).await.ok,
+        "an unknown kind is refused"
+    );
+}
+
+#[tokio::test]
+async fn stats_split_all_and_mixed_by_kind() {
+    let dir = fresh_dir("scopes");
+    let server = open_official(&dir);
+    let (_, alice) = account(&server, "alice").await;
+    let (bob_user, _) = account(&server, "bob").await;
+    let ai = register_account_agent(&server, &alice, "alpha-one", "alpha", "intro").await;
+    let human = server
+        .store()
+        .create_human_agent(bob_user, "beta-human", None)
+        .expect("human character");
+    server.store().set_agent_score(ai, 60).unwrap();
+
+    // Sessions 1 (AI) and 2 (human) overlap in ticks, so both are mixed;
+    // session 3 (AI) runs after the human left and is plain.
+    server
+        .store()
+        .insert_session(1, 1, ai, 10, Some(Need::Urine), Some(SentBy::Self_), "why")
+        .expect("ai session");
+    server
+        .store()
+        .insert_session(2, 1, human, 12, Some(Need::Feces), None, "")
+        .expect("human session");
+    server
+        .store()
+        .finish_session(2, 13, SessionOutcome::FailedDeadline, 10)
+        .expect("human session finished");
+    server
+        .store()
+        .finish_session(1, 15, SessionOutcome::Success, 40)
+        .expect("ai session finished");
+    add_session(
+        &server,
+        3,
+        ai,
+        100,
+        5,
+        SessionOutcome::Success,
+        Some(SentBy::Self_),
+        "why",
+    );
+
+    let stats = expect_ok(server.stats().await).expect("stats");
+
+    assert_eq!(stats.all.total_sessions, 3);
+    assert_eq!(stats.all.ai.agents, 1);
+    assert_eq!(stats.all.ai.sessions, 2);
+    assert_eq!(stats.all.ai.successes, 2);
+    assert_eq!(stats.all.ai.success_rate, 1.0);
+    assert_eq!(stats.all.ai.total_score, 45);
+    assert_eq!(stats.all.ai.best_score, 40);
+    assert_eq!(stats.all.human.agents, 1);
+    assert_eq!(stats.all.human.sessions, 1);
+    assert_eq!(stats.all.human.successes, 0);
+    assert_eq!(stats.all.human.success_rate, 0.0);
+    assert_eq!(stats.all.human.total_score, 10);
+    assert_eq!(stats.all.human.best_score, 10);
+    assert_eq!(stats.all.success_rate, 2.0 / 3.0);
+
+    assert_eq!(stats.mixed.total_sessions, 2, "only the overlapping pair");
+    assert_eq!(stats.mixed.ai.sessions, 1);
+    assert_eq!(stats.mixed.ai.successes, 1);
+    assert_eq!(stats.mixed.ai.total_score, 40);
+    assert_eq!(stats.mixed.ai.best_score, 40);
+    assert_eq!(stats.mixed.human.sessions, 1);
+    assert_eq!(stats.mixed.human.successes, 0);
+    assert_eq!(stats.mixed.human.total_score, 10);
+    assert_eq!(stats.mixed.success_rate, 0.5);
+    assert_ne!(
+        stats.all.success_rate, stats.mixed.success_rate,
+        "the two scopes must be tellable apart"
+    );
+
+    assert_eq!(stats.models.len(), 1, "humans never join the model table");
+    assert_eq!(stats.models[0].model, "alpha");
+    assert_eq!(stats.models[0].agents, 1);
+    assert_eq!(stats.models[0].sessions, 2);
+    assert_eq!(stats.models[0].total_score, 60);
+}
+
+#[tokio::test]
+async fn with_other_kind_needs_overlapping_ticks() {
+    let dir = fresh_dir("overlap");
+    let server = open_official(&dir);
+    let (_, alice) = account(&server, "alice").await;
+    let (bob_user, _) = account(&server, "bob").await;
+    let ai = register_account_agent(&server, &alice, "alpha-one", "alpha", "intro").await;
+    let human = server
+        .store()
+        .create_human_agent(bob_user, "beta-human", None)
+        .expect("human character");
+
+    // AI [10, 11] then human [50, 51]: different kinds, disjoint ticks.
+    add_session(
+        &server,
+        1,
+        ai,
+        10,
+        20,
+        SessionOutcome::Success,
+        Some(SentBy::Self_),
+        "why",
+    );
+    add_session(&server, 2, human, 50, 5, SessionOutcome::Left, None, "");
+
+    let ai_profile = expect_ok(server.profile(ai).await).expect("ai profile");
+    assert_eq!(ai_profile.sessions.len(), 1);
+    assert!(
+        !ai_profile.sessions[0].with_other_kind,
+        "disjoint ticks are not a mixed session"
+    );
+    let human_profile = expect_ok(server.profile(human).await).expect("human profile");
+    assert_eq!(human_profile.kind, PlayerKind::Human);
+    assert_eq!(human_profile.sessions.len(), 1);
+    assert!(
+        !human_profile.sessions[0].with_other_kind,
+        "disjoint ticks are not a mixed session"
+    );
+    let stats = expect_ok(server.stats().await).expect("stats");
+    assert_eq!(stats.mixed.total_sessions, 0);
+    assert_eq!(stats.all.ai.sessions, 1);
+    assert_eq!(stats.all.human.sessions, 1);
 }
 
 #[tokio::test]

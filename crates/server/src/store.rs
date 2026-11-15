@@ -7,8 +7,9 @@
 
 use loo_core::{Event, EventKind, IntentKind, Snapshot, WorldState};
 use loo_proto::{
-    AccountTokenInfo, AgentId, EventTag, LeaderRow, ModelStats, Need, ProfileResponse, SentBy,
-    SessionId, SessionOutcome, SessionRow, StatsResponse, Tick, TimelineMarker, WorldSummary,
+    AccountTokenInfo, AgentId, EventTag, KindStats, LeaderRow, ModelStats, Need, PlayerKind,
+    ProfileResponse, ScopeStats, SentBy, SessionId, SessionOutcome, SessionRow, StatsResponse,
+    Tick, TimelineMarker, WorldSummary,
 };
 use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::Value;
@@ -121,6 +122,11 @@ pub struct StoredAgent {
     /// Owning account; `None` for dev agents.
     pub user_id: Option<u64>,
     pub created_at_ms: u64,
+    /// `Ai` for every CLI registration; `Human` for the account's one browser
+    /// character.
+    pub kind: PlayerKind,
+    /// Explicit colour `0..=11`; `None` means `id % 12`.
+    pub color: Option<u8>,
 }
 
 #[derive(Debug)]
@@ -215,6 +221,7 @@ impl Store {
         conn.execute_batch("PRAGMA synchronous=NORMAL;")?;
         conn.execute_batch(SCHEMA)?;
         migrate_agents(&conn)?;
+        migrate_play_kind(&conn)?;
         migrate_worlds_official(&conn)?;
 
         let existing: Option<i64> = conn
@@ -578,7 +585,7 @@ impl Store {
         let conn = self.conn()?;
         let mut stmt = conn.prepare(
             "SELECT id, nick, model, intro, COALESCE(token, ''), sent_by, why, score_total, user_id, \
-             created_at_ms FROM agents WHERE world_id = ?1 ORDER BY id",
+             created_at_ms, kind, color FROM agents WHERE world_id = ?1 ORDER BY id",
         )?;
         let rows = stmt.query_map([WORLD_ID], agent_from_row)?;
         let mut agents = Vec::new();
@@ -771,7 +778,7 @@ impl Store {
         let conn = self.conn()?;
         let mut stmt = conn.prepare(
             "SELECT id, nick, model, intro, COALESCE(token, ''), sent_by, why, score_total, user_id, \
-             created_at_ms FROM agents WHERE world_id = ?1 AND user_id = ?2 ORDER BY id",
+             created_at_ms, kind, color FROM agents WHERE world_id = ?1 AND user_id = ?2 ORDER BY id",
         )?;
         let rows = stmt.query_map(params![WORLD_ID, user_id as i64], agent_from_row)?;
         let mut agents = Vec::new();
@@ -779,6 +786,33 @@ impl Store {
             agents.push(agent?);
         }
         Ok(agents)
+    }
+
+    pub fn human_agent_of_user(&self, user_id: u64) -> Result<Option<StoredAgent>, StoreError> {
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(
+            "SELECT id, nick, model, intro, COALESCE(token, ''), sent_by, why, score_total, user_id, \
+             created_at_ms, kind, color FROM agents \
+             WHERE world_id = ?1 AND user_id = ?2 AND kind = 'human' ORDER BY id LIMIT 1",
+        )?;
+        let mut rows = stmt.query_map(params![WORLD_ID, user_id as i64], agent_from_row)?;
+        match rows.next() {
+            Some(agent) => Ok(Some(agent?)),
+            None => Ok(None),
+        }
+    }
+
+    /// The player kind of an agent; `None` when the id is unknown.
+    pub fn agent_kind(&self, agent_id: AgentId) -> Result<Option<PlayerKind>, StoreError> {
+        let kind: Option<String> = self
+            .conn()?
+            .query_row(
+                "SELECT kind FROM agents WHERE id = ?1 AND world_id = ?2",
+                params![agent_id as i64, WORLD_ID],
+                |row| row.get(0),
+            )
+            .optional()?;
+        kind.map(|name| player_kind_from_name(&name)).transpose()
     }
 
     pub fn agent_owner(&self, agent_id: AgentId) -> Result<Option<u64>, StoreError> {
@@ -839,6 +873,44 @@ impl Store {
                 user_id as i64
             ],
         )?;
+        Ok(next as AgentId)
+    }
+
+    /// Creates the account's one browser character. `model`/`intro` stay
+    /// empty: a person types no self-description. The partial unique index is
+    /// the authority on "one per account".
+    pub fn create_human_agent(
+        &self,
+        user_id: u64,
+        nick: &str,
+        color: Option<u8>,
+    ) -> Result<AgentId, StoreError> {
+        let conn = self.conn()?;
+        let next: i64 = conn.query_row(
+            "SELECT COALESCE(MAX(id), 0) + 1 FROM agents WHERE world_id = ?1",
+            [WORLD_ID],
+            |row| row.get(0),
+        )?;
+        conn.execute(
+            "INSERT INTO agents(id, world_id, nick, model, intro, token, sent_by, why, \
+             created_at_ms, score_total, user_id, kind, color) \
+             VALUES(?1, ?2, ?3, '', '', NULL, NULL, '', ?4, 0, ?5, 'human', ?6)",
+            params![
+                next,
+                WORLD_ID,
+                nick,
+                now_ms() as i64,
+                user_id as i64,
+                color.map(i64::from)
+            ],
+        )
+        .map_err(|error| {
+            if is_unique_violation(&error) {
+                StoreError::Conflict("this account already has a human character".to_string())
+            } else {
+                StoreError::Sqlite(error)
+            }
+        })?;
         Ok(next as AgentId)
     }
 
@@ -953,7 +1025,8 @@ impl Store {
         outcome: SessionOutcome,
         score: u32,
     ) -> Result<(), StoreError> {
-        self.conn()?.execute(
+        let conn = self.conn()?;
+        conn.execute(
             "UPDATE sessions SET ended_tick = ?1, outcome = ?2, score = ?3 WHERE id = ?4",
             params![
                 ended_tick as i64,
@@ -962,13 +1035,29 @@ impl Store {
                 session as i64
             ],
         )?;
+        // Contract §2: mark the session when another player kind shared the
+        // world while it was running. Plain overlap, not weighted by headcount.
+        conn.execute(
+            "UPDATE sessions SET with_other_kind = CASE WHEN EXISTS ( \
+                 SELECT 1 FROM sessions o \
+                 JOIN agents oa ON oa.id = o.agent AND oa.world_id = o.world_id \
+                 JOIN agents a ON a.id = sessions.agent AND a.world_id = sessions.world_id \
+                 WHERE o.world_id = sessions.world_id AND o.id <> sessions.id \
+                   AND oa.kind <> a.kind \
+                   AND o.started_tick <= sessions.ended_tick \
+                   AND (o.ended_tick IS NULL OR o.ended_tick >= sessions.started_tick) \
+             ) THEN 1 ELSE 0 END WHERE id = ?1",
+            params![session as i64],
+        )?;
         Ok(())
     }
 
-    /// Only official worlds with account-owned agents feed the boards.
+    /// Only official worlds with account-owned agents feed the boards. `kind`
+    /// is `ai`, `human` or `mixed`; the lib layer rejects anything else.
     pub fn leaderboard(
         &self,
         metric: &str,
+        kind: &str,
         model: Option<&str>,
         limit: usize,
     ) -> Result<Vec<LeaderRow>, StoreError> {
@@ -978,7 +1067,7 @@ impl Store {
             _ => "a.score_total DESC, a.id ASC",
         };
         let sql = format!(
-            "SELECT a.id, a.nick, COALESCE(u.username, ''), a.model, a.score_total, \
+            "SELECT a.id, a.nick, COALESCE(u.username, ''), a.model, a.kind, a.score_total, \
              COALESCE(MAX(s.score), 0) AS best_score, \
              COALESCE(SUM(CASE WHEN s.outcome = 'success' THEN 1 ELSE 0 END), 0) AS successes \
              FROM agents a \
@@ -986,55 +1075,97 @@ impl Store {
              LEFT JOIN users u ON u.id = a.user_id \
              LEFT JOIN sessions s ON s.agent = a.id AND s.world_id = a.world_id \
              WHERE a.user_id IS NOT NULL AND (?1 IS NULL OR a.model = ?1) \
-             GROUP BY a.id, a.nick, u.username, a.model, a.score_total \
-             ORDER BY {order} LIMIT ?2"
+               AND (?2 = 'mixed' OR a.kind = ?2) \
+             GROUP BY a.id, a.nick, u.username, a.model, a.kind, a.score_total \
+             ORDER BY {order} LIMIT ?3"
         );
         let conn = self.conn()?;
         let mut stmt = conn.prepare(&sql)?;
-        let rows = stmt.query_map(params![model, limit as i64], |row| {
-            Ok(LeaderRow {
-                rank: 0,
-                agent_id: row.get::<_, i64>(0)? as AgentId,
-                nick: row.get(1)?,
-                owner: row.get(2)?,
-                model: row.get(3)?,
-                score_total: row.get::<_, i64>(4)? as u32,
-                best_score: row.get::<_, i64>(5)? as u32,
-                successes: row.get::<_, i64>(6)? as u32,
-            })
+        let rows = stmt.query_map(params![model, kind, limit as i64], |row| {
+            let kind: String = row.get(4)?;
+            Ok((
+                row.get::<_, i64>(0)? as AgentId,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                kind,
+                row.get::<_, i64>(5)? as u32,
+                row.get::<_, i64>(6)? as u32,
+                row.get::<_, i64>(7)? as u32,
+            ))
         })?;
         let mut out = Vec::new();
         for row in rows {
-            let mut row = row?;
-            row.rank = out.len() + 1;
-            out.push(row);
+            let (agent_id, nick, owner, model, kind, score_total, best_score, successes) = row?;
+            out.push(LeaderRow {
+                rank: out.len() + 1,
+                agent_id,
+                nick,
+                owner,
+                model,
+                kind: player_kind_from_name(&kind)?,
+                score_total,
+                best_score,
+                successes,
+            });
         }
         Ok(out)
     }
 
+    /// Two ranges (`all`, `mixed`) split by player kind, then the AI-only model
+    /// table. A session can be in both ranges, so the range is a join row, not
+    /// a partition.
     pub fn stats(&self) -> Result<StatsResponse, StoreError> {
         let conn = self.conn()?;
-        let (total_sessions, self_sessions, human_sessions, successes, ended) = conn.query_row(
-            "SELECT COUNT(s.id), \
-             COALESCE(SUM(CASE WHEN s.sent_by = 'self' THEN 1 ELSE 0 END), 0), \
-             COALESCE(SUM(CASE WHEN s.sent_by = 'human' THEN 1 ELSE 0 END), 0), \
-             COALESCE(SUM(CASE WHEN s.outcome = 'success' THEN 1 ELSE 0 END), 0), \
-             COALESCE(SUM(CASE WHEN s.outcome IS NOT NULL THEN 1 ELSE 0 END), 0) \
-             FROM sessions s \
-             JOIN agents a ON a.id = s.agent AND a.world_id = s.world_id \
-             JOIN worlds w ON w.id = s.world_id AND w.official = 1 \
-             WHERE a.user_id IS NOT NULL",
-            [],
-            |row| {
+        let mut scopes = [ScopeStats::default(); 2];
+        let mut ended = [0u64; 2];
+        {
+            let mut stmt = conn.prepare(
+                "SELECT r.mixed, a.kind, COUNT(DISTINCT a.id), COUNT(s.id), \
+                 COALESCE(SUM(CASE WHEN s.outcome = 'success' THEN 1 ELSE 0 END), 0), \
+                 COALESCE(SUM(CASE WHEN s.outcome IS NOT NULL THEN 1 ELSE 0 END), 0), \
+                 COALESCE(SUM(s.score), 0), COALESCE(MAX(s.score), 0) \
+                 FROM (SELECT 0 AS mixed UNION ALL SELECT 1) r \
+                 JOIN sessions s ON r.mixed = 0 OR s.with_other_kind = 1 \
+                 JOIN agents a ON a.id = s.agent AND a.world_id = s.world_id \
+                 JOIN worlds w ON w.id = s.world_id AND w.official = 1 \
+                 WHERE a.user_id IS NOT NULL \
+                 GROUP BY r.mixed, a.kind",
+            )?;
+            let rows = stmt.query_map([], |row| {
                 Ok((
-                    row.get::<_, i64>(0)?,
-                    row.get::<_, i64>(1)?,
+                    row.get::<_, i64>(0)? != 0,
+                    row.get::<_, String>(1)?,
                     row.get::<_, i64>(2)?,
                     row.get::<_, i64>(3)?,
                     row.get::<_, i64>(4)?,
+                    row.get::<_, i64>(5)?,
+                    row.get::<_, i64>(6)?,
+                    row.get::<_, i64>(7)?,
                 ))
-            },
-        )?;
+            })?;
+            for row in rows {
+                let (mixed, kind, agents, sessions, successes, ended_rows, total, best) = row?;
+                let index = usize::from(mixed);
+                let stats = match player_kind_from_name(&kind)? {
+                    PlayerKind::Ai => &mut scopes[index].ai,
+                    PlayerKind::Human => &mut scopes[index].human,
+                };
+                *stats = KindStats {
+                    agents: agents as u64,
+                    sessions: sessions as u64,
+                    successes: successes as u64,
+                    success_rate: rate(successes as u64, ended_rows as u64),
+                    total_score: total as u64,
+                    best_score: best as u32,
+                };
+                ended[index] += ended_rows as u64;
+            }
+        }
+        for (index, scope) in scopes.iter_mut().enumerate() {
+            scope.total_sessions = scope.ai.sessions + scope.human.sessions;
+            scope.success_rate = rate(scope.ai.successes + scope.human.successes, ended[index]);
+        }
 
         #[derive(Default)]
         struct ModelAcc {
@@ -1049,7 +1180,7 @@ impl Store {
             let mut stmt = conn.prepare(
                 "SELECT a.model, COUNT(*), COALESCE(SUM(a.score_total), 0) \
                  FROM agents a JOIN worlds w ON w.id = a.world_id AND w.official = 1 \
-                 WHERE a.user_id IS NOT NULL GROUP BY a.model",
+                 WHERE a.user_id IS NOT NULL AND a.kind = 'ai' GROUP BY a.model",
             )?;
             let rows = stmt.query_map([], |row| {
                 Ok((
@@ -1073,7 +1204,7 @@ impl Store {
                  FROM sessions s \
                  JOIN agents a ON a.id = s.agent AND a.world_id = s.world_id \
                  JOIN worlds w ON w.id = s.world_id AND w.official = 1 \
-                 WHERE a.user_id IS NOT NULL GROUP BY a.model",
+                 WHERE a.user_id IS NOT NULL AND a.kind = 'ai' GROUP BY a.model",
             )?;
             let rows = stmt.query_map([], |row| {
                 Ok((
@@ -1084,11 +1215,11 @@ impl Store {
                 ))
             })?;
             for row in rows {
-                let (model, sessions, successes, ended) = row?;
+                let (model, sessions, successes, ended_rows) = row?;
                 let acc = models.entry(model).or_default();
                 acc.sessions = sessions as u64;
                 acc.successes = successes as u64;
-                acc.ended = ended as u64;
+                acc.ended = ended_rows as u64;
             }
         }
         let mut model_stats: Vec<ModelStats> = models
@@ -1109,10 +1240,8 @@ impl Store {
         });
 
         Ok(StatsResponse {
-            total_sessions: total_sessions as u64,
-            self_sessions: self_sessions as u64,
-            human_sessions: human_sessions as u64,
-            success_rate: rate(successes as u64, ended as u64),
+            all: scopes[0],
+            mixed: scopes[1],
             models: model_stats,
         })
     }
@@ -1121,9 +1250,9 @@ impl Store {
     /// `model` are web-only and never enter the projection.
     pub fn profile(&self, agent_id: AgentId) -> Result<Option<ProfileResponse>, StoreError> {
         let conn = self.conn()?;
-        let agent: Option<(String, String, String, String, i64)> = conn
+        let agent: Option<(String, String, String, String, i64, String)> = conn
             .query_row(
-                "SELECT a.nick, COALESCE(u.username, ''), a.model, a.intro, a.score_total \
+                "SELECT a.nick, COALESCE(u.username, ''), a.model, a.intro, a.score_total, a.kind \
                  FROM agents a LEFT JOIN users u ON u.id = a.user_id \
                  WHERE a.id = ?1 AND a.world_id = ?2",
                 params![agent_id as i64, WORLD_ID],
@@ -1134,17 +1263,19 @@ impl Store {
                         row.get(2)?,
                         row.get(3)?,
                         row.get(4)?,
+                        row.get(5)?,
                     ))
                 },
             )
             .optional()?;
-        let Some((nick, owner, model, intro, score_total)) = agent else {
+        let Some((nick, owner, model, intro, score_total, kind)) = agent else {
             return Ok(None);
         };
+        let kind = player_kind_from_name(&kind)?;
 
         let mut stmt = conn.prepare(
             "SELECT id, world_id, started_tick, ended_tick, outcome, score, need, sent_by, \
-             why, moved, built, hits_taken, defends FROM sessions \
+             why, moved, built, hits_taken, defends, with_other_kind FROM sessions \
              WHERE agent = ?1 ORDER BY started_tick DESC, id DESC",
         )?;
         let rows = stmt.query_map([agent_id as i64], |row| {
@@ -1162,6 +1293,7 @@ impl Store {
                 row.get::<_, i64>(10)?,
                 row.get::<_, i64>(11)?,
                 row.get::<_, i64>(12)?,
+                row.get::<_, i64>(13)?,
             ))
         })?;
         let mut sessions = Vec::new();
@@ -1182,6 +1314,7 @@ impl Store {
                 built,
                 hits_taken,
                 defends,
+                with_other_kind,
             ) = row?;
             let outcome = outcome.map(|name| outcome_from_name(&name)).transpose()?;
             let need = need.map(|name| need_from_name(&name)).transpose()?;
@@ -1211,6 +1344,7 @@ impl Store {
                 built: built as u32,
                 hits_taken: hits_taken as u32,
                 defends: defends as u32,
+                with_other_kind: with_other_kind != 0,
             });
         }
         let visits = sessions.len() as u32;
@@ -1221,6 +1355,7 @@ impl Store {
             owner,
             model,
             intro,
+            kind,
             score_total,
             level: loo_core::agent_level(score_total, &loo_core::Config::default()),
             visits,
@@ -1338,8 +1473,10 @@ fn sent_by_from_name(name: &str) -> Result<SentBy, StoreError> {
     }
 }
 
-/// Maps the ten selected agent columns to a `StoredAgent`.
+/// Maps the twelve selected agent columns to a `StoredAgent`.
 fn agent_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<StoredAgent> {
+    let kind: String = row.get(10)?;
+    let color: Option<i64> = row.get(11)?;
     Ok(StoredAgent {
         id: row.get::<_, i64>(0)? as AgentId,
         nick: row.get(1)?,
@@ -1351,7 +1488,24 @@ fn agent_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<StoredAgent> {
         score_total: row.get::<_, i64>(7)? as u32,
         user_id: row.get::<_, Option<i64>>(8)?.map(|id| id as u64),
         created_at_ms: row.get::<_, i64>(9)? as u64,
+        // A corrupt kind is a store bug; fall back to the column default so a
+        // read never fails on it (agent_meta already rejects unknown values).
+        kind: match kind.as_str() {
+            "human" => PlayerKind::Human,
+            _ => PlayerKind::Ai,
+        },
+        color: color.map(|color| color.clamp(0, 11) as u8),
     })
+}
+
+fn player_kind_from_name(name: &str) -> Result<PlayerKind, StoreError> {
+    match name {
+        "ai" => Ok(PlayerKind::Ai),
+        "human" => Ok(PlayerKind::Human),
+        other => Err(StoreError::Corrupt(format!(
+            "agents holds an unknown kind {other:?}"
+        ))),
+    }
 }
 
 fn is_unique_violation(error: &rusqlite::Error) -> bool {
@@ -1422,6 +1576,36 @@ COMMIT;
 "
     ))?;
     ensure_nick_index(conn)?;
+    Ok(())
+}
+
+/// Contract §2: player kind and colour on `agents`, the mixed-world marker on
+/// `sessions`, and the one-human-per-account index. Every step adds a missing
+/// column only, so an old database upgrades in place.
+fn migrate_play_kind(conn: &Connection) -> Result<(), StoreError> {
+    let agent_columns = table_columns(conn, "agents")?;
+    let has_agent = |name: &str| agent_columns.iter().any(|column| column.name == name);
+    if !has_agent("kind") {
+        add_column(conn, "agents", "kind TEXT NOT NULL DEFAULT 'ai'")?;
+    }
+    if !has_agent("color") {
+        add_column(conn, "agents", "color INTEGER")?;
+    }
+    let session_columns = table_columns(conn, "sessions")?;
+    if !session_columns
+        .iter()
+        .any(|column| column.name == "with_other_kind")
+    {
+        add_column(
+            conn,
+            "sessions",
+            "with_other_kind INTEGER NOT NULL DEFAULT 0",
+        )?;
+    }
+    conn.execute_batch(
+        "CREATE UNIQUE INDEX IF NOT EXISTS one_human_per_user \
+         ON agents(user_id) WHERE kind = 'human' AND user_id IS NOT NULL",
+    )?;
     Ok(())
 }
 

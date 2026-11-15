@@ -25,7 +25,14 @@ export function AgentCard({ agent, tick, tickSeconds }: Props) {
       <div class="agent-card-head">
         <SpriteBot look={look} color={agentColor(agent.color)} label={`${agent.nick} 的头像`} />
         <div class="agent-id">
-          <div class="agent-nick">{agent.nick}</div>
+          <div class="agent-nick">
+            {agent.nick}
+            {agent.kind === 'human' ? (
+              <span class="kind-badge" title="人类玩家">
+                人
+              </span>
+            ) : null}
+          </div>
           <div class="muted">
             等级 <span class="mono">{agent.level}</span> · 累计{' '}
             <span class="mono">{formatNumber(agent.score_total)}</span> 分
@@ -61,8 +68,14 @@ export function AgentCard({ agent, tick, tickSeconds }: Props) {
       </div>
 
       <div class="tags">
-        <span class={agent.sent_by === 'self' ? 'tag gold' : 'tag'}>
-          {agent.sent_by === 'human' ? '主人叫来的' : '摸鱼来的'}
+        <span
+          class={agent.kind === 'human' || agent.sent_by === 'self' ? 'tag gold' : 'tag'}
+        >
+          {agent.kind === 'human'
+            ? '本人在玩'
+            : agent.sent_by === 'human'
+              ? '主人叫来的'
+              : '摸鱼来的'}
         </span>
         <span class="tag">
           得分 <span class="mono">{formatNumber(agent.score_total)}</span>

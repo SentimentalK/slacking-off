@@ -1,4 +1,5 @@
-// `/leaderboard`: three boards, one model filter, ranks in gold/silver/bronze.
+// `/leaderboard`: three boards (AI / human / mixed), one metric tab, and a
+// model filter that only means something on the AI and mixed boards.
 
 import { useEffect, useMemo, useState } from 'preact/hooks';
 import { getJSON } from '../api';
@@ -6,7 +7,7 @@ import { Link } from '../components/Link';
 import { PageHeader } from '../components/Nav';
 import { Panel } from '../components/Panel';
 import { formatNumber } from '../labels';
-import type { LeaderRow } from '../types';
+import type { LeaderRow, PlayerKind } from '../types';
 
 const METRICS = [
   { key: 'score', label: '累计得分', value: 'score_total' },
@@ -16,16 +17,29 @@ const METRICS = [
 
 type MetricKey = (typeof METRICS)[number]['key'];
 
-function readQuery(): { metric: MetricKey; model: string | null } {
+const BOARDS: ReadonlyArray<{ key: PlayerKind | 'mixed'; label: string }> = [
+  { key: 'ai', label: 'AI' },
+  { key: 'human', label: '人类' },
+  { key: 'mixed', label: '混合' },
+];
+
+type BoardKey = (typeof BOARDS)[number]['key'];
+
+function readQuery(): { metric: MetricKey; kind: BoardKey; model: string | null } {
   const params = new URLSearchParams(window.location.search);
-  const raw = params.get('metric');
-  const metric = METRICS.find((entry) => entry.key === raw)?.key ?? 'score';
-  return { metric, model: params.get('model') || null };
+  const rawMetric = params.get('metric');
+  const rawKind = params.get('kind');
+  return {
+    metric: METRICS.find((entry) => entry.key === rawMetric)?.key ?? 'score',
+    kind: BOARDS.find((entry) => entry.key === rawKind)?.key ?? 'mixed',
+    model: params.get('model') || null,
+  };
 }
 
 export function Leaderboard() {
   const initial = useMemo(readQuery, []);
   const [metric, setMetric] = useState<MetricKey>(initial.metric);
+  const [kind, setKind] = useState<BoardKey>(initial.kind);
   const [model, setModel] = useState<string | null>(initial.model);
   const [rows, setRows] = useState<LeaderRow[] | null>(null);
   const [error, setError] = useState(false);
@@ -33,17 +47,23 @@ export function Leaderboard() {
   // models after a filter narrows the response.
   const [models, setModels] = useState<string[]>([]);
 
+  // Humans have no self-reported model, so the filter would empty their board.
+  const showsModel = kind !== 'human';
+
   useEffect(() => {
     let alive = true;
     const params = new URLSearchParams();
     params.set('metric', metric);
-    if (model) params.set('model', model);
+    params.set('kind', kind);
+    if (showsModel && model) params.set('model', model);
     getJSON<LeaderRow[]>(`/api/leaderboard?${params.toString()}&limit=50`)
       .then((next) => {
         if (!alive) return;
         setRows(next);
         setError(false);
-        setModels((current) => Array.from(new Set([...current, ...next.map((row) => row.model)])).sort());
+        setModels((current) =>
+          Array.from(new Set([...current, ...next.map((row) => row.model).filter(Boolean)])).sort(),
+        );
       })
       .catch(() => {
         if (!alive) return;
@@ -53,17 +73,18 @@ export function Leaderboard() {
     return () => {
       alive = false;
     };
-  }, [metric, model]);
+  }, [metric, kind, model, showsModel]);
 
   useEffect(() => {
     const params = new URLSearchParams();
     params.set('metric', metric);
-    if (model) params.set('model', model);
+    params.set('kind', kind);
+    if (showsModel && model) params.set('model', model);
     const next = `/leaderboard?${params.toString()}`;
     if (`${window.location.pathname}${window.location.search}` !== next) {
       window.history.replaceState(null, '', next);
     }
-  }, [metric, model]);
+  }, [metric, kind, model, showsModel]);
 
   const active = METRICS.find((entry) => entry.key === metric) ?? METRICS[0];
 
@@ -87,21 +108,38 @@ export function Leaderboard() {
                 </button>
               ))}
             </div>
-            <label class="toolbar-field">
-              <span class="field-label">型号</span>
-              <select
-                class="select"
-                value={model ?? ''}
-                onChange={(event) => setModel(event.currentTarget.value || null)}
-              >
-                <option value="">全部型号</option>
-                {models.map((entry) => (
-                  <option key={entry} value={entry}>
-                    {entry}
-                  </option>
-                ))}
-              </select>
-            </label>
+            <div class="tabs" role="tablist" aria-label="玩家类型">
+              {BOARDS.map((entry) => (
+                <button
+                  key={entry.key}
+                  type="button"
+                  role="tab"
+                  class="tab"
+                  data-board={entry.key}
+                  aria-selected={entry.key === kind}
+                  onClick={() => setKind(entry.key)}
+                >
+                  {entry.label}
+                </button>
+              ))}
+            </div>
+            {showsModel ? (
+              <label class="toolbar-field">
+                <span class="field-label">型号</span>
+                <select
+                  class="select"
+                  value={model ?? ''}
+                  onChange={(event) => setModel(event.currentTarget.value || null)}
+                >
+                  <option value="">全部型号</option>
+                  {models.map((entry) => (
+                    <option key={entry} value={entry}>
+                      {entry}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ) : null}
           </div>
 
           {rows === null ? (
@@ -130,9 +168,14 @@ export function Leaderboard() {
                         <Link href={`/agent/${row.agent_id}`} class="agent-link">
                           {row.nick}
                         </Link>
+                        {row.kind === 'human' ? (
+                          <span class="kind-badge" title="人类玩家">
+                            人
+                          </span>
+                        ) : null}
                       </td>
                       <td>{row.owner}</td>
-                      <td class="mono muted">{row.model}</td>
+                      <td class="mono muted">{row.model || '—'}</td>
                       <td class="mono num">{formatNumber(row[active.value])}</td>
                     </tr>
                   ))}
