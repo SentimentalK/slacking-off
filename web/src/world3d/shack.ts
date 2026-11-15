@@ -8,7 +8,12 @@ export const WH = 1.25;
 const PI = Math.PI;
 const RAIL = 0x4a3526;
 const IRON = 0x33383a;
-const POLE = 0x8a7a4a;
+const POLE = 0xd9b44a;
+const WALK = 0x8c6a3e;
+const LAMP_IDLE = 0xd8dcd6;
+const WATER_BOWL = 0x4fa3c7;
+const TOILET_SCALE = 1.4;
+const SIGN_LIT = 0.9;
 const WOODS = PLANK_COLORS;
 const BAG_COLORS = [0x6f5340, 0x7a5c46, 0x64493a] as const;
 const SIGN_RED = 0xd8392f;
@@ -132,11 +137,11 @@ function stripeTex(): THREE.CanvasTexture {
   g.fillStyle = '#f2c230';
   g.fillRect(0, 0, 64, 16);
   g.fillStyle = '#1d1d1d';
-  for (let x = -16; x < 80; x += 16) {
+  for (let x = -32; x < 96; x += 32) {
     g.beginPath();
     g.moveTo(x, 16);
-    g.lineTo(x + 8, 16);
-    g.lineTo(x + 24, 0);
+    g.lineTo(x + 16, 16);
+    g.lineTo(x + 32, 0);
     g.lineTo(x + 16, 0);
     g.closePath();
     g.fill();
@@ -172,6 +177,27 @@ function tiles(): THREE.CanvasTexture {
   t.colorSpace = THREE.SRGBColorSpace;
   t.magFilter = THREE.NearestFilter;
   tileTexture = t;
+  return t;
+}
+
+let haloTexture: THREE.CanvasTexture | null = null;
+
+function haloTex(): THREE.CanvasTexture {
+  if (haloTexture) return haloTexture;
+  const c = document.createElement('canvas');
+  c.width = 64;
+  c.height = 64;
+  const g = c.getContext('2d');
+  if (!g) throw new Error('2d canvas context unavailable');
+  const grad = g.createRadialGradient(32, 32, 0, 32, 32, 32);
+  grad.addColorStop(0, 'rgba(255,255,255,1)');
+  grad.addColorStop(0.3, 'rgba(255,255,255,0.6)');
+  grad.addColorStop(1, 'rgba(255,255,255,0)');
+  g.fillStyle = grad;
+  g.fillRect(0, 0, 64, 64);
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  haloTexture = t;
   return t;
 }
 
@@ -253,7 +279,7 @@ export function plankWall(len: number, seed: number, win = false, hidden = 0): T
   return g;
 }
 
-export function doorSide(seed: number, accent = ACCENT): { group: THREE.Group; pivot: THREE.Group; sign: THREE.Mesh } {
+export function doorSide(seed: number, accent = ACCENT): { group: THREE.Group; pivot: THREE.Group; sign: THREE.Mesh; top: THREE.Mesh } {
   const boards = new Batch();
   const rails = new Batch();
   plankParts(0.82, seed + 1, false, 0, { boards, rails }, -0.9);
@@ -274,9 +300,11 @@ export function doorSide(seed: number, accent = ACCENT): { group: THREE.Group; p
   leaf.add(boxGeo(0.98, 0.06, 0.09), T(0.49, 0.3, 0), IRON);
   leaf.add(boxGeo(0.98, 0.06, 0.09), T(0.49, 0.85, 0), IRON);
   for (const m of leaf.meshes()) pivot.add(m);
-  const sign = single(boxGeo(0.18, 0.18, 0.03), SIGN_RED, { emissive: SIGN_RED, emissiveIntensity: 0.6 }, T(0.49, 0.6, 0.05));
+  const sign = single(boxGeo(0.18, 0.18, 0.03), SIGN_RED, { emissive: SIGN_RED, emissiveIntensity: SIGN_LIT }, T(0.49, 0.6, 0.05));
   pivot.add(sign);
-  return { group, pivot, sign };
+  const top = single(boxGeo(0.34, 0.05, 0.22), SIGN_RED, { emissive: SIGN_RED, emissiveIntensity: SIGN_LIT }, T(0, WH + 0.055, 0));
+  group.add(top);
+  return { group, pivot, sign, top };
 }
 
 export function scaffold(len: number): THREE.Group {
@@ -284,13 +312,16 @@ export function scaffold(len: number): THREE.Group {
   const rails = new Batch();
   for (const sx of [-len / 2, len / 2]) {
     for (const sz of [-0.42, 0.42]) {
-      poles.add(new THREE.CylinderGeometry(0.04, 0.04, 1.9, 6), T(sx, 0.95, sz), POLE);
+      poles.add(new THREE.CylinderGeometry(0.07, 0.07, 1.9, 6), T(sx, 0.95, sz), POLE);
     }
   }
   for (const sz of [-0.42, 0.42]) rails.add(boxGeo(len, 0.05, 0.05), T(0, 1.5, sz), POLE);
+  const boards = new Batch();
+  for (const sx of [-len / 4, len / 4]) boards.add(boxGeo(0.25, 0.04, 0.94), T(sx, 1.545, 0), WALK);
   const g = new THREE.Group();
   for (const m of poles.meshes(() => S(POLE))) g.add(m);
   for (const m of rails.meshes(() => S(POLE))) g.add(m);
+  for (const m of boards.meshes()) g.add(m);
   return g;
 }
 
@@ -347,7 +378,7 @@ export function toiletModel(level: number): THREE.Group {
     smooth.add(rboxGeo(0.44, 0.5, 0.2, 0.06), T(0, 0.35, -0.3), bodyHex, body);
     smooth.add(new THREE.CylinderGeometry(0.23, 0.17, 0.3, 18), T(0, 0.25, 0.02), bodyHex, body);
     smooth.add(new THREE.CylinderGeometry(0.25, 0.25, 0.06, 18), T(0, 0.42, 0.02), bodyHex, body);
-    smooth.add(new THREE.CylinderGeometry(0.16, 0.16, 0.02, 18), T(0, 0.455, 0.02), WATER, { flatShading: false, roughness: 0.1 });
+    smooth.add(new THREE.CylinderGeometry(0.207, 0.207, 0.02, 18), T(0, 0.455, 0.02), WATER_BOWL, { flatShading: false, roughness: 0.1 });
     if (level >= 4) {
       flat.add(boxGeo(0.08, 0.22, 0.3), T(0.3, 0.42, 0), 0x2b3238);
       const strip = new THREE.Mesh(
@@ -367,20 +398,21 @@ export function toiletModel(level: number): THREE.Group {
   for (const m of flat.meshes()) g.add(m);
   for (const m of smooth.meshes()) g.add(m);
   g.add(extra);
+  g.scale.setScalar(TOILET_SCALE);
   return g;
 }
 
 export function barrier(): THREE.Group {
   const flat = new Batch();
   for (const sx of [-0.5, 0.5]) {
-    for (const sz of [-0.5, 0.5]) flat.add(boxGeo(0.07, 0.55, 0.07), T(sx, 0.1 + 0.275, sz), 0x1d1d1d);
+    for (const sz of [-0.5, 0.5]) flat.add(boxGeo(0.07, 0.8, 0.07), T(sx, 0.5, sz), 0x1d1d1d);
   }
   flat.add(boxGeo(0.3, 0.14, 0.16), T(0.3, 0.17, 0.3), 0xb8322c);
   const rails = new Batch();
-  rails.add(boxGeo(1.0, 0.07, 0.035), T(0, 0.45, -0.5), 0xffffff);
-  rails.add(boxGeo(1.0, 0.07, 0.035), T(0, 0.45, 0.5), 0xffffff);
-  rails.add(boxGeo(0.035, 0.07, 1.0), T(-0.5, 0.45, 0), 0xffffff);
-  rails.add(boxGeo(0.035, 0.07, 1.0), T(0.5, 0.45, 0), 0xffffff);
+  rails.add(boxGeo(1.0, 0.14, 0.07), T(0, 0.45, -0.5), 0xffffff);
+  rails.add(boxGeo(1.0, 0.14, 0.07), T(0, 0.45, 0.5), 0xffffff);
+  rails.add(boxGeo(0.07, 0.14, 1.0), T(-0.5, 0.45, 0), 0xffffff);
+  rails.add(boxGeo(0.07, 0.14, 1.0), T(0.5, 0.45, 0), 0xffffff);
   const g = new THREE.Group();
   for (const m of flat.meshes()) g.add(m);
   for (const m of rails.meshes(() => own(new THREE.MeshStandardMaterial({ map: stripeTex(), roughness: 0.7 })))) g.add(m);
@@ -425,16 +457,34 @@ export function gate(alongX: boolean): THREE.Group {
   for (const m of posts.meshes()) g.add(m);
   g.add(pivot);
   g.rotation.y = alongX ? 0 : PI / 2;
+  const sign = single(boxGeo(0.34, 0.05, 0.22), SIGN_RED, { emissive: SIGN_RED, emissiveIntensity: SIGN_LIT }, T(0, 1.025, 0));
+  g.add(sign);
   g.userData.pivot = pivot;
+  g.userData.sign = sign;
   return g;
 }
 
 export function signalLamp(): THREE.Group {
-  const pole = single(new THREE.CylinderGeometry(0.02, 0.02, 0.9, 6), IRON, undefined, T(0, 0.45, 0));
-  const mat = own(new THREE.MeshStandardMaterial({ color: 0x8a8f8a, emissive: 0x8a8f8a, emissiveIntensity: 0.2, roughness: 0.5 }));
-  const ball = shadowed(new THREE.Mesh(new THREE.SphereGeometry(0.11, 14, 10).translate(0, 1.0, 0), mat));
-  const g = group(pole, ball);
+  const pole = single(new THREE.CylinderGeometry(0.02, 0.02, 1.35, 6), IRON, undefined, T(0, 0.675, 0));
+  const mat = own(new THREE.MeshStandardMaterial({ color: LAMP_IDLE, emissive: LAMP_IDLE, emissiveIntensity: 0.5, roughness: 0.5 }));
+  const ball = shadowed(new THREE.Mesh(new THREE.SphereGeometry(0.22, 14, 10).translate(0, 1.35, 0), mat));
+  const halo = new THREE.Sprite(
+    own(
+      new THREE.SpriteMaterial({
+        map: haloTex(),
+        color: LAMP_IDLE,
+        transparent: true,
+        opacity: 0.15,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+      }),
+    ),
+  );
+  halo.scale.set(0.9, 0.9, 1);
+  halo.position.set(0, 1.35, 0);
+  const g = group(pole, ball, halo);
   g.userData.mat = mat;
+  g.userData.halo = halo;
   return g;
 }
 
@@ -480,7 +530,7 @@ export function roof(palette: readonly [number, number]): { group: THREE.Group; 
 
 export function signMaterial(open: boolean): THREE.MeshStandardMaterial {
   const hex = open ? SIGN_GREEN : SIGN_RED;
-  return S(hex, { emissive: hex, emissiveIntensity: 0.6 });
+  return S(hex, { emissive: hex, emissiveIntensity: SIGN_LIT });
 }
 
 export function roofPalette(worldId: number, x: number, y: number): readonly [number, number] {

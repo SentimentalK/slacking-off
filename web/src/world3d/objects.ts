@@ -27,17 +27,22 @@ const PI = Math.PI;
 const WALL_LEN = 2.62;
 const RIM = 1.42;
 const ROOF_RISE = 1.2;
-const ROOF_ALPHA_BUSY = 0.07;
+const ROOF_ALPHA_BUSY = 0.03;
 const GHOST_OPACITY = 0.45;
+const GHOST_SHIFT = 0.35;
+const GHOST_LIFT = 0.15;
 const DEMOLISH_SINK = 0.35;
 const LAMP_ON = 1.4;
 const LAMP_OFF = 0.2;
 const LAMP_YELLOW = 0xf2c230;
 const LAMP_RED = 0xe5484d;
 const LAMP_GREEN = 0x4cc964;
-const LAMP_GREY = 0x8a8f8a;
+const LAMP_GREY = 0xd8dcd6;
+const LAMP_GREY_GLOW = 0.5;
+const HALO_LIT = 0.8;
+const HALO_DIM = 0.15;
 const MAX_LEVEL = 5;
-const DOOR_SWING = 0.6 * PI;
+const DOOR_SWING = 0.45 * PI;
 
 const SIDES = [
   { dx: 0, dy: -1, rot: 0 },
@@ -72,11 +77,10 @@ function isComplete(o: ProjectionObject | undefined): boolean {
 
 function disposeTree(o: THREE.Object3D): void {
   o.traverse((c) => {
-    const m = c as THREE.Mesh;
-    if (!m.isMesh) return;
-    m.geometry.dispose();
-    const mats = Array.isArray(m.material) ? m.material : [m.material];
-    for (const mat of mats) if (mat.userData.own) mat.dispose();
+    if (c instanceof THREE.Mesh) c.geometry.dispose();
+    else if (!(c instanceof THREE.Sprite)) return;
+    const src = c as THREE.Mesh | THREE.Sprite;
+    for (const mat of ([] as THREE.Material[]).concat(src.material)) if (mat.userData.own) mat.dispose();
   });
 }
 
@@ -133,6 +137,13 @@ function toGhost(g: THREE.Group): THREE.Group {
     m.material = mat;
   });
   return g;
+}
+
+function setOpacity(g: THREE.Object3D, opacity: number): void {
+  g.traverse((c) => {
+    const m = c as THREE.Mesh;
+    if (m.isMesh) (m.material as THREE.Material).opacity = opacity;
+  });
 }
 
 function agentOn(agents: ProjectionAgent[], x: number, y: number): boolean {
@@ -209,22 +220,29 @@ export function createObjectsLayer(ctx: SceneCtx): Layer {
             const lamp = reg.get('lamp:' + tk, () => signalLamp()) as THREE.Group;
             lamp.position.set(tx + RIM, WH + 0.1, tz - RIM);
             const mat = lamp.userData.mat as THREE.MeshStandardMaterial;
+            const halo = lamp.userData.halo as THREE.Sprite;
             const busy = t.site === 'toilet' || t.progress !== 0;
             let color = LAMP_GREY;
-            let emissive = LAMP_OFF;
+            let emissive = LAMP_GREY_GLOW;
+            let lit = false;
             if (busy) {
               color = LAMP_YELLOW;
-              emissive = Math.sin(clock * 6) > 0 ? LAMP_ON : LAMP_OFF;
+              lit = Math.sin(clock * 6) > 0;
+              emissive = lit ? LAMP_ON : LAMP_OFF;
             } else if (occupied) {
               color = LAMP_RED;
+              lit = true;
               emissive = LAMP_ON;
             } else if (sidesComplete(curSide, t.pos.x, t.pos.y)) {
               color = LAMP_GREEN;
+              lit = true;
               emissive = LAMP_ON;
             }
             mat.color.setHex(color);
             mat.emissive.setHex(color);
             mat.emissiveIntensity = emissive;
+            halo.material.color.setHex(color);
+            halo.material.opacity = lit ? HALO_LIT : HALO_DIM;
           }
         }
       }
@@ -252,8 +270,9 @@ export function createObjectsLayer(ctx: SceneCtx): Layer {
           bodyPos(reg.get(`model:${tk}:${level}`, () => toiletModel(level)));
           const next = Math.min(level + 1, MAX_LEVEL);
           const ghost = reg.get(`ghost:${tk}:${next}`, () => toGhost(toiletModel(next)));
-          bodyPos(ghost);
-          ghost.scale.y = Math.max(0.001, p);
+          bodyPos(ghost, GHOST_LIFT * (1 - p));
+          ghost.position.x += GHOST_SHIFT;
+          setOpacity(ghost, 0.25 + 0.5 * p);
         }
       } else {
         bodyPos(reg.get(`model:${tk}:${level}`, () => toiletModel(level)));
@@ -309,6 +328,7 @@ export function createObjectsLayer(ctx: SceneCtx): Layer {
             const d = doorSide(shackSeed(worldId, wx, wy, 6), ACCENT);
             d.group.userData.pivot = d.pivot;
             d.group.userData.sign = d.sign;
+            d.group.userData.top = d.top;
             return d.group;
           });
           dr.position.set(ox, 0, oz);
@@ -316,6 +336,7 @@ export function createObjectsLayer(ctx: SceneCtx): Layer {
           const pivot = dr.userData.pivot as THREE.Group;
           pivot.rotation.y = -a;
           (dr.userData.sign as THREE.Mesh).material = signMaterial(o.open);
+          (dr.userData.top as THREE.Mesh).material = signMaterial(o.open);
         } else if (o.kind === 'door') {
           const pd = prevO ? lerp(progressOf(prevO), progressOf(o), e) : progressOf(o);
           const site = reg.get(`siteDoor:${ck}@${tk}`, () => {
@@ -323,6 +344,7 @@ export function createObjectsLayer(ctx: SceneCtx): Layer {
             g.add(scaffold(WALL_LEN));
             const d = doorSide(shackSeed(worldId, wx, wy, 6), ACCENT);
             d.sign.material = signMaterial(false);
+            d.top.material = signMaterial(false);
             g.add(d.group);
             return g;
           });
@@ -335,10 +357,13 @@ export function createObjectsLayer(ctx: SceneCtx): Layer {
       const occPrev = prev ? agentNear(prevAgents, t.pos.x, t.pos.y) : false;
       const occCur = agentNear(curAgents, t.pos.x, t.pos.y);
       const hover = ui.hoverToilet != null && ui.hoverToilet.x === t.pos.x && ui.hoverToilet.y === t.pos.y;
-      const aCur = hover || occCur ? ROOF_ALPHA_BUSY : 1;
-      const aPrev = hover || occPrev ? ROOF_ALPHA_BUSY : 1;
+      const prevToilet = pIdx?.get(tk);
+      const busyCur = t.site === 'toilet' || t.progress !== 0;
+      const busyPrev = !!prevToilet && prevToilet.kind === 'toilet' && (prevToilet.site === 'toilet' || prevToilet.progress !== 0);
+      const aCur = hover || occCur || busyCur ? ROOF_ALPHA_BUSY : 1;
+      const aPrev = hover || occPrev || busyPrev ? ROOF_ALPHA_BUSY : 1;
       const roofCur = sidesComplete(curSide, t.pos.x, t.pos.y);
-      const roofPrev = !!pIdx && pIdx.get(tk)?.kind === 'toilet' && sidesComplete(prevSide, t.pos.x, t.pos.y);
+      const roofPrev = prevToilet?.kind === 'toilet' && sidesComplete(prevSide, t.pos.x, t.pos.y);
       let alpha = 0;
       let y = WH;
       if (!prev) {
@@ -411,6 +436,7 @@ export function createObjectsLayer(ctx: SceneCtx): Layer {
         const g = reg.get(`freeDoor:${ck}:${ax}`, () => gate(alongX));
         g.position.set(cx, 0, cz);
         (g.userData.pivot as THREE.Group).rotation.y = -a;
+        (g.userData.sign as THREE.Mesh).material = signMaterial(obj.open);
       } else if (obj.kind === 'door') {
         const g = reg.get(`freeDoorSite:${ck}:${ax}`, () => gate(alongX));
         g.position.set(cx, 0, cz);
