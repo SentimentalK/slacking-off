@@ -110,7 +110,7 @@ export function createDecor(ctx: SceneCtx): Layer {
       }
       const k = duskK(input.ui, input.clock);
       LAMP_BULB_MAT.emissiveIntensity = 0.2 + 2.2 * k;
-      for (const L of lampLights) L.light.intensity = occ.has(L.cell) ? 0 : 3.0 * k;
+      for (const L of lampLights) L.light.intensity = occ.has(L.cell) ? 0 : 3.0 * k * Math.PI;
     },
     dispose() {
       for (const { inst } of groups) inst.remove();

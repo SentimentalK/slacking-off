@@ -18,8 +18,8 @@ export interface Lighting {
 }
 
 export function createLighting(scene: THREE.Scene): Lighting {
-  const hemi = new THREE.HemisphereLight(0xa9c4ff, 0x2f3d1c, 0.42);
-  const sun = new THREE.DirectionalLight(0xffdfae, 2.6);
+  const hemi = new THREE.HemisphereLight(0xa9c4ff, 0x2f3d1c, 0.42 * Math.PI);
+  const sun = new THREE.DirectionalLight(0xffdfae, 2.6 * Math.PI);
   scene.add(hemi, sun, sun.target);
   sun.shadow.mapSize.set(4096, 4096);
   sun.shadow.radius = 3;
@@ -37,9 +37,9 @@ export function createLighting(scene: THREE.Scene): Lighting {
       const cz = H / 2;
 
       sun.color.copy(SUN_DAY).lerp(SUN_DUSK, k);
-      sun.intensity = 2.6 - 1.75 * k;
+      sun.intensity = (2.6 - 1.75 * k) * Math.PI;
       hemi.color.copy(HEM_DAY).lerp(HEM_DUSK, k);
-      hemi.intensity = 0.42 - 0.14 * k;
+      hemi.intensity = (0.42 - 0.14 * k) * Math.PI;
       sun.position.set(cx - 26 - 13 * k, 28 - 17 * k, cz + 11);
       sun.target.position.set(cx, 0, cz);
       sun.target.updateMatrixWorld();
