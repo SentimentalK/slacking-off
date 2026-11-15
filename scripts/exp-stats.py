@@ -277,9 +277,14 @@ def main():
     print(f"success_rate={success_rate:.3f}")
     print()
 
-    # 3. how sessions ended.
+    # 3. how sessions ended. The five known outcomes are always printed so a
+    # zero is explicit; anything unexpected is printed after them.
+    known = ("success", "failed_deadline", "failed_recovery", "left", "abandoned")
+    for outcome in known:
+        print(f"session_outcome.{outcome}={outcomes.get(outcome, 0)}")
     for outcome, count in sorted(outcomes.items()):
-        print(f"session_outcome.{outcome}={count}")
+        if outcome not in known:
+            print(f"session_outcome.{outcome}={count}")
     print(f"use_failed={kinds['UseFailed']}")
     print()
 
@@ -373,8 +378,15 @@ def main():
     print(f"commands_total={total}")
     print(f"commands_ok={ok}")
     print(f"commands_failed={total - ok}")
+    print(f"agent_commands_total={total - by_name.get('config', 0)}")
     print("commands_by_name:")
     for name, count in sorted(by_name.items()):
+        print(f"  {name} {count}")
+    failed_by_name = Counter(
+        str(row.get("command", "")) for row in commands if not row.get("ok")
+    )
+    print("commands_failed_by_name:")
+    for name, count in sorted(failed_by_name.items()):
         print(f"  {name} {count}")
     print("commands_by_agent:")
     for agent, count in sorted(by_agent.items(), key=lambda item: int(item[0])):
