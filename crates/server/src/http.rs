@@ -608,7 +608,7 @@ async fn watch(State(app): State<Arc<AppState>>, headers: HeaderMap) -> Response
     let slot = match app.server.watch_slot() {
         Ok(slot) => slot,
         Err(error) => {
-            return respond(error_envelope::<()>(error.code, error.message));
+            return respond(Envelope::<()>::failed(error, Vec::new(), None));
         }
     };
     let server = app.server.clone();

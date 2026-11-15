@@ -601,6 +601,7 @@ pub enum ErrorCode {
     NotAuthenticated,
     NoSession,
     QueueFull,
+    /// Too many commands per second. Machine-readable retry hint, CLI exit 3.
     RateLimited,
     BadRequest,
     Internal,
@@ -610,6 +611,10 @@ pub enum ErrorCode {
 pub struct ApiError {
     pub code: ErrorCode,
     pub message: String,
+    /// Seconds to wait before this command is worth retrying. Only rate
+    /// limiting sets it; the CLI prints it as-is (design §10, v1.2).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry_after_seconds: Option<u32>,
 }
 
 impl ApiError {
@@ -617,11 +622,21 @@ impl ApiError {
         Self {
             code,
             message: message.into(),
+            retry_after_seconds: None,
         }
     }
 
     pub fn rule(message: impl Into<String>) -> Self {
         Self::new(ErrorCode::RuleRejected, message)
+    }
+
+    /// The server's own answer to "how long is too short": at least one second.
+    pub fn rate_limited(message: impl Into<String>, retry_after_seconds: u32) -> Self {
+        Self {
+            code: ErrorCode::RateLimited,
+            message: message.into(),
+            retry_after_seconds: Some(retry_after_seconds.max(1)),
+        }
     }
 
     /// HTTP status the server pairs with this error.

@@ -275,22 +275,28 @@ async fn metrics_expose_settlement_percentiles() {
 }
 
 #[tokio::test]
-async fn rapid_commands_from_one_agent_are_rate_limited() {
+async fn a_batch_passes_and_then_the_sustained_rate_applies() {
     let mut cfg = Config {
         tick_seconds: 5.0,
         ..Config::default()
     };
     cfg.limits.requests_per_second = 2;
+    cfg.limits.requests_burst = 4;
     let dir = fresh_dir("rate");
     let def = map::parse(LANE_MAP).expect("queue map parses");
     let server = Arc::new(Server::open(cfg, def, "test", LANE_MAP, &dir, 7).expect("opens"));
 
     let token = register(&server, "first-one").await;
-    assert!(join(&server, &token).await.ok, "1st request in the window");
-    assert!(server.look(&token).await.ok, "2nd request in the window");
+    assert!(join(&server, &token).await.ok, "1st command of the batch");
+    assert!(server.look(&token).await.ok, "2nd command of the batch");
+    assert!(server.map_view(&token).await.ok, "3rd command of the batch");
+    assert!(server.status(&token).await.ok, "4th command of the batch");
 
     let limited = server.status(&token).await;
-    assert!(!limited.ok, "the 3rd request in one second is refused");
+    assert!(
+        !limited.ok,
+        "the command after the burst meets the sustained rate"
+    );
     let error = limited.error.expect("error");
     assert_eq!(error.code, ErrorCode::RateLimited);
     assert_eq!(error.http_status(), 429);
@@ -298,6 +304,12 @@ async fn rapid_commands_from_one_agent_are_rate_limited() {
         error.message.contains("too many requests"),
         "message: {}",
         error.message
+    );
+    assert!(
+        error
+            .retry_after_seconds
+            .is_some_and(|seconds| seconds >= 1),
+        "a refused command says when to retry: {error:?}"
     );
 }
 

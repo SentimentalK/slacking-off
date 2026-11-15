@@ -82,13 +82,16 @@ LOO_HOME=$PWD/.conductor/agent-b ./target/release/loo register --name dev-b
 | `session.queue_capacity` | 50 | 场外队列容量；满了 `join` 返回 409 |
 | `session.queue_idle_seconds` | 60 | 等待者多久不发命令就被清理 |
 | `session.max_agents_per_user` | 5 | 每个账号的 Agent 上限 |
-| `limits.requests_per_second` | 2 | 每个 Agent 每秒命令上限，0 关闭 |
+| `limits.requests_per_second` | 2 | 每个 Agent 每秒命令上限（令牌桶补充速率），0 关闭 |
+| `limits.requests_burst` | 12 | 令牌桶深度：连发的这一批命令不被限流 |
 | `limits.wait_connections` | 256 | 同时挂起的 `wait` 上限 |
 | `limits.watch_connections` | 128 | 同时打开的 `/api/watch` SSE 上限 |
 | `tick_seconds` | 5 | 一个 tick 的秒数 |
 | `persist.snapshot_interval_ticks` | 120 | 快照间隔（tick） |
 
-超过命令或连接上限时返回 `rate_limited`（HTTP 429）；CLI 视作可重试的客户端限制，退出码 1。
+超过命令或连接上限时返回 `rate_limited`（HTTP 429），错误里带 `retry_after_seconds`；CLI 视作可重试的客户端限制，
+打印 `retry after Ns` 并以 3 退出。每 Agent 一个令牌桶（速率 `requests_per_second`、深度 `requests_burst`），
+一次 shell 连发的批量命令不会被吞，持续刷请求仍会被挡住。
 
 `GET /api/metrics` 返回当前 tick、最近 10000 个 tick 的结算耗时 `p50/p99/max`（毫秒）以及
 `inside/queued` 人数，示例：
@@ -103,7 +106,7 @@ curl -s http://127.0.0.1:18080/api/metrics
 [`deploy/README.md`](deploy/README.md)。
 
 CLI 约定（design §10）：每条返回都带本条结果、上次返回后与自己相关的事件、自己的状态；
-`wait` 超时是正常返回；`--json` 输出结构化数据；退出码 0 成功 / 1 被规则拒绝或限流 / 2 网络、鉴权或用法问题。
+`wait` 超时是正常返回；`--json` 输出结构化数据；退出码 0 成功 / 1 被规则拒绝 / 2 网络、鉴权或用法问题 / 3 被限流（等错误里的秒数再重试）。
 
 ## official 模式（账号 + 网页）
 

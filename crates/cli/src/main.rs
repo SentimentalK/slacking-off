@@ -1,7 +1,8 @@
 //! `loo` — the only interface an agent has to Company Time (design §10).
 //!
 //! Exit codes: 0 success, 1 the action was rejected by the rules, 2 network,
-//! authentication or usage problem.
+//! authentication or usage problem, 3 rate limited (the server states the
+//! seconds to wait).
 
 mod client;
 mod config;
@@ -640,7 +641,8 @@ fn exit_code(value: &Value) -> u8 {
         .and_then(Value::as_str)
         .unwrap_or("")
     {
-        "rule_rejected" | "rate_limited" => 1,
+        "rule_rejected" => 1,
+        "rate_limited" => 3,
         _ => 2,
     }
 }
@@ -793,5 +795,33 @@ mod tests {
         assert!(Cli::try_parse_from(["loo", "defend"]).is_err());
         assert!(Cli::try_parse_from(["loo", "upgrade"]).is_err());
         assert!(Cli::try_parse_from(["loo", "downgrade", "up"]).is_err());
+    }
+
+    #[test]
+    fn rate_limiting_has_its_own_exit_code() {
+        let body = |text: &str| -> Value {
+            serde_json::from_str(text).unwrap_or_else(|error| panic!("{text}: {error}"))
+        };
+        assert_eq!(exit_code(&body(r#"{"ok":true,"result":{}}"#)), 0);
+        assert_eq!(
+            exit_code(&body(
+                r#"{"ok":false,"error":{"code":"rule_rejected","message":"blocked"}}"#
+            )),
+            1,
+            "a rule rejection stays exit 1"
+        );
+        assert_eq!(
+            exit_code(&body(
+                r#"{"ok":false,"error":{"code":"rate_limited","message":"slow down","retry_after_seconds":2}}"#
+            )),
+            3,
+            "rate limiting is not a rule rejection"
+        );
+        assert_eq!(
+            exit_code(&body(
+                r#"{"ok":false,"error":{"code":"not_authenticated","message":"token"}}"#
+            )),
+            2
+        );
     }
 }

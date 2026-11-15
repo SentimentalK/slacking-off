@@ -4,7 +4,7 @@
 //! events since the previous response, and your own state.
 
 use loo_proto::{
-    ActionQueued, AgentView, Envelope, Grid, JoinResponse, LeaveResponse, LookResponse,
+    ActionQueued, AgentView, Envelope, ErrorCode, Grid, JoinResponse, LeaveResponse, LookResponse,
     MapResponse, Need, Placement, RegisterResponse, RulesResponse, SessionOutcome, Tick,
     WaitResponse, WaitWake,
 };
@@ -142,8 +142,16 @@ pub fn render<T: Renderable>(label: &str, env: &Envelope<T>) -> String {
             }
         }
         (false, Some(error)) => {
-            out.push_str(&format!("rejected {label} tick={tick}\n"));
+            let head = if error.code == ErrorCode::RateLimited {
+                "rate limited"
+            } else {
+                "rejected"
+            };
+            out.push_str(&format!("{head} {label} tick={tick}\n"));
             out.push_str(&format!("  {}\n", error.message));
+            if let Some(seconds) = error.retry_after_seconds {
+                out.push_str(&format!("  retry after {seconds}s\n"));
+            }
         }
         (false, None) => out.push_str(&format!("failed {label} tick={tick}\n")),
     }

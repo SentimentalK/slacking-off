@@ -250,7 +250,11 @@ impl Default for WaitConfig {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct LimitsConfig {
+    /// Sustained commands per second per agent; `0` disables the check.
     pub requests_per_second: u32,
+    /// Token bucket depth: how many commands may arrive back to back before
+    /// the sustained rate applies (design §9, v1.2).
+    pub requests_burst: u32,
     /// Concurrent blocking `loo wait` connections.
     pub wait_connections: usize,
     /// Concurrent watch connections.
@@ -261,6 +265,7 @@ impl Default for LimitsConfig {
     fn default() -> Self {
         Self {
             requests_per_second: 2,
+            requests_burst: 12,
             wait_connections: 256,
             watch_connections: 128,
         }
@@ -312,6 +317,7 @@ mod tests {
             (25.0, 55.0)
         );
         assert_eq!(cfg.limits.requests_per_second, 2);
+        assert_eq!(cfg.limits.requests_burst, 12);
         assert_eq!(cfg.limits.wait_connections, 256);
         assert_eq!(cfg.limits.watch_connections, 128);
     }
