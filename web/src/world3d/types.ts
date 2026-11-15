@@ -26,6 +26,7 @@ export interface SceneCtx {
   worldId: number;
   terrain: Terrain;
   pickables: Map<THREE.Object3D, number>;
+  camera: THREE.PerspectiveCamera;
 }
 
 export interface Layer {
