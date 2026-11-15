@@ -2,23 +2,41 @@
 // the account's agents. Every free-form value is rendered as plain text.
 
 import { useEffect, useState } from 'preact/hooks';
+import { getJSON } from '../api';
 import { AuthError, account, createToken, logout, revokeToken } from '../auth';
 import { Link } from '../components/Link';
 import { PageHeader } from '../components/Nav';
 import { Panel } from '../components/Panel';
 import { navigate } from '../router';
-import type { AccountResponse, InstallCommands, TokenCreateResponse } from '../types';
+import type {
+  AccountResponse,
+  DownloadEntry,
+  InstallCommands,
+  TokenCreateResponse,
+} from '../types';
 
-const PLATFORMS = [
-  { name: 'Linux x64', file: 'loo-linux-x64' },
-  { name: 'Linux arm64', file: 'loo-linux-arm64' },
-  { name: 'macOS x64', file: 'loo-macos-x64' },
-  { name: 'macOS arm64', file: 'loo-macos-arm64' },
-  { name: 'Windows x64', file: 'loo-windows-x64.exe' },
-  { name: 'Windows arm64', file: 'loo-windows-arm64.exe' },
-] as const;
+const FILE_LABEL: Record<string, string> = {
+  'loo-linux-x64': 'Linux x64',
+  'loo-linux-arm64': 'Linux arm64',
+  'loo-macos-x64': 'macOS x64',
+  'loo-macos-arm64': 'macOS arm64',
+  'loo-windows-x64.exe': 'Windows x64',
+  'loo-windows-arm64.exe': 'Windows arm64',
+};
 
 const MAX_AGENTS = 5;
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  const units = ['KB', 'MB', 'GB'];
+  let value = bytes / 1024;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit += 1;
+  }
+  return `${value.toFixed(1)} ${units[unit]}`;
+}
 
 function formatTime(ms: number | null): string {
   if (ms === null) return '—';
@@ -63,23 +81,17 @@ export function Account() {
   const [tab, setTab] = useState<keyof InstallCommands>('sh');
   const [copied, setCopied] = useState(false);
   const [copyError, setCopyError] = useState(false);
-  const [available, setAvailable] = useState<Record<string, boolean>>({});
+  const [downloads, setDownloads] = useState<DownloadEntry[] | null>(null);
 
   useEffect(() => {
     let alive = true;
-    for (const platform of PLATFORMS) {
-      fetch(`/downloads/${platform.file}`, { method: 'HEAD' })
-        .then((response) => {
-          if (alive) {
-            setAvailable((previous) => ({ ...previous, [platform.file]: response.ok }));
-          }
-        })
-        .catch(() => {
-          if (alive) {
-            setAvailable((previous) => ({ ...previous, [platform.file]: false }));
-          }
-        });
-    }
+    getJSON<DownloadEntry[]>('/api/downloads')
+      .then((listed) => {
+        if (alive) setDownloads(listed);
+      })
+      .catch(() => {
+        if (alive) setDownloads([]);
+      });
     return () => {
       alive = false;
     };
@@ -301,19 +313,22 @@ export function Account() {
           </Panel>
 
           <Panel label="下载">
-            <p class="hint-line">二进制对应的平台文件名。没有构建的平台会返回「暂无构建」。</p>
-            <div class="platform-list">
-              {PLATFORMS.map((platform) => {
-                const can = available[platform.file] === true;
-                return (
-                  <div class="platform-row" key={platform.file}>
-                    <span class="platform-name">{platform.name}</span>
-                    <span class="platform-note">{can ? '可下载' : '暂无构建'}</span>
-                    <a href={`/downloads/${platform.file}`}>{can ? '下载' : '查看'}</a>
+            <p class="hint-line">二进制对应的平台文件名。只列出这台服务器上真实存在的构建。</p>
+            {downloads === null ? (
+              <p class="muted">载入中…</p>
+            ) : downloads.length === 0 ? (
+              <p class="muted">暂无构建</p>
+            ) : (
+              <div class="platform-list">
+                {downloads.map((entry) => (
+                  <div class="platform-row" key={entry.file}>
+                    <span class="platform-name">{FILE_LABEL[entry.file] ?? entry.file}</span>
+                    <span class="platform-note">{formatBytes(entry.bytes)}</span>
+                    <a href={`/downloads/${entry.file}`}>下载</a>
                   </div>
-                );
-              })}
-            </div>
+                ))}
+              </div>
+            )}
           </Panel>
         </div>
 

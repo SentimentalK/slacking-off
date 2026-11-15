@@ -193,6 +193,12 @@ export interface InstallCommands {
   ps1: string;
 }
 
+/** `GET /api/downloads`: one platform binary that actually exists. */
+export interface DownloadEntry {
+  file: string;
+  bytes: number;
+}
+
 export interface TokenCreateResponse {
   token: string;
   created_at_ms: number;
