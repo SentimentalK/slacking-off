@@ -4,6 +4,7 @@ const PI = Math.PI;
 const SERVO = 0x1c1d21;
 const STEEL = 0x9a9da3;
 const TIE = 0xb8322c;
+const SCALE = 0.47 / 0.36;
 
 let sharedBody: THREE.MeshStandardMaterial | null = null;
 
@@ -152,7 +153,7 @@ export function buildDuck(shell: THREE.ColorRepresentation, accent: THREE.ColorR
   billB.dispose();
 
   const root = new THREE.Group();
-  root.scale.setScalar(1.3);
+  root.scale.setScalar(SCALE);
 
   const body = new THREE.Group();
   body.position.set(0, 0.28, 0);
@@ -199,10 +200,10 @@ export function buildDuck(shell: THREE.ColorRepresentation, accent: THREE.ColorR
   });
 
   const hit = new THREE.Mesh(
-    new THREE.BoxGeometry(0.5 / 1.3, 1.4 / 1.3, 0.5 / 1.3),
+    new THREE.BoxGeometry(0.5 / SCALE, 1.4 / SCALE, 0.5 / SCALE),
     new THREE.MeshBasicMaterial({ visible: false }),
   );
-  hit.position.set(0, 0.7 / 1.3, 0);
+  hit.position.set(0, 0.7 / SCALE, 0);
   root.add(hit);
 
   return { root, body, head, legL: legs[0], legR: legs[1], lens, hit };
