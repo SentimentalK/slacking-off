@@ -1,7 +1,7 @@
 // Same-origin API client. Every `/api/*` answer is an `Envelope<T>`:
 // `{ok, result?, error?}` (see `crates/proto/src/lib.rs`).
 
-import type { Projection } from './types';
+import type { Pos, Projection, ProjectionObject } from './types';
 
 export interface Envelope<T> {
   ok: boolean;
@@ -59,6 +59,28 @@ const WATCH_PATH = '/api/watch';
 const RETRY_MIN_MS = 1000;
 const RETRY_MAX_MS = 10_000;
 
+const byYThenX = (a: ProjectionObject, b: ProjectionObject) =>
+  a.pos.y - b.pos.y || a.pos.x - b.pos.x;
+
+/**
+ * Turn a `delta` frame into a full projection using the previous full one.
+ * A frame that is full (field missing), or a delta that does not directly
+ * follow `last`, is taken as is: the server only sends deltas on consecutive
+ * ticks, and the first frame of a connection is always full.
+ */
+export function mergeFrame(last: Projection | null, frame: Projection): Projection {
+  if (frame.objects_mode !== 'delta' || !last || frame.tick !== last.tick + 1) {
+    return frame;
+  }
+  const table = new Map<string, ProjectionObject>();
+  const key = (pos: Pos) => `${pos.x},${pos.y}`;
+  for (const object of last.objects) table.set(key(object.pos), object);
+  for (const pos of frame.objects_removed ?? []) table.delete(key(pos));
+  for (const object of frame.objects) table.set(key(object.pos), object);
+  const { objects_mode: _mode, objects_removed: _removed, ...rest } = frame;
+  return { ...rest, objects: [...table.values()].sort(byYThenX) };
+}
+
 /**
  * Subscribe to the live projection stream.
  *
@@ -76,9 +98,13 @@ export function watch(
   let attempt = 0;
   let timer = 0;
   let stopped = false;
+  // The last full object table on this connection. Cleared on every
+  // reconnect: the server's first frame on a connection is always full.
+  let last: Projection | null = null;
 
   const scheduleRetry = () => {
     if (stopped) return;
+    last = null;
     onStatus('reconnecting');
     const delay = Math.min(RETRY_MAX_MS, RETRY_MIN_MS * 2 ** attempt);
     attempt += 1;
@@ -93,9 +119,11 @@ export function watch(
         : `${WATCH_PATH}?lastEventId=${encodeURIComponent(lastEventId)}`,
     );
     source = es;
+    last = null;
 
     es.addEventListener('open', () => {
       if (stopped || source !== es) return;
+      last = null;
       attempt = 0;
       onStatus('live');
     });
@@ -113,7 +141,10 @@ export function watch(
       attempt = 0;
       onStatus('live');
       try {
-        onProjection(JSON.parse(message.data) as Projection);
+        const frame = JSON.parse(message.data) as Projection;
+        const merged = mergeFrame(last, frame);
+        last = merged;
+        onProjection(merged);
       } catch {
         // A malformed frame is dropped; the next tick supersedes it.
       }
@@ -121,6 +152,7 @@ export function watch(
 
     es.addEventListener('error', () => {
       if (stopped || source !== es) return;
+      last = null;
       es.close();
       source = null;
       scheduleRetry();

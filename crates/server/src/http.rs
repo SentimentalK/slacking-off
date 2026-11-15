@@ -601,6 +601,8 @@ struct WatchState {
     pending: VecDeque<SseEvent>,
     /// Last tick written to this connection, so replay and live never repeat.
     last_sent: Option<Tick>,
+    /// Remembers the object table last written, to send deltas.
+    encoder: FrameEncoder,
     interval: tokio::time::Interval,
 }
 
@@ -637,16 +639,17 @@ async fn watch(State(app): State<Arc<AppState>>, headers: HeaderMap) -> Response
     );
 
     let mut last_sent = None;
+    let mut encoder = FrameEncoder::default();
     match last_event_id {
         Some(last) if last < current_tick => {
             if current_tick - last > MAX_REPLAY_TICKS {
-                pending.push_back(tick_frame(&live));
+                pending.push_back(encoder.frame(&live));
                 last_sent = Some(current_tick);
             } else {
                 for tick in last + 1..=current_tick {
                     match server.projection_at(tick).await {
                         Ok(projection) => {
-                            pending.push_back(tick_frame(&projection));
+                            pending.push_back(encoder.frame(&projection));
                             last_sent = Some(tick);
                         }
                         Err(message) => {
@@ -662,7 +665,7 @@ async fn watch(State(app): State<Arc<AppState>>, headers: HeaderMap) -> Response
             last_sent = Some(current_tick);
         }
         None => {
-            pending.push_back(tick_frame(&live));
+            pending.push_back(encoder.frame(&live));
             last_sent = Some(current_tick);
         }
     }
@@ -673,6 +676,7 @@ async fn watch(State(app): State<Arc<AppState>>, headers: HeaderMap) -> Response
         receiver,
         pending,
         last_sent,
+        encoder,
         interval: tokio::time::interval_at(
             tokio::time::Instant::now() + PING_INTERVAL,
             PING_INTERVAL,
@@ -698,7 +702,7 @@ async fn watch(State(app): State<Arc<AppState>>, headers: HeaderMap) -> Response
                                 continue;
                             }
                             state.last_sent = Some(projection.tick);
-                            return Some((Ok(tick_frame(&projection)), state));
+                            return Some((Ok(state.encoder.frame(&projection)), state));
                         }
                         Err(broadcast::error::RecvError::Lagged(_)) => {
                             // Too far behind: jump to the live tick.
@@ -707,7 +711,7 @@ async fn watch(State(app): State<Arc<AppState>>, headers: HeaderMap) -> Response
                                 continue;
                             }
                             state.last_sent = Some(projection.tick);
-                            return Some((Ok(tick_frame(&projection)), state));
+                            return Some((Ok(state.encoder.frame(&projection)), state));
                         }
                         Err(broadcast::error::RecvError::Closed) => return None,
                     }
@@ -724,6 +728,46 @@ async fn watch(State(app): State<Arc<AppState>>, headers: HeaderMap) -> Response
         .headers_mut()
         .insert(header::CONNECTION, HeaderValue::from_static("keep-alive"));
     response
+}
+
+/// Per-connection frame builder: full first, then deltas on consecutive ticks.
+///
+/// Only the object table changes shape; agents, queue, events and counts are
+/// small and always sent whole. A delta is used only when the previous frame
+/// written on this connection was tick - 1 (first frame, `Last-Event-ID`
+/// reconnects and broadcast lag all fall back to a full frame). It keeps just
+/// the last full object table, so memory grows with the world, not history.
+#[derive(Default)]
+struct FrameEncoder {
+    prev: Option<(Tick, Vec<loo_proto::ProjectionObject>)>,
+}
+
+impl FrameEncoder {
+    fn frame(&mut self, projection: &Projection) -> SseEvent {
+        let event = match &self.prev {
+            Some((tick, objects)) if tick.checked_add(1) == Some(projection.tick) => {
+                let (changed, removed) =
+                    crate::projection::delta_objects(objects, &projection.objects);
+                tick_frame(&Projection {
+                    world: projection.world,
+                    tick: projection.tick,
+                    tick_seconds: projection.tick_seconds,
+                    width: projection.width,
+                    height: projection.height,
+                    counts: projection.counts,
+                    agents: projection.agents.clone(),
+                    objects: changed,
+                    objects_mode: loo_proto::ObjectsMode::Delta,
+                    objects_removed: removed,
+                    queue: projection.queue.clone(),
+                    events: projection.events.clone(),
+                })
+            }
+            _ => tick_frame(projection),
+        };
+        self.prev = Some((projection.tick, projection.objects.clone()));
+        event
+    }
 }
 
 fn tick_frame(projection: &Projection) -> SseEvent {
