@@ -33,6 +33,9 @@ const SHOTS = [
   { name: 'closeup-day', fixture: 'crowd.json', query: 'focus=16,14&zoom=0.5', w: 1440, h: 900 },
   { name: 'closeup-dusk', fixture: 'crowd.json', query: 'focus=16,14&zoom=0.5&dusk=1', w: 1440, h: 900 },
   { name: 'low-390', fixture: 'crowd.json', query: 'quality=low', w: 390, h: 844 },
+  { name: 'states-overview', fixture: 'states.json', query: '', w: 1440, h: 900 },
+  { name: 'portrait-390', fixture: 'crowd.json', query: 'quality=medium', w: 390, h: 844 },
+  { name: 'vision', fixture: 'crowd.json', query: 'focus=16,14&zoom=0.5&vision=1', w: 1440, h: 900 },
 ];
 
 const executablePath = execSync('which google-chrome', { encoding: 'utf8' }).trim();

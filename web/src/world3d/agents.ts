@@ -15,6 +15,10 @@ const GRAY = 0x8a8f8a;
 const BLUE = 0x58b7ff;
 const UP = new THREE.Vector3(0, 1, 0);
 const STAR_Y = 1.76;
+const ICON_NEAR = 33;
+const ICON_MAX = 2.6;
+const ICON_LIFT = 0.45;
+const tmpIconAt = new THREE.Vector3();
 const ACCENTS = [
   '#f2c230',
   '#3f7fb8',
@@ -96,6 +100,8 @@ const clamp01 = (x: number): number => Math.min(1, Math.max(0, x));
 const manhattan = (a: Pos, b: Pos): number => Math.abs(a.x - b.x) + Math.abs(a.y - b.y);
 const yawToward = (from: Pos, to: Pos): number => Math.atan2(to.x - from.x, to.y - from.y);
 const progressOf = (s: Snap): number => (s.useTotal > 0 ? s.useDone / s.useTotal : 0);
+const iconScale = (camera: THREE.Camera, x: number, z: number): number =>
+  Math.min(ICON_MAX, Math.max(1, camera.position.distanceTo(tmpIconAt.set(x, 0, z)) / ICON_NEAR));
 
 function canvasTexture(w: number, h: number, draw: (g: CanvasRenderingContext2D) => void): THREE.CanvasTexture {
   const c = document.createElement('canvas');
@@ -267,6 +273,9 @@ function drawActor(a: Actor, s: Snap, link: Snap | null, input: FrameInput, ctx:
   if (stunned) lean = 0.25;
   if (interrupted) shakeX = 0.02 * Math.sin(clock * 30);
 
+  const icon = iconScale(ctx.camera, cx, cz);
+  const lift = (icon - 1) * ICON_LIFT;
+
   const d = a.duck;
   a.hideAll();
   d.root.position.set(cx + Math.sin(yaw) * lunge, rootY, cz + Math.cos(yaw) * lunge);
@@ -283,24 +292,26 @@ function drawActor(a: Actor, s: Snap, link: Snap | null, input: FrameInput, ctx:
     const key = s.pose === 'using' ? 'gold' : 'gray';
     const [inner, outer] = s.pose === 'using' ? [0.24, 0.33] : [0.16, 0.22];
     const ring = a.get(key, () => arcMesh(s.pose === 'using' ? GOLD : GRAY, inner, outer, 32));
+    const gold = key === 'gold';
     setArc(ring, inner, outer, 32, -TAU * f);
-    ring.position.set(cx, EYE_Y, cz);
+    ring.position.set(cx, EYE_Y + (gold ? lift : 0), cz);
+    ring.scale.setScalar(gold ? icon : 1);
     ring.quaternion.copy(ctx.camera.quaternion);
     ring.visible = f > 0;
   }
 
   if (interrupted) {
     const alert = a.get('alert', () => a.alertSprite());
-    alert.position.set(cx, 2.0, cz);
-    alert.scale.set(0.6, 0.6, 1);
+    alert.position.set(cx, 2.0 + lift, cz);
+    alert.scale.set(0.6 * icon, 0.6 * icon, 1);
     alert.visible = Math.sin(clock * 10) > -0.3;
   }
 
   if (s.urgent) {
     for (let i = 0; i < 2; i++) {
       const sweat = a.get('sweat' + i, () => a.sweatSprite());
-      sweat.position.set(cx + (i === 0 ? -0.3 : 0.3), 1.55 + 0.05 * Math.sin(clock * 5 + i), cz);
-      sweat.scale.set(0.28, 0.28, 1);
+      sweat.position.set(cx + (i === 0 ? -0.3 : 0.3), 1.55 + 0.05 * Math.sin(clock * 5 + i) + lift, cz);
+      sweat.scale.set(0.28 * icon, 0.28 * icon, 1);
       sweat.visible = true;
     }
     const pulse = a.get('pulse', () => flatRing(RED, 0.46, 0.6, 32, { transparent: true, depthWrite: false }));
@@ -409,7 +420,8 @@ function drawActor(a: Actor, s: Snap, link: Snap | null, input: FrameInput, ctx:
         return mesh;
       });
       const ang = clock * 3 + (i * TAU) / 3;
-      star.position.set(cx + 0.32 * Math.cos(ang), STAR_Y, cz + 0.32 * Math.sin(ang));
+      star.scale.setScalar(icon);
+      star.position.set(cx + 0.32 * icon * Math.cos(ang), STAR_Y + lift, cz + 0.32 * icon * Math.sin(ang));
       star.visible = true;
     }
   }

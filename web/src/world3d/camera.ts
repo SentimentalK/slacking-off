@@ -36,6 +36,32 @@ export function fitDistance(W: number, H: number, aspect: number): number {
   return hi;
 }
 
+export function fitHeightDistance(W: number, H: number, aspect: number, frac: number): number {
+  const cam = new THREE.PerspectiveCamera(FOV, aspect, NEAR, FAR);
+  const center = new THREE.Vector3(W / 2, 0, H / 2);
+  const corners = [
+    new THREE.Vector3(0, 0, 0),
+    new THREE.Vector3(0, 0, H),
+    new THREE.Vector3(W, 0, 0),
+    new THREE.Vector3(W, 0, H),
+  ];
+  const fits = (d: number): boolean => {
+    cam.position.copy(center).addScaledVector(VIEW_DIR, d);
+    cam.lookAt(center);
+    cam.updateMatrixWorld();
+    return corners.every((c) => Math.abs(c.clone().project(cam).y) <= frac);
+  };
+  let lo = 0.5;
+  let hi = FAR;
+  if (!fits(hi)) return hi;
+  for (let i = 0; i < 60; i++) {
+    const mid = (lo + hi) / 2;
+    if (fits(mid)) hi = mid;
+    else lo = mid;
+  }
+  return hi;
+}
+
 export class CameraControls {
   readonly camera: THREE.PerspectiveCamera;
   private readonly center: THREE.Vector3;
@@ -52,6 +78,7 @@ export class CameraControls {
   private readonly onMove = (e: PointerEvent): void => this.move(e);
   private readonly onUp = (e: PointerEvent): void => this.up(e);
   private fit: number;
+  private home: number;
   private dist: number;
   private anchor: THREE.Vector3 | null = null;
   private downX = 0;
@@ -70,7 +97,8 @@ export class CameraControls {
     this.focus = this.center.clone();
     this.camera = new THREE.PerspectiveCamera(FOV, this.aspect(), NEAR, FAR);
     this.fit = fitDistance(W, H, this.aspect());
-    this.dist = this.fit;
+    this.home = this.homeDistance(this.aspect());
+    this.dist = this.home;
     this.apply();
     if (!still) {
       canvas.style.touchAction = 'none';
@@ -93,13 +121,14 @@ export class CameraControls {
     this.camera.aspect = this.aspect();
     this.camera.updateProjectionMatrix();
     this.fit = fitDistance(this.W, this.H, this.camera.aspect);
+    this.home = this.homeDistance(this.camera.aspect);
     this.dist = ratio * this.fit;
     this.apply();
   }
 
   reset(): void {
     this.focus.copy(this.center);
-    this.dist = this.fit;
+    this.dist = this.home;
     this.apply();
   }
 
@@ -124,6 +153,11 @@ export class CameraControls {
 
   private aspect(): number {
     return this.canvas.clientWidth / this.canvas.clientHeight || 1;
+  }
+
+  private homeDistance(aspect: number): number {
+    if (aspect >= 1) return this.fit;
+    return Math.min(fitHeightDistance(this.W, this.H, aspect, 0.8), this.fit);
   }
 
   private zoomBy(f: number): void {

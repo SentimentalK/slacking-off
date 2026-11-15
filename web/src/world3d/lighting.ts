@@ -23,7 +23,7 @@ export function createLighting(scene: THREE.Scene): Lighting {
   const hemi = new THREE.HemisphereLight(0xa9c4ff, 0x2f3d1c, 0.42 * Math.PI);
   const sun = new THREE.DirectionalLight(0xffdfae, 2.6 * Math.PI);
   scene.add(hemi, sun, sun.target);
-  sun.shadow.mapSize.set(2048, 2048);
+  let mapQuality: Quality | null = null;
   sun.shadow.radius = 3;
   sun.shadow.bias = -0.0006;
   sun.shadow.normalBias = 0.08;
@@ -47,7 +47,14 @@ export function createLighting(scene: THREE.Scene): Lighting {
       sun.target.position.set(cx, 0, cz);
       sun.target.updateMatrixWorld();
 
-      sun.castShadow = quality === 'high';
+      sun.castShadow = quality !== 'low';
+      if (quality !== mapQuality) {
+        sun.shadow.map?.dispose();
+        sun.shadow.map = null;
+        const size = quality === 'high' ? 2048 : 1024;
+        sun.shadow.mapSize.set(size, size);
+        mapQuality = quality;
+      }
       const r = Math.max(W, H) / 2 + 3;
       const cam = sun.shadow.camera;
       cam.left = -r;

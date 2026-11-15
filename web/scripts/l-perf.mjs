@@ -26,6 +26,7 @@ const WARM_MS = 5000;
 const MEASURE_MS = 20000;
 const CONFIGS = [
   { width: 1440, height: 900, quality: 'high' },
+  { width: 1440, height: 900, quality: 'medium' },
   { width: 1440, height: 900, quality: 'low' },
   { width: 390, height: 844, quality: 'low' },
 ];

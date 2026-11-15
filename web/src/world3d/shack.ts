@@ -4,6 +4,8 @@ import { DEEP_WOOD, PLANK_COLORS, S } from './materials';
 import { hash32, rand01, SeededRandom } from './rng';
 
 export const WH = 1.25;
+export const ROOF_RIDGE = 0.68;
+export const ROOF_EAVE = 0.393 - 0.89 * Math.sin(0.3);
 
 const PI = Math.PI;
 const RAIL = 0x4a3526;
@@ -531,7 +533,7 @@ export function roof(palette: readonly [number, number]): { group: THREE.Group; 
       batch.add(boxGeo(1.78, 0.035, 0.09), half.clone().multiply(T(0, 0.045, -1.65 + (i * 3.3) / 14)), rib);
     }
   }
-  batch.add(boxGeo(0.16, 0.07, 3.34), T(0, 0.68, 0), rib);
+  batch.add(boxGeo(0.16, 0.07, 3.34), T(0, ROOF_RIDGE, 0), rib);
   const tri = new THREE.Shape();
   tri.moveTo(-1.5 * k, 0);
   tri.lineTo(1.5 * k, 0);
@@ -559,6 +561,38 @@ export function roof(palette: readonly [number, number]): { group: THREE.Group; 
   for (const m of batch.meshes(() => roofMat)) g.add(m);
   g.add(shadowed(new THREE.Mesh(new THREE.PlaneGeometry(0.72, 0.38).translate(0, 0.3, 1.53), signMat)));
   return { group: g, materials: [roofMat, signMat] };
+}
+
+const GOLD = 0xffcf40;
+const GOLD_MAT: MatParams = { emissive: GOLD, emissiveIntensity: 0.35 };
+const FLAG_LIT = 0.35;
+const BADGE_SPACING = 0.15;
+
+export function levelBadge(level: number): THREE.Group {
+  const plate = single(boxGeo(0.9, 0.3, 0.04), level === 5 ? GOLD : DEEP_WOOD, level === 5 ? GOLD_MAT : undefined);
+  const dots = new Batch();
+  for (let i = 0; i < level; i++) {
+    dots.add(new THREE.SphereGeometry(0.065, 10, 8), T((i - (level - 1) / 2) * BADGE_SPACING, 0, 0.03), GOLD);
+  }
+  const g = new THREE.Group();
+  g.add(plate);
+  for (const m of dots.meshes(() => S(GOLD, GOLD_MAT))) g.add(m);
+  g.rotation.x = -0.5;
+  return g;
+}
+
+export function flagMaterial(open: boolean): THREE.MeshStandardMaterial {
+  const hex = open ? SIGN_GREEN : SIGN_RED;
+  return S(hex, { emissive: hex, emissiveIntensity: FLAG_LIT });
+}
+
+export function doorFlag(height: number): THREE.Group {
+  const pole = shadowed(new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, height, 6).translate(0, height / 2, 0), S(DEEP_WOOD)));
+  const cloth = shadowed(new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.18, 0.02).translate(0.15, height - 0.1, 0), flagMaterial(true)));
+  const g = new THREE.Group();
+  g.add(pole, cloth);
+  g.userData.cloth = cloth;
+  return g;
 }
 
 export function signMaterial(open: boolean): THREE.MeshStandardMaterial {

@@ -198,7 +198,7 @@ export function createGround(ctx: SceneCtx): Layer {
   const { terrain, worldId, quality, world } = ctx;
   const root = new THREE.Group();
   world.add(root);
-  const TS = quality === 'high' ? 48 : 24;
+  const TS = quality === 'low' ? 24 : 48;
   const GW = terrain.width + 2 * MG;
   const GH = terrain.height + 2 * MG;
 

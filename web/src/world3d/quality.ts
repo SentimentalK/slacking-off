@@ -1,6 +1,6 @@
 import type { Quality } from './types';
 
-const LEVELS: readonly string[] = ['high', 'low'];
+const LEVELS: readonly string[] = ['high', 'medium', 'low'];
 
 function level(s: string | null): Quality | null {
   return s !== null && LEVELS.includes(s) ? (s as Quality) : null;
@@ -35,25 +35,35 @@ const WINDOW_START_MS = 3000;
 const WINDOW_END_MS = 6000;
 const SLOW_FRAME_MS = 25;
 
+const STEP_DOWN: Partial<Record<Quality, Quality>> = { high: 'medium', medium: 'low' };
+
 export class AutoQuality {
-  private t0: number | null = null;
+  private tier: Quality | null = null;
+  private t0 = 0;
   private last: number | null = null;
-  private readonly intervals: number[] = [];
-  private decided = false;
+  private intervals: number[] = [];
+  private settled = false;
 
   constructor(private readonly enabled: boolean) {}
 
   frame(now: number, current: Quality): Quality | null {
-    if (!this.enabled || this.decided || current !== 'high') return null;
-    if (this.t0 === null) this.t0 = now;
+    const lower = STEP_DOWN[current];
+    if (!this.enabled || this.settled || lower === undefined) return null;
+    if (this.tier !== current) {
+      this.tier = current;
+      this.t0 = now;
+      this.last = null;
+      this.intervals = [];
+    }
     const elapsed = now - this.t0;
     if (this.last !== null && elapsed >= WINDOW_START_MS && elapsed <= WINDOW_END_MS) {
       this.intervals.push(now - this.last);
     }
     this.last = now;
     if (elapsed <= WINDOW_END_MS) return null;
-    this.decided = true;
-    return median(this.intervals) > SLOW_FRAME_MS ? 'low' : null;
+    if (median(this.intervals) > SLOW_FRAME_MS) return lower;
+    this.settled = true;
+    return null;
   }
 }
 
