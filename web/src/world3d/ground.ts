@@ -7,7 +7,7 @@ import { rand01, SeededRandom } from './rng';
 import type { Layer, SceneCtx } from './types';
 
 const PI = Math.PI;
-const BLADES = 36;
+const BLADES = 30;
 const BLADE_HEIGHT = 1.5;
 const GRASS_SALT = 200;
 const PATCH_AREA = (18 + 2 * MG) * (12 + 2 * MG);
@@ -15,10 +15,9 @@ const PATCH_COUNT = 840;
 const PATCH_COLORS = ['rgba(58,84,34,0.275)', 'rgba(96,128,48,0.231)', 'rgba(72,104,38,0.275)', 'rgba(110,138,56,0.165)', 'rgba(52,70,30,0.248)'];
 const WILD_COLORS = ['rgba(30,40,16,0.5)', 'rgba(78,66,40,0.35)'];
 const DIRT_SPOTS = ['rgba(60,44,30,0.5)', 'rgba(160,128,100,0.5)', 'rgba(74,102,41,0.6)'];
-const PATH_BLOBS = ['#82604a', '#8e6b54', '#7a5a40', 'rgba(60,44,30,0.5)'];
+const PATH_BLOBS = ['#82604a', '#8e6b54', '#7a5a40'];
 const PATH_CORE = '#6f5138';
 const PATH_EDGE_GRASS = 'rgba(88,122,46,0.85)';
-const FLOOR_CSS = '#2c3a1c';
 const FLOOR_HEX = 0x2c3a1c;
 
 const textures = new WeakMap<Terrain, Map<string, THREE.CanvasTexture>>();
@@ -75,8 +74,6 @@ function paintGround(terrain: Terrain, worldId: number, TS: number): THREE.Canva
   }
 
   const ey = terrain.entrance.y;
-  g.fillStyle = FLOOR_CSS;
-  g.fillRect(X(-MG), Z(ey - 3), MG * TS, 8 * TS);
 
   const road: Array<{ x: number; y: number }> = [];
   forEachCell(terrain, (x, y, ch) => {
@@ -89,6 +86,9 @@ function paintGround(terrain: Terrain, worldId: number, TS: number): THREE.Canva
       ellipse(X(x) + rng.next() * TS, Z(y) + rng.next() * TS, (3 + rng.next() * 6) * s, (3 + rng.next() * 5) * s, rng.next() * 3);
     }
   });
+  for (let x = -MG; x <= 0; x++) {
+    road.push({ x, y: ey }, { x, y: ey + 1 });
+  }
 
   const edge = document.createElement('canvas');
   edge.width = c.width;
@@ -113,7 +113,7 @@ function paintGround(terrain: Terrain, worldId: number, TS: number): THREE.Canva
   for (const p of road) {
     for (let i = 0; i < 14; i++) {
       g.fillStyle = pick(PATH_BLOBS);
-      const rx = (0.08 + rng.next() * 0.22) * TS;
+      const rx = (0.08 + rng.next() * 0.12) * TS;
       ellipse(X(p.x) + rng.next() * TS, Z(p.y) + rng.next() * TS, rx, rx * (0.6 + rng.next() * 0.4), rng.next() * 3);
     }
   }

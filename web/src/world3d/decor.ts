@@ -20,6 +20,8 @@ import { rand01 } from './rng';
 import type { Layer, SceneCtx } from './types';
 
 const PI = Math.PI;
+const GLOW_OPACITY = 0.55;
+const GLOW_SIZE = 6;
 
 interface Item {
   x: number;
@@ -27,39 +29,58 @@ interface Item {
   mats: THREE.Matrix4[];
 }
 
+let glowMap: THREE.CanvasTexture | null = null;
+
+function lampGlowMap(): THREE.CanvasTexture {
+  if (glowMap) return glowMap;
+  const c = document.createElement('canvas');
+  c.width = 128;
+  c.height = 128;
+  const g = c.getContext('2d');
+  if (!g) throw new Error('2d canvas context unavailable');
+  const grad = g.createRadialGradient(64, 64, 0, 64, 64, 64);
+  grad.addColorStop(0, 'rgba(255,190,110,1)');
+  grad.addColorStop(1, 'rgba(255,190,110,0)');
+  g.fillStyle = grad;
+  g.fillRect(0, 0, 128, 128);
+  glowMap = new THREE.CanvasTexture(c);
+  glowMap.colorSpace = THREE.SRGBColorSpace;
+  return glowMap;
+}
+
 export function createDecor(ctx: SceneCtx): Layer {
-  const { terrain, worldId, quality, world } = ctx;
+  const { terrain, worldId, world } = ctx;
   const root = new THREE.Group();
   world.add(root);
   const ex = terrain.entrance.x;
   const ey = terrain.entrance.y;
   const r = (x: number, y: number, salt: number) => rand01(worldId, x, y, salt);
 
+  const treeLine = (x: number, y: number): boolean =>
+    [[1, 0], [-1, 0], [0, 1], [0, -1]].some(([dx, dy]) => cellAt(terrain, x + dx, y + dy) === '~');
   const pines: Item[] = [];
   const boulders: Item[] = [];
   const barrels: Item[] = [];
   const crates: Item[] = [];
-  const treeLine = (x: number, y: number): boolean =>
-    [[1, 0], [-1, 0], [0, 1], [0, -1]].some(([dx, dy]) => cellAt(terrain, x + dx, y + dy) === '~');
   forEachCell(terrain, (x, y, ch) => {
     if (ch !== '.' || (x === ex && y === ey) || Math.abs(x - ex) + Math.abs(y - ey) <= 2) return;
     if (treeLine(x, y)) return;
     const v = r(x, y, 101);
     const cx = x + 0.5;
     const cz = y + 0.5;
-    if (v < 0.012) {
+    if (v < 0.025) {
       pines.push({
         x,
         y,
-        mats: pineMatrices(place(cx, 0, cz, r(x, y, 103) * 2 * PI, 0.45 + r(x, y, 102) * 0.2), (i) => r(x, y, 110 + i) * 2 * PI),
+        mats: pineMatrices(place(cx, 0, cz, r(x, y, 103) * 2 * PI, 0.55 + r(x, y, 102) * 0.35), (i) => r(x, y, 110 + i) * 2 * PI),
       });
-    } else if (v < 0.022) {
+    } else if (v < 0.035) {
       const g = place(cx, 0, cz, r(x, y, 104) * 2 * PI, 1);
       boulders.push({ x, y, mats: BOULDER_LOCAL.map((l) => g.clone().multiply(l)) });
-    } else if (v < 0.028) {
+    } else if (v < 0.041) {
       const g = place(cx, 0, cz, 0, 1);
       barrels.push({ x, y, mats: BARREL_LOCAL.map((l) => g.clone().multiply(l)) });
-    } else if (v < 0.033) {
+    } else if (v < 0.046) {
       const g = place(cx, 0, cz, (r(x, y, 105) - 0.5) * 0.7, 1);
       crates.push({ x, y, mats: CRATE_LOCAL.map((l) => g.clone().multiply(l)) });
     }
@@ -80,16 +101,21 @@ export function createDecor(ctx: SceneCtx): Layer {
   const crateI = makeInst(CRATE_PARTS, crates, root);
   const lampI = makeInst(LAMP_PARTS, lamps, root);
 
-  const lampLights: Array<{ light: THREE.PointLight; cell: string }> = [];
-  if (quality === 'high') {
-    const first = [...lamps].sort((a, b) => a.x - b.x || a.y - b.y).slice(0, 12);
-    for (const l of first) {
-      const light = new THREE.PointLight(0xffa850, 0, 10, 2);
-      light.position.set(l.x + 0.5 + 0.34, 1.35, l.y + 0.5);
-      root.add(light);
-      lampLights.push({ light, cell: cellKey(l.x, l.y) });
-    }
-  }
+  const glowMat = new THREE.MeshBasicMaterial({
+    map: lampGlowMap(),
+    transparent: true,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+  });
+  const glowGeo = new THREE.PlaneGeometry(GLOW_SIZE, GLOW_SIZE);
+  glowGeo.rotateX(-PI / 2);
+  const glow = new THREE.InstancedMesh(glowGeo, glowMat, lamps.length);
+  glow.frustumCulled = false;
+  glow.visible = false;
+  const glowAt = lamps.map((l) => new THREE.Matrix4().makeTranslation(l.x + 0.5 + 0.34, 0.03, l.y + 0.5));
+  const zero = new THREE.Matrix4().makeScale(0, 0, 0);
+  lamps.forEach((_, i) => glow.setMatrixAt(i, glowAt[i]));
+  root.add(glow);
 
   const groups: Array<{ inst: Instancer; items: Item[] }> = [
     { inst: pineI, items: pines },
@@ -110,13 +136,18 @@ export function createDecor(ctx: SceneCtx): Layer {
           items.forEach((it, i) => inst.show(i, !occ.has(cellKey(it.x, it.y))));
           inst.flush();
         }
+        lamps.forEach((l, i) => glow.setMatrixAt(i, occ.has(cellKey(l.x, l.y)) ? zero : glowAt[i]));
+        glow.instanceMatrix.needsUpdate = true;
       }
       const k = duskK(input.ui, input.clock);
       LAMP_BULB_MAT.emissiveIntensity = 0.2 + 2.2 * k;
-      for (const L of lampLights) L.light.intensity = occ.has(L.cell) ? 0 : 3.0 * k * Math.PI;
+      glowMat.opacity = GLOW_OPACITY * k;
+      glow.visible = k > 0;
     },
     dispose() {
       for (const { inst } of groups) inst.remove();
+      glowGeo.dispose();
+      glowMat.dispose();
       root.removeFromParent();
     },
   };
