@@ -25,6 +25,9 @@ const POOL_HALF = 7;
 const POOL_PX = 128;
 const POOL_H = 1.35;
 const POOL_COLOR = 0xffa850;
+const LAMP_LIGHT_DIST = 7;
+const LAMP_LIGHT_INTENSITY = 3.0;
+const LAMP_BULB_Y = 1.45;
 
 interface Item {
   x: number;
@@ -159,6 +162,15 @@ export function createDecor(ctx: SceneCtx): Layer {
   pool.instanceMatrix.needsUpdate = true;
   root.add(pool);
 
+  const lampLights = ctx.quality === 'low'
+    ? []
+    : lamps.map((l) => {
+        const light = new THREE.PointLight(POOL_COLOR, 0, LAMP_LIGHT_DIST, 2);
+        light.position.set(l.x + 0.5 + 0.34, LAMP_BULB_Y, l.y + 0.5);
+        return light;
+      });
+  let lampLightsOn = false;
+
   const groups: Array<{ inst: Instancer; items: Item[] }> = [
     { inst: pineI, items: pines },
     { inst: bigPineI, items: bigPines },
@@ -183,9 +195,18 @@ export function createDecor(ctx: SceneCtx): Layer {
         pool.instanceMatrix.needsUpdate = true;
       }
       const k = duskK(input.ui, input.clock);
+      const on = k > 0;
+      if (on !== lampLightsOn) {
+        lampLightsOn = on;
+        for (const light of lampLights) {
+          if (on) root.add(light);
+          else light.removeFromParent();
+        }
+      }
+      for (const light of lampLights) light.intensity = k * LAMP_LIGHT_INTENSITY * PI;
       LAMP_BULB_MAT.emissiveIntensity = 0.2 + 2.2 * k;
       poolMat.opacity = k * LAMP_GAIN;
-      pool.visible = k > 0;
+      pool.visible = on && ctx.quality === 'low';
     },
     dispose() {
       for (const { inst } of groups) inst.remove();

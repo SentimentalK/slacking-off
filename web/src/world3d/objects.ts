@@ -53,6 +53,10 @@ const FLAG_NORTH_H = ROOF_RIDGE - ROOF_EAVE + 0.7;
 const BADGE_Z = 0.18;
 const BADGE_LIFT = 0.22;
 const BADGE_SHOWN = 0.5;
+const SHACK_LIGHT_Y = 1.0;
+const SHACK_LIGHT_DIST = 5;
+const SHACK_LIGHT_INTENSITY = 2.2;
+const SHACK_LIGHT_COLOR = new THREE.Color().setRGB(0xff / 255, 0xb0 / 255, 0x60 / 255, THREE.LinearSRGBColorSpace);
 
 const SIDES = [
   { dx: 0, dy: -1, rot: 0 },
@@ -173,12 +177,24 @@ export function createObjectsLayer(ctx: SceneCtx): Layer {
   const root = new THREE.Group();
   ctx.world.add(root);
   const reg = new Registry(root);
+  const shackLights = new Map<string, THREE.PointLight>();
+  const shackLightsEnabled = ctx.quality !== 'low';
+  let shackLightsOn = false;
 
   function frame(input: FrameInput): void {
     const { cur, prev, phase, clock, ui } = input;
     const terrain: Terrain = input.terrain;
     const e = phase * phase * (3 - 2 * phase);
     const k = duskK(ui, clock);
+    const lightOn = k > 0 && shackLightsEnabled;
+    if (lightOn !== shackLightsOn) {
+      shackLightsOn = lightOn;
+      for (const light of shackLights.values()) {
+        if (lightOn) root.add(light);
+        else light.removeFromParent();
+      }
+    }
+    const litShacks = new Set<string>();
     const cIdx = indexObjects(cur.objects);
     const pIdx = prev ? indexObjects(prev.objects) : null;
     const curAgents = cur.agents;
@@ -255,6 +271,18 @@ export function createObjectsLayer(ctx: SceneCtx): Layer {
             halo.material.opacity = lit ? HALO_LIT : HALO_DIM;
           }
         }
+      }
+
+      if (t.site !== 'toilet' && t.level >= 1 && shackLightsEnabled) {
+        let light = shackLights.get(tk);
+        if (!light) {
+          light = new THREE.PointLight(SHACK_LIGHT_COLOR, 0, SHACK_LIGHT_DIST, 2);
+          shackLights.set(tk, light);
+          if (shackLightsOn) root.add(light);
+        }
+        light.position.set(tx, SHACK_LIGHT_Y, tz);
+        light.intensity = k * SHACK_LIGHT_INTENSITY * PI;
+        litShacks.add(tk);
       }
 
       const prevT = pIdx ? sameKind(pIdx.get(cellKey(t.pos.x, t.pos.y)), t) : undefined;
@@ -414,6 +442,12 @@ export function createObjectsLayer(ctx: SceneCtx): Layer {
         badge.position.set(tx, y + ROOF_RIDGE + BADGE_LIFT, tz + BADGE_Z);
         badge.visible = alpha >= BADGE_SHOWN;
       }
+    }
+
+    for (const [key, light] of shackLights) {
+      if (litShacks.has(key)) continue;
+      light.removeFromParent();
+      shackLights.delete(key);
     }
 
     for (const obj of cur.objects) {

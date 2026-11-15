@@ -8,6 +8,7 @@ import { createObjectsLayer } from './objects';
 import { createVisionBoxLayer } from './visionbox';
 import { createGround } from './ground';
 import { createLighting } from './lighting';
+import { installLegacyPointFalloff } from './legacylights';
 import type { FrameInput, Layer, Quality, SceneCtx } from './types';
 
 export type { FrameInput, Layer, Quality, SceneCtx, UiState } from './types';
@@ -42,6 +43,7 @@ extraLayers.push((ctx) => createVisionBoxLayer(ctx));
 const EMPTY_TERRAIN: Terrain = { width: 0, height: 0, entrance: { x: 0, y: 0 }, rows: [] };
 
 export function createWorldView(canvas: HTMLCanvasElement, opts: WorldViewOptions): WorldView {
+  installLegacyPointFalloff();
   let quality: Quality = opts.quality;
   const renderer = new THREE.WebGLRenderer({ canvas, antialias: quality !== 'low' });
   renderer.outputColorSpace = THREE.SRGBColorSpace;
