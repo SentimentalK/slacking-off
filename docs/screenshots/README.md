@@ -14,9 +14,11 @@
 | `leaderboard-mixed-1440.png` | 1440×900 | 72 | `/leaderboard?kind=mixed`：`e2e-human`（`236`，带「人」标记）与 `e2e-ai`（型号 `E2E`，`0`）。 |
 | `stats-kinds-1440.png` | 1440×900 | 72 | `/stats` 切到「有另一类在场」：总会话 `4`、成功率 `25%`；人 1 角色/3 会话/1 成功、33.3%、累计 236；AI 1 角色/1 会话/0 成功、型号 `E2E`。 |
 | `spectator-human-badge-1440.png` | 1440×900 | 5 | `/` 观战页点选人类：`E2E-HUMAN` 在 `(7,15)`，卡片标题旁有「人」标记、正文标签是「本人在玩」；CLI `E2E-AI` 在 `(6,15)`，右侧选中面板显示坐标与 `人 · 视野 9×9`。 |
-| `home-empty-1440.png` | 1440×900 | 2 | 空数据库的 `/`：没有「回放」徽标，右上角是 `LIVE`，`在场 0/12`；`/api/timeline` 没有高光标记，事件流只有开局三个自动关门的门事件。 |
-| `replay-empty-1440.png` | 1440×900 | 4（回放帧；实时 10） | 场内没人后的自动回放：棋盘左上角「回放」徽标、右上角状态也是「回放」，`TICK 4` 来自 `/api/projection?tick=4`；窗口是 `[0, 8]`（最近高光是 tick 8 建成墙后又被拆掉），事件流是回放帧里 `k2-ai` 走向 `(7,15)` 的那几步。 |
-| `replay-back-live-1440.png` | 1440×900 | 11 | 第二个 Agent `k2-ai-2` 在 tick 10 之后 `join`，页面在 1 个 tick（278 ms）内退出回放：徽标消失、右上角回到 `LIVE`、选中面板显示 `k2-ai-2`，`在场 1/12`。 |
+| `home-empty-1440.png` | 1440×900 | 3 | 空数据库的 `/`：没有「回放」徽标，右上角是 `LIVE`，`在场 0/12`；`/api/timeline` 没有高光标记、也没有可回放区间，事件流只有开局三个自动关门的门事件。同一刻的 `/replay` 只写「没有可回放的区间」，不画轨道，「播放」禁用、tick 输入仍可用。 |
+| `replay-empty-1440.png` | 1440×900 | 3（回放帧；实时 12） | 场内没人后 `/` 的自动回放：循环最后一段可回放区间 `[3, 8]`（`k2-ai` 从入场到离场），4 tick/s；`TICK 3` 就是这段的第一个 tick，播到 8 之后回到 3，不会跳进空 tick。棋盘左上角「回放」徽标、右上角状态也是「回放」，事件流是回放帧里的入场与需求。 |
+| `replay-back-live-1440.png` | 1440×900 | 13 | 第二个 Agent `k2-ai-2` 在 tick 12 `join`，页面在 1 个 tick（170 ms）内退出回放：徽标消失、右上角状态回到 `live`、选中面板显示 `k2-ai-2`，`在场 1/12`。 |
+| `replay-1440.png` | 1440×900 | 3 | `scripts/e2e-full.sh`（端口 18086、1 秒/tick）的 `/replay?tick=3`：这一刻只有一段可回放区间 `[1, 3]`，轨道是一块金色实心段，标签 `第 1/1 段 · TICK 3 · 本段 3/3`，左右端读 `1` / `3`；`上一段`、`下一段` 因为只有一段而禁用。 |
+| `replay-spans-1440.png` | 1440×900 | 3 | 同一个 `/replay` 的分段轨道：两段可回放区间 `[3, 8]` 与 `[12, 13]`（9–11 无人），画成两块金色实心段、段间 3px 缝隙，红色 demolish 高光落在第一段末尾；按「第一段」后 tick 跳到 3，标签 `第 1/2 段 · TICK 3 · 本段 1/6`，左右端读 `3` / `13`，指针停在这段开头，`上一段` 禁用。 |
 
 ## 说明
 
@@ -25,5 +27,6 @@
 - 棋盘下方那条常驻「待结算动作」条由键盘、方向键与点格菜单共用一条提交路径（`web/src/pages/Play.tsx` 的 `runAction`），按 `error`（红）> 正在执行（`--defend` 蓝）> 已提交待结算（`--gold` 金黄）> 「没有待执行动作」的优先级显示；`play-1440.png` 抓的是 `pending`，`play-pending-390.png` 单独固定 `pending`，`play-390.png` 恰好抓到 `rejected`（脚本走位快于令牌桶），下一个 tick 后会变成 `executing` 或空态。
 - 人类第二局在 tick 138 时 `e2e-ai` 的会话已因 deadline 结束，所以 390 的棋盘只画人类；混合统计仍来自第一局成功会话与 `e2e-ai` 会话的重叠区间。
 - 其它目录里的截图（`account-*`、`spectator-*`、`replay-*`、`profile-*` 等）由 `scripts/e2e-full.sh` 和性能脚本产生，不在本组 `/play` 场景里。
-- `home-empty-1440.png`、`replay-empty-1440.png`、`replay-back-live-1440.png` 来自 `scripts/e2e-k.sh`（`web/e2e/onboarding.mjs`，端口 18143、0.5 秒/tick、空数据目录）：账号 `k2-e2e`，CLI Agent `k2-ai` 建墙再拆墙后离场，第二个 Agent `k2-ai-2` 再入场。
+- `home-empty-1440.png`、`replay-empty-1440.png`、`replay-back-live-1440.png`、`replay-spans-1440.png` 来自 `scripts/e2e-k.sh`（`web/e2e/onboarding.mjs`，端口 18143、0.5 秒/tick、空数据目录）：账号 `k2-e2e`，CLI Agent `k2-ai` 建墙再拆墙后离场，第二个 Agent `k2-ai-2` 再入场；`replay-1440.png` 来自 `scripts/e2e-full.sh`（端口 18086、1 秒/tick）。
+- `/replay` 的时间轴只铺可回放的 tick：`/api/timeline` 的 `spans` 决定轨道，每个可回放 tick 占一个位置，区间之间是 3px 缝隙；指针位置是当前 tick 的累计偏移，点击/拖动按偏移 seek，左右键移到相邻可回放 tick（跨段直接到下一段开头或上一段末尾），播放每次前进一个可回放 tick 并在最后一段播完时停下。
 - `stats-prompt-1440.png` 来自 Master 的验收（端口 18147，数据目录由 `scripts/e2e-k.sh` 那一局拷来，再加一个装了摸鱼提示的账号 `k-stats-b`）：`/stats` 上「摸鱼提示」这一组切到「装了提示」，总会话 `1`；另两组标签「全部 / 装了提示 / 没装提示」与上面的「全部会话 / 有另一类在场」是各自独立的选择器。
