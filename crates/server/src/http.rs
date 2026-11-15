@@ -226,10 +226,7 @@ fn serve_embedded(
     headers.insert(header::CACHE_CONTROL, HeaderValue::from_static(cache));
     headers.insert(header::VARY, HeaderValue::from_static("Accept-Encoding"));
     if let Some(encoding) = encoding {
-        headers.insert(
-            header::CONTENT_ENCODING,
-            HeaderValue::from_static(encoding),
-        );
+        headers.insert(header::CONTENT_ENCODING, HeaderValue::from_static(encoding));
     }
     response
 }
