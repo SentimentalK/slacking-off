@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>scene preview</title>
+<style>
+  html,body{margin:0;height:100%;background:#10160e;overflow:hidden}
+  canvas{display:block;width:100vw;height:100vh;touch-action:none}
+  #vig{position:fixed;inset:0;pointer-events:none;background:radial-gradient(ellipse at center,rgba(0,0,0,0) 50%,rgba(6,10,6,.66) 100%)}
+</style>
+</head>
+<body>
+<canvas id="scene"></canvas>
+<div id="vig"></div>
+<script type="module" src="/src/scene-main.ts"></script>
+</body>
+</html>
