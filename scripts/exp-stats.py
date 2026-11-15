@@ -19,7 +19,7 @@ import json
 import math
 import sqlite3
 import sys
-from collections import Counter
+from collections import Counter, defaultdict
 from pathlib import Path
 
 GROUPS = ("a", "b", "c")
@@ -311,22 +311,67 @@ def main():
     print(f"demolish_blocked={kinds['DemolishBlocked']}")
     print()
 
-    # 6. interrupted uses and demolitions aimed at toilets.
-    interrupted = [body for name, body in bodies if name == "UseInterrupted"]
-    reasons = Counter(str(body.get("reason", "")) for body in interrupted)
+    # 6. interruptions and demolitions.
+    interrupted = [(tick, body) for tick, name, body in events if name == "UseInterrupted"]
+    reasons = Counter(str(body.get("reason", "")) for _, body in interrupted)
     demolish_actions = [
         action_name(body.get("action"))
         for name, body in bodies
         if name == "ActionStarted"
     ]
     demolish_actions = [name for name in demolish_actions if name.lower().startswith("demolish")]
+
+    # `ObjectChanged` with `cause: Demolish` is the authoritative world fact: it
+    # names the object that was hit (or `object: null` when the object is gone).
+    # A removal is classified by the object the same cell carried just before.
+    demolish_events = Counter()
+    demolish_agents = defaultdict(set)
+    demolish_removed = 0
+    demolished_at = set()
+    last_type = {}
+    for tick, name, body in events:
+        if name != "ObjectChanged":
+            continue
+        pos = body.get("pos") or {}
+        key = (pos.get("x"), pos.get("y"))
+        obj = body.get("object")
+        obj_type = next(iter(obj)) if isinstance(obj, dict) and len(obj) == 1 else None
+        if obj_type:
+            last_type[key] = obj_type.lower()
+        cause = body.get("cause")
+        if isinstance(cause, dict) and len(cause) == 1:
+            cause = next(iter(cause))
+        if cause != "Demolish":
+            continue
+        kind = obj_type.lower() if obj_type else last_type.get(key, "other")
+        demolish_events[kind] += 1
+        if obj is None:
+            demolish_removed += 1
+        agent = body.get("agent")
+        if agent is not None:
+            demolish_agents[kind].add(agent)
+        demolished_at.add((tick, key))
+    use_interrupted_by_demolish = 0
+    for tick, body in interrupted:
+        pos = body.get("pos") or {}
+        x, y = pos.get("x"), pos.get("y")
+        cells = [(x, y), (x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1)]
+        if any((tick, cell) in demolished_at for cell in cells):
+            use_interrupted_by_demolish += 1
+
     print(f"use_interrupted={len(interrupted)}")
     print("use_interrupted_by_reason:")
     for reason, count in sorted(reasons.items()):
         print(f"  {reason} {count}")
-    print(f"demolish_actions_on_toilets={len(demolish_actions)}")
-    print("demolish_measure=fallback: ActionStarted whose action is demolish "
-          "(events carry no target object snapshot)")
+    print(f"use_interrupted_by_demolish={use_interrupted_by_demolish}")
+    print(f"demolish_actions_total={len(demolish_actions)}")
+    for kind in ("toilet", "wall", "door", "site"):
+        print(f"demolish_events_{kind}={demolish_events.get(kind, 0)}")
+    print(f"demolish_events_other={demolish_events.get('other', 0)}")
+    print(f"demolish_object_removed={demolish_removed}")
+    print(f"demolish_agents_toilet={len(demolish_agents.get('toilet', ()))}")
+    print("demolish_note=world objects have no owner; this counts Demolish ObjectChanged events, "
+          "not a strictly attributable 'someone else's stall'")
     print()
 
     # 7. queue waiting, in ticks.
