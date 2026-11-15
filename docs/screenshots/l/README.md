@@ -23,3 +23,10 @@ fixture 位于 `.conductor/l/scenes/`（git 外，只读）。每张 `*.png` 旁
 - pixel-replay.png — 同一 tick 由 `scene.html?api=1&tick=10&still=1&quality=high` 绘制的画面 — `scripts/l-pixel.sh`
 - pixel-diff.png — 两者逐像素比较，任一通道不同的像素涂红；本次无红色像素 — `scripts/l-pixel.sh`
 - pixel.json — 逐像素结果：tick 10，960×554，`diff_pixels` 0 — `scripts/l-pixel.sh`
+
+## 性能（crowd.json：12 人在场 + 10 人排队，`animate=1`，预热 5 s 后采 20 s 的 rAF 间隔）
+
+- perf-gpu.json — `node web/scripts/l-perf.mjs --gpu`：无头 Chrome 156 走真 GPU（Intel UHD Graphics CML GT2，集成显卡），保留 vsync，所以 fps 以显示刷新率 60 为上限。中位：1440×900 高档 32.5（p10 28.6）、1440×900 低档 59.9（封顶）、390×844 低档 59.9（封顶）。
+- perf-swiftshader.json — 同一脚本不带 `--gpu`：软件渲染（SwiftShader），只作对照：0.6 / 2.9 / 5.5。
+- 关掉 vsync 的无头测量会把未呈现的帧算进去（高档报 100 fps，而 20 s 里实际只呈现 630 帧），所以不用。
+- 这台机器的集成显卡上高档到不了 50；软件 WebGL 或高档开局 3–6 s 帧时中位 > 25 ms 时页面自动降到低档。
