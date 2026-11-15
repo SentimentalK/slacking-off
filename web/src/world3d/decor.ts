@@ -20,8 +20,11 @@ import { rand01 } from './rng';
 import type { Layer, SceneCtx } from './types';
 
 const PI = Math.PI;
-const GLOW_OPACITY = 0.4;
-const GLOW_SIZE = 5;
+const LAMP_GAIN = 0.55;
+const POOL_HALF = 7;
+const POOL_PX = 128;
+const POOL_H = 1.35;
+const POOL_COLOR = 0xffa850;
 
 interface Item {
   x: number;
@@ -29,23 +32,37 @@ interface Item {
   mats: THREE.Matrix4[];
 }
 
-let glowMap: THREE.CanvasTexture | null = null;
+let poolMap: THREE.CanvasTexture | null = null;
 
-function lampGlowMap(): THREE.CanvasTexture {
-  if (glowMap) return glowMap;
+function poolF(r: number): number {
+  const R = Math.sqrt(r * r + POOL_H * POOL_H);
+  return (Math.max(0, 1 - R / POOL_HALF) ** 2 * POOL_H) / R;
+}
+
+function lampPoolMap(): THREE.CanvasTexture {
+  if (poolMap) return poolMap;
   const c = document.createElement('canvas');
-  c.width = 128;
-  c.height = 128;
+  c.width = POOL_PX;
+  c.height = POOL_PX;
   const g = c.getContext('2d');
   if (!g) throw new Error('2d canvas context unavailable');
-  const grad = g.createRadialGradient(64, 64, 0, 64, 64, 64);
-  grad.addColorStop(0, 'rgba(255,190,110,1)');
-  grad.addColorStop(1, 'rgba(255,190,110,0)');
-  g.fillStyle = grad;
-  g.fillRect(0, 0, 128, 128);
-  glowMap = new THREE.CanvasTexture(c);
-  glowMap.colorSpace = THREE.SRGBColorSpace;
-  return glowMap;
+  const img = g.createImageData(POOL_PX, POOL_PX);
+  const f0 = poolF(0);
+  const half = POOL_PX / 2;
+  for (let py = 0; py < POOL_PX; py++) {
+    for (let px = 0; px < POOL_PX; px++) {
+      const d = (Math.hypot(px + 0.5 - half, py + 0.5 - half) * POOL_HALF) / half;
+      const v = Math.round((255 * poolF(d)) / f0);
+      const i = (py * POOL_PX + px) * 4;
+      img.data[i] = v;
+      img.data[i + 1] = v;
+      img.data[i + 2] = v;
+      img.data[i + 3] = 255;
+    }
+  }
+  g.putImageData(img, 0, 0);
+  poolMap = new THREE.CanvasTexture(c);
+  return poolMap;
 }
 
 export function createDecor(ctx: SceneCtx): Layer {
@@ -58,7 +75,17 @@ export function createDecor(ctx: SceneCtx): Layer {
 
   const treeLine = (x: number, y: number): boolean =>
     [[1, 0], [-1, 0], [0, 1], [0, -1]].some(([dx, dy]) => cellAt(terrain, x + dx, y + dy) === '~');
+  const wildNear = (x: number, y: number): boolean => {
+    for (let dy = -2; dy <= 2; dy++) {
+      for (let dx = -2; dx <= 2; dx++) {
+        const d = Math.abs(dx) + Math.abs(dy);
+        if (d >= 1 && d <= 2 && cellAt(terrain, x + dx, y + dy) === '~') return true;
+      }
+    }
+    return false;
+  };
   const pines: Item[] = [];
+  const bigPines: Item[] = [];
   const boulders: Item[] = [];
   const barrels: Item[] = [];
   const crates: Item[] = [];
@@ -86,6 +113,17 @@ export function createDecor(ctx: SceneCtx): Layer {
     }
   });
 
+  forEachCell(terrain, (x, y, ch) => {
+    if (ch !== '.' || (x === ex && y === ey) || Math.abs(x - ex) + Math.abs(y - ey) <= 2) return;
+    if (r(x, y, 510) >= (wildNear(x, y) ? 0.35 : 0.03)) return;
+    const s = (0.55 + r(x, y, 511) * 0.35) * (2 + r(x, y, 512));
+    bigPines.push({
+      x,
+      y,
+      mats: pineMatrices(place(x + 0.5, 0, y + 0.5, r(x, y, 513) * 2 * PI, s), (i) => r(x, y, 520 + i) * 2 * PI),
+    });
+  });
+
   const lamps: Item[] = [];
   forEachCell(terrain, (x, y, ch) => {
     if (ch !== '.' || (x + 2 * y) % 9 !== 0) return;
@@ -96,29 +134,34 @@ export function createDecor(ctx: SceneCtx): Layer {
   });
 
   const pineI = makeInst(PINE_PARTS, pines, root);
+  const bigPineI = makeInst(PINE_PARTS, bigPines, root);
   const boulderI = makeInst(BOULDER_PARTS, boulders, root);
   const barrelI = makeInst(BARREL_PARTS, barrels, root);
   const crateI = makeInst(CRATE_PARTS, crates, root);
   const lampI = makeInst(LAMP_PARTS, lamps, root);
 
-  const glowMat = new THREE.MeshBasicMaterial({
-    map: lampGlowMap(),
+  const poolMat = new THREE.MeshBasicMaterial({
+    map: lampPoolMap(),
+    color: POOL_COLOR,
     transparent: true,
     blending: THREE.AdditiveBlending,
     depthWrite: false,
+    opacity: 0,
   });
-  const glowGeo = new THREE.PlaneGeometry(GLOW_SIZE, GLOW_SIZE);
-  glowGeo.rotateX(-PI / 2);
-  const glow = new THREE.InstancedMesh(glowGeo, glowMat, lamps.length);
-  glow.frustumCulled = false;
-  glow.visible = false;
-  const glowAt = lamps.map((l) => new THREE.Matrix4().makeTranslation(l.x + 0.5 + 0.34, 0.03, l.y + 0.5));
+  const poolGeo = new THREE.PlaneGeometry(POOL_HALF * 2, POOL_HALF * 2);
+  poolGeo.rotateX(-PI / 2);
+  const pool = new THREE.InstancedMesh(poolGeo, poolMat, lamps.length);
+  pool.frustumCulled = false;
+  pool.visible = false;
+  const poolAt = lamps.map((l) => new THREE.Matrix4().makeTranslation(l.x + 0.5 + 0.34, 0.03, l.y + 0.5));
   const zero = new THREE.Matrix4().makeScale(0, 0, 0);
-  lamps.forEach((_, i) => glow.setMatrixAt(i, glowAt[i]));
-  root.add(glow);
+  lamps.forEach((_, i) => pool.setMatrixAt(i, poolAt[i]));
+  pool.instanceMatrix.needsUpdate = true;
+  root.add(pool);
 
   const groups: Array<{ inst: Instancer; items: Item[] }> = [
     { inst: pineI, items: pines },
+    { inst: bigPineI, items: bigPines },
     { inst: boulderI, items: boulders },
     { inst: barrelI, items: barrels },
     { inst: crateI, items: crates },
@@ -136,18 +179,18 @@ export function createDecor(ctx: SceneCtx): Layer {
           items.forEach((it, i) => inst.show(i, !occ.has(cellKey(it.x, it.y))));
           inst.flush();
         }
-        lamps.forEach((l, i) => glow.setMatrixAt(i, occ.has(cellKey(l.x, l.y)) ? zero : glowAt[i]));
-        glow.instanceMatrix.needsUpdate = true;
+        lamps.forEach((l, i) => pool.setMatrixAt(i, occ.has(cellKey(l.x, l.y)) ? zero : poolAt[i]));
+        pool.instanceMatrix.needsUpdate = true;
       }
       const k = duskK(input.ui, input.clock);
       LAMP_BULB_MAT.emissiveIntensity = 0.2 + 2.2 * k;
-      glowMat.opacity = GLOW_OPACITY * k;
-      glow.visible = k > 0;
+      poolMat.opacity = k * LAMP_GAIN;
+      pool.visible = k > 0;
     },
     dispose() {
       for (const { inst } of groups) inst.remove();
-      glowGeo.dispose();
-      glowMat.dispose();
+      poolGeo.dispose();
+      poolMat.dispose();
       root.removeFromParent();
     },
   };

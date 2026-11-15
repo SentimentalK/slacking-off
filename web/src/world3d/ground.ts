@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import type { ProjectionObject, Terrain } from '../types';
 import { MG, cellKey, forEachCell, objectKeys, signature } from './grid';
 import { Instancer } from './instancer';
+import { FOREST_MG } from './forest';
 import { GRASS_COLORS, GRASS_PARTS } from './models';
 import { rand01, SeededRandom } from './rng';
 import type { Layer, SceneCtx } from './types';
@@ -47,8 +48,8 @@ function roundRect(g: CanvasRenderingContext2D, x: number, y: number, w: number,
 }
 
 function paintGround(terrain: Terrain, worldId: number, TS: number): THREE.CanvasTexture {
-  const GW = terrain.width + 2 * MG;
-  const GH = terrain.height + 2 * MG;
+  const GW = terrain.width + 2 * FOREST_MG;
+  const GH = terrain.height + 2 * FOREST_MG;
   const c = document.createElement('canvas');
   c.width = GW * TS;
   c.height = GH * TS;
@@ -57,8 +58,8 @@ function paintGround(terrain: Terrain, worldId: number, TS: number): THREE.Canva
   const rng = new SeededRandom(worldId * 7919 + 1);
   const pick = <T>(a: readonly T[]): T => a[Math.floor(rng.next() * a.length)];
   const s = TS / 48;
-  const X = (x: number) => (x + MG) * TS;
-  const Z = (z: number) => (z + MG) * TS;
+  const X = (x: number) => (x + FOREST_MG) * TS;
+  const Z = (z: number) => (z + FOREST_MG) * TS;
   const ellipse = (x: number, y: number, rx: number, ry: number, rot: number) => {
     g.beginPath();
     g.ellipse(x, y, rx, ry, rot, 0, 7);
@@ -199,8 +200,8 @@ export function createGround(ctx: SceneCtx): Layer {
   const root = new THREE.Group();
   world.add(root);
   const TS = quality === 'low' ? 24 : 48;
-  const GW = terrain.width + 2 * MG;
-  const GH = terrain.height + 2 * MG;
+  const GW = terrain.width + 2 * FOREST_MG;
+  const GH = terrain.height + 2 * FOREST_MG;
 
   const floor = new THREE.Mesh(
     new THREE.PlaneGeometry(terrain.width + 80, terrain.height + 80),

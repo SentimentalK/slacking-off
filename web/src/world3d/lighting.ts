@@ -4,9 +4,10 @@ import type { FrameInput, Quality, UiState } from './types';
 const SUN_DAY = new THREE.Color(0xffdfae);
 const SUN_DUSK = new THREE.Color(0xff7a3a);
 const HEM_DAY = new THREE.Color(0xa9c4ff);
-const HEM_DUSK = new THREE.Color(0x6a6aa0);
-const GND_DAY = new THREE.Color(0x2f3d1c);
-const GND_DUSK = new THREE.Color(0x3a3a1c);
+const HEM_DUSK = new THREE.Color(0x4a50a8);
+const GND_DAY = new THREE.Color().setRGB(0x2f / 255, 0x3d / 255, 0x1c / 255, THREE.LinearSRGBColorSpace); // r128 used these as linear values
+const SUN_DIST = 60;
+const SUN_DIR = new THREE.Vector3();
 
 export function duskK(ui: UiState, clock: number): number {
   if (ui.duskT <= 0) return ui.dusk ? 1 : 0;
@@ -20,8 +21,8 @@ export interface Lighting {
 }
 
 export function createLighting(scene: THREE.Scene): Lighting {
-  const hemi = new THREE.HemisphereLight(0xa9c4ff, 0x2f3d1c, 0.42 * Math.PI);
-  const sun = new THREE.DirectionalLight(0xffdfae, 2.6 * Math.PI);
+  const hemi = new THREE.HemisphereLight(HEM_DAY, GND_DAY, 0.42 * Math.PI);
+  const sun = new THREE.DirectionalLight(SUN_DAY, 2.6 * Math.PI);
   scene.add(hemi, sun, sun.target);
   let mapQuality: Quality | null = null;
   sun.shadow.radius = 3;
@@ -39,11 +40,12 @@ export function createLighting(scene: THREE.Scene): Lighting {
       const cz = H / 2;
 
       sun.color.copy(SUN_DAY).lerp(SUN_DUSK, k);
-      sun.intensity = (2.6 - 1.4 * k) * Math.PI;
+      sun.intensity = (2.6 - 1.75 * k) * Math.PI;
       hemi.color.copy(HEM_DAY).lerp(HEM_DUSK, k);
-      hemi.groundColor.copy(GND_DAY).lerp(GND_DUSK, k);
-      hemi.intensity = (0.42 - 0.08 * k) * Math.PI;
-      sun.position.set(cx - 20 - 10 * k, 32 - 14 * k, cz + 12);
+      hemi.groundColor.copy(GND_DAY);
+      hemi.intensity = (0.42 - 0.14 * k) * Math.PI;
+      SUN_DIR.set(-12 - 6 * k, 13 - 8 * k, 5).normalize();
+      sun.position.set(cx + SUN_DIR.x * SUN_DIST, SUN_DIR.y * SUN_DIST, cz + SUN_DIR.z * SUN_DIST);
       sun.target.position.set(cx, 0, cz);
       sun.target.updateMatrixWorld();
 

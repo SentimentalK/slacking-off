@@ -10,6 +10,8 @@ import type { Layer, SceneCtx } from './types';
 const PI = Math.PI;
 const FIELD_DIRS: Array<[number, number]> = [[1, 0], [-1, 0], [0, 1], [0, -1]];
 const CAST_RING = 3;
+export const FOREST_MG = 36;
+const FAR_RING = 12;
 const NO_SHADOW_PINE_PARTS = PINE_PARTS.map((p) => ({ ...p, shadow: false }));
 
 interface PineRec {
@@ -75,14 +77,7 @@ function buildPines(terrain: Terrain, worldId: number, quality: SceneCtx['qualit
   forEachCell(terrain, (x, y, ch) => {
     if (ch === ':') lane.push({ x, y });
   });
-  const nearLane = (x: number, y: number): { dx: number; dy: number } | null => {
-    let best: { dx: number; dy: number; d: number } | null = null;
-    for (const p of lane) {
-      const d = Math.abs(x - p.x) + Math.abs(y - p.y);
-      if (d <= 2 && (!best || d < best.d)) best = { dx: x - p.x, dy: y - p.y, d };
-    }
-    return best;
-  };
+  const nearLane = (x: number, y: number): boolean => lane.some((p) => Math.abs(x - p.x) + Math.abs(y - p.y) <= 2);
   const fieldEdge = (x: number, y: number): boolean =>
     FIELD_DIRS.some(([dx, dy]) => {
       const c = cellAt(terrain, x + dx, y + dy);
@@ -92,7 +87,7 @@ function buildPines(terrain: Terrain, worldId: number, quality: SceneCtx['qualit
     [0, 1, 2, 3, 4].map((i) => 0.9 + r(x, y, 100 + j * 8 + i) * 0.15);
 
   const pineAt = (x: number, y: number, j: number, lo: number, span: number, px: number, pz: number) => {
-    const s = lo + span * r(x, y, j * 16 + 12);
+    const s = (lo + span * r(x, y, j * 16 + 12)) * (0.7 + 0.6 * r(x, y, j * 16 + 9));
     const root = place(px, 0, pz, r(x, y, j * 16 + 3) * 2 * PI, s);
     pines.push({
       x,
@@ -106,43 +101,34 @@ function buildPines(terrain: Terrain, worldId: number, quality: SceneCtx['qualit
 
   forEachCell(terrain, (x, y, ch) => {
     if (ch !== '~') return;
-    const near = nearLane(x, y);
-    if (near) {
-      const len = Math.hypot(near.dx, near.dy);
-      pineAt(x, y, 0, 0.95 * 0.55, 0.75 * 0.55, x + 0.5 + (near.dx / len) * 0.3, y + 0.5 + (near.dy / len) * 0.3);
+    const px = x + 0.5 + (r(x, y, 1) - 0.5) * 0.9;
+    const pz = y + 0.5 + (r(x, y, 2) - 0.5) * 0.9;
+    if (nearLane(x, y)) {
+      pineAt(x, y, 0, 0.95 * 0.55, 0.75 * 0.55, px, pz);
     } else {
-      const px = x + 0.5 + (r(x, y, 1) - 0.5) * 0.5;
-      const pz = y + 0.5 + (r(x, y, 2) - 0.5) * 0.5;
       if (fieldEdge(x, y)) pineAt(x, y, 0, 0.7, 0.6, px, pz);
       else pineAt(x, y, 0, 0.95, 0.75, px, pz);
       if (r(x, y, 13) < 0.5) {
-        pineAt(
-          x,
-          y,
-          1,
-          0.6,
-          0.3,
-          x + 0.5 + (r(x, y, 17) - 0.5) * 0.5,
-          y + 0.5 + (r(x, y, 18) - 0.5) * 0.5,
-        );
+        pineAt(x, y, 1, 0.6, 0.3, x + 0.5 + (r(x, y, 17) - 0.5) * 0.9, y + 0.5 + (r(x, y, 18) - 0.5) * 0.9);
       }
     }
     stumps.push({ x, y, mats: [local(x + 0.5, 0.125, y + 0.5)] });
   });
 
   const expected = quality === 'low' ? 0.65 : 1.3;
-  const whole = Math.floor(expected);
-  const frac = expected - whole;
-  for (let y = -MG; y < H + MG; y++) {
-    for (let x = -MG; x < W + MG; x++) {
+  for (let y = -FOREST_MG; y < H + FOREST_MG; y++) {
+    for (let x = -FOREST_MG; x < W + FOREST_MG; x++) {
       if (x >= 0 && x < W && y >= 0 && y < H) continue;
-      if (x < 0 && (y === ey || y === ey + 1)) continue;
+      if (x < 0 && x >= -MG && (y === ey || y === ey + 1)) continue;
       const out = Math.max(-x, x - (W - 1), -y, y - (H - 1));
+      const density = out > FAR_RING ? expected * 0.5 : expected;
+      const whole = Math.floor(density);
+      const frac = density - whole;
       const n = whole + (r(x, y, 1) < frac ? 1 : 0);
       for (let j = 0; j < n; j++) {
         const px = x + 0.5 + (r(x, y, j * 16 + 2) - 0.5) * 0.9;
         const pz = y + 0.5 + (r(x, y, j * 16 + 3) - 0.5) * 0.9;
-        const s = 0.8 + r(x, y, j * 16 + 4) * 1.1;
+        const s = (0.8 + r(x, y, j * 16 + 4) * 1.1) * (0.7 + 0.6 * r(x, y, j * 16 + 11));
         const root = place(px, 0, pz, r(x, y, j * 16 + 5) * 2 * PI, s);
         pines.push({
           x,

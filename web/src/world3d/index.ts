@@ -49,7 +49,7 @@ export function createWorldView(canvas: HTMLCanvasElement, opts: WorldViewOption
   renderer.toneMappingExposure = 1.12;
 
   const scene = new THREE.Scene();
-  scene.background = new THREE.Color(0x1a2412);
+  scene.background = new THREE.Color().setRGB(0x0c / 255, 0x12 / 255, 0x0a / 255, THREE.LinearSRGBColorSpace);
   const world = new THREE.Group();
   scene.add(world);
   const lighting = createLighting(scene);
