@@ -373,6 +373,15 @@ pub struct AuthMeResponse {
     pub username: String,
 }
 
+/// One downloadable platform binary that actually exists on this server.
+/// `GET /api/downloads` returns these in the server's own order.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct DownloadEntry {
+    /// File name under `/downloads/`, e.g. `loo-macos-arm64`.
+    pub file: String,
+    pub bytes: u64,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct JoinRequest {
     pub sent_by: SentBy,
