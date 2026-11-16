@@ -1,0 +1,143 @@
+{
+  "mode": "scene",
+  "base": "http://127.0.0.1:18132",
+  "fixture": "/home/sentimentalk/codes/slacking-off/.conductor/l/scenes/crowd.json",
+  "other_headless_chrome_at_mode_start": 7,
+  "load_limit": 4,
+  "runs": [
+    {
+      "run": 1,
+      "other_headless_chrome_before": 13,
+      "load1_before": 3.99,
+      "load1_after": 4.78,
+      "log": [
+        {
+          "t": 296.966,
+          "event": "start",
+          "from": 0,
+          "to": 0,
+          "meanMs": null,
+          "p75Ms": null,
+          "medianMs": null
+        },
+        {
+          "t": 6313.4,
+          "event": "step",
+          "from": 0,
+          "to": 1,
+          "meanMs": 43.704918032786864,
+          "p75Ms": 50,
+          "medianMs": 50
+        },
+        {
+          "t": 6313.4,
+          "event": "start",
+          "from": 1,
+          "to": 1,
+          "meanMs": null,
+          "p75Ms": null,
+          "medianMs": null
+        },
+        {
+          "t": 12346.5,
+          "event": "step",
+          "from": 1,
+          "to": 2,
+          "meanMs": 33.11749999999997,
+          "p75Ms": 33.399999999999636,
+          "medianMs": 33.30000000000109
+        },
+        {
+          "t": 12346.5,
+          "event": "start",
+          "from": 2,
+          "to": 2,
+          "meanMs": null,
+          "p75Ms": null,
+          "medianMs": null
+        },
+        {
+          "t": 18362.9,
+          "event": "settle",
+          "from": 2,
+          "to": 2,
+          "meanMs": 30.833333333333208,
+          "p75Ms": 33.39999999999782,
+          "medianMs": 33.30000000000109
+        }
+      ],
+      "settled_index": 2,
+      "settled_settings": {
+        "scale": 0.75,
+        "grass": 0.5,
+        "shadow": 1024
+      },
+      "fps_after_settle": {
+        "frames": 635,
+        "median_frame_ms": 31.2,
+        "median_fps": 32.1,
+        "p10_fps": 30.1
+      },
+      "gpu": "ANGLE (Intel, Mesa Intel(R) UHD Graphics (CML GT2), OpenGL ES 3.2)",
+      "shot": "auto-scene-run1.png"
+    },
+    {
+      "run": 2,
+      "other_headless_chrome_before": 13,
+      "load1_before": 3.61,
+      "load1_after": 3.83,
+      "log": [
+        {
+          "t": 242.724,
+          "event": "start",
+          "from": 1,
+          "to": 1,
+          "meanMs": null,
+          "p75Ms": null,
+          "medianMs": null
+        },
+        {
+          "t": 6259,
+          "event": "step",
+          "from": 1,
+          "to": 2,
+          "meanMs": 33.33076923076923,
+          "p75Ms": 33.40000000000009,
+          "medianMs": 33.30000000000018
+        },
+        {
+          "t": 6259,
+          "event": "start",
+          "from": 2,
+          "to": 2,
+          "meanMs": null,
+          "p75Ms": null,
+          "medianMs": null
+        },
+        {
+          "t": 12275.5,
+          "event": "settle",
+          "from": 2,
+          "to": 2,
+          "meanMs": 31.58023255813949,
+          "p75Ms": 33.399999999999636,
+          "medianMs": 33.30000000000109
+        }
+      ],
+      "settled_index": 2,
+      "settled_settings": {
+        "scale": 0.75,
+        "grass": 0.5,
+        "shadow": 1024
+      },
+      "fps_after_settle": {
+        "frames": 375,
+        "median_frame_ms": 60,
+        "median_fps": 16.7,
+        "p10_fps": 14.5
+      },
+      "gpu": "ANGLE (Intel, Mesa Intel(R) UHD Graphics (CML GT2), OpenGL ES 3.2)",
+      "shot": "auto-scene-run2.png"
+    }
+  ]
+}
