@@ -5,8 +5,12 @@ import { loadScene } from './sceneLoader';
 
 void loadScene();
 const root = document.getElementById('root');
-void initLang()
-  .catch((error: unknown) => console.error('loading the dictionary failed', error))
-  .then(() => {
+initLang().then(
+  () => {
     if (root) render(<App />, root);
-  });
+  },
+  (error: unknown) => {
+    console.error('loading the dictionary failed', error);
+    if (root) root.textContent = "Couldn't load the page text. Please reload.";
+  },
+);

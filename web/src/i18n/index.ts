@@ -2,12 +2,7 @@ import { useEffect, useState } from 'preact/hooks';
 import { detectLang, fill, type Vars } from './detect';
 import type { Key } from './zh';
 
-type Dict = Record<Key, string>;
-
-const LOADERS = {
-  zh: () => import('./zh').then((m): Dict => m.zh),
-  en: () => import('./en').then((m): Dict => m.en),
-} satisfies Record<string, () => Promise<Dict>>;
+import { LOADERS, type Dict } from './registry';
 
 export type Lang = keyof typeof LOADERS;
 export type LangPref = 'auto' | Lang;
@@ -84,24 +79,43 @@ export function getLangPref(): LangPref {
 
 export async function initLang(): Promise<void> {
   pref = storedPref();
-  await apply();
-  if (started) return;
-  started = true;
-  window.addEventListener('languagechange', () => {
-    if (pref === 'auto') void apply().then((changed) => changed && notify());
-  });
+  if (!started) {
+    started = true;
+    window.addEventListener('languagechange', () => {
+      if (pref === 'auto') void apply().then((changed) => changed && notify(), () => undefined);
+    });
+  }
+  try {
+    await apply();
+  } catch {
+    pref = FALLBACK;
+    await apply();
+  }
   void Promise.all(LANGS.map(ensure)).then(notify, () => undefined);
 }
 
 export function setLangPref(next: LangPref): void {
+  const before = pref;
   pref = next;
+  remember(next);
+  notify();
+  void apply().then(
+    (changed) => changed && notify(),
+    () => {
+      pref = before;
+      remember(before);
+      notify();
+    },
+  );
+}
+
+function remember(value: LangPref): void {
   try {
-    if (next === 'auto') localStorage.removeItem(STORAGE_KEY);
-    else localStorage.setItem(STORAGE_KEY, next);
+    if (value === 'auto') localStorage.removeItem(STORAGE_KEY);
+    else localStorage.setItem(STORAGE_KEY, value);
   } catch {
     // Storage can be blocked; the choice still holds for this page.
   }
-  void apply().then((changed) => changed && notify());
 }
 
 // Text computed inside useMemo/useCallback must list `lang` as a dependency: `t` itself never changes.

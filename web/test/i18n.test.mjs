@@ -1,8 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { detectLang, fill } from '../src/i18n/detect.ts';
-import { DICTS } from '../src/i18n/dicts.ts';
+import { LOADERS } from '../src/i18n/registry.ts';
 
+const DICTS = Object.fromEntries(
+  await Promise.all(Object.entries(LOADERS).map(async ([name, load]) => [name, await load()])),
+);
 const { zh } = DICTS;
 const LANGS = Object.keys(DICTS);
 
