@@ -39,7 +39,7 @@ W5f（删除像素界面）对 `docs/screenshots/` 下全部 131 张 PNG 做了�
 
 - 生成脚本：对每个文件名做 `grep -rn "<文件名>" web/e2e web/scripts scripts`；脚本用模板拼名的（`${w}`、`perf-${tag}-*`、`l-shots` 的命名表）按模板对应。
 - 没有任何脚本写入其路径的，逐张看图（缩略图与原图抽查）。
-- 结论：没有"无脚本生成且为 2D 像素棋盘"的图，因此本次没有删除截图。2D 旧画面只有两类，二者都仍由脚本生成，按"仍被生成的保留"处理：`perf-{before,after}-{spectator,replay-213}.png`（4 张，`scripts/perf.sh` 的 tag 命名）与根目录 `replay-1440.png`（`flow.mjs` 全量验证会重拍，重拍后为 3D）。前 4 张的 2D 内容已无法由当前代码重现，是否删除待定。
+- 结论：2D 旧画面有两类。`perf-{before,after}-{spectator,replay-213}.png`（4 张）已删除。根目录 `replay-1440.png` 由 `flow.mjs` 生成，波次 5 全量验证时重拍为 3D。
 - `l3/`、`l4/`、`l5/play-*`、`l5/icons.png`、`l5/roof.png`、`l5/dusk/round-*/ref-dusk.png` 是旧波次的副本；当前没有脚本写入这些路径，但看图都是 3D 林地或窗口，按规则保留。
 
 | 文件 | 生成脚本 | 2D/3D | 处置 |
@@ -155,17 +155,17 @@ W5f（删除像素界面）对 `docs/screenshots/` 下全部 131 张 PNG 做了�
 | `l/using.png` | web/scripts/l-shots.mjs | 3D（林地） | 保留：脚本仍生成 |
 | `l/wall-half.png` | web/scripts/l-shots.mjs | 3D（林地） | 保留：脚本仍生成 |
 | `l/windup.png` | web/scripts/l-shots.mjs | 3D（林地） | 保留：脚本仍生成 |
-| `perf-after-replay-213.png` | scripts/perf.sh（visual-screenshots） | 2D（旧像素棋盘） | 已删除（2D 旧画面，见 git 历史 `8e32592`）；重跑 `scripts/perf.sh` 会按现在的 3D 画面重新生成 |
-| `perf-after-spectator.png` | scripts/perf.sh（visual-screenshots） | 2D（旧像素棋盘） | 已删除（2D 旧画面，见 git 历史 `8e32592`）；重跑 `scripts/perf.sh` 会按现在的 3D 画面重新生成 |
-| `perf-before-replay-213.png` | scripts/perf.sh（visual-screenshots） | 2D（旧像素棋盘） | 已删除（2D 旧画面，见 git 历史 `8e32592`）；重跑 `scripts/perf.sh` 会按现在的 3D 画面重新生成 |
-| `perf-before-spectator.png` | scripts/perf.sh（visual-screenshots） | 2D（旧像素棋盘） | 已删除（2D 旧画面，见 git 历史 `8e32592`）；重跑 `scripts/perf.sh` 会按现在的 3D 画面重新生成 |
+| `perf-after-replay-213.png` | scripts/perf.sh（visual-screenshots） | 2D（旧像素棋盘） | 已删除 |
+| `perf-after-spectator.png` | scripts/perf.sh（visual-screenshots） | 2D（旧像素棋盘） | 已删除 |
+| `perf-before-replay-213.png` | scripts/perf.sh（visual-screenshots） | 2D（旧像素棋盘） | 已删除 |
+| `perf-before-spectator.png` | scripts/perf.sh（visual-screenshots） | 2D（旧像素棋盘） | 已删除 |
 | `play-1440.png` | web/e2e/play.mjs | 3D（林地） | 保留：脚本仍生成 |
 | `play-390.png` | web/e2e/play.mjs | 3D（林地） | 保留：脚本仍生成 |
 | `play-pending-390.png` | web/e2e/play.mjs | 3D（林地） | 保留：脚本仍生成 |
 | `play-success-390.png` | web/e2e/play.mjs | 3D（林地） | 保留：脚本仍生成 |
 | `profile-1440.png` | web/e2e/flow.mjs | 3D（林地） | 保留：脚本仍生成 |
 | `register-1440.png` | web/scripts/ui-shots.mjs（--windows / --final） | 3D 背景上的窗口（或纯色背景窗口） | 保留：脚本仍生成 |
-| `replay-1440.png` | web/e2e/flow.mjs；web/e2e/onboarding.mjs | 2D（旧像素棋盘） | 保留：flow.mjs 全量验证会重拍（当前内容为 2D 旧画面，重拍后为 3D） |
+| `replay-1440.png` | web/e2e/flow.mjs；web/e2e/onboarding.mjs | 3D（全量验证重拍） | 保留：脚本仍生成 |
 | `replay-back-live-1440.png` | web/e2e/onboarding.mjs | 3D（林地） | 保留：脚本仍生成 |
 | `replay-empty-1440.png` | web/e2e/onboarding.mjs | 3D（林地） | 保留：脚本仍生成 |
 | `replay-spans-1440.png` | web/e2e/onboarding.mjs | 3D（林地） | 保留：脚本仍生成 |
