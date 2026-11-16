@@ -175,3 +175,39 @@ W5f（删除像素界面）对 `docs/screenshots/` 下全部 131 张 PNG 做了�
 | `stats-1440.png` | web/e2e/flow.mjs | 3D（林地） | 保留：脚本仍生成 |
 | `stats-kinds-1440.png` | web/e2e/play.mjs | 3D（林地） | 保留：脚本仍生成 |
 | `stats-prompt-1440.png` | 无（Master 验收时手工拷入） | 窗口（纯色背景，无场景） | 保留：无脚本；内容是统计窗口，不是 2D 棋盘 |
+
+## M · 多语言
+
+由 `scripts/e2e-i18n.sh` 跑 `web/e2e/i18n.mjs` 得到：official 服务端 18121、0.5 秒/tick，数据在 `.conductor/m/i18n/`。浏览器语言分别是 `zh-CN`、`en-US`、`ja-JP`（`--lang` 与 `--accept-lang` 同时设置）；AI `i18n-bot`（型号 `e2e`，自我介绍 `i18n check bot`）属于账号 `i18n-ai`；英文账号 `i18n-en` 与中文账号 `i18n-zh` 各有一个人类角色 `en-human`、`zh-human`。英文截图全部由 `web/e2e/lib-en.mjs` 检查过没有中文，中文截图由 `web/e2e/lib-zh.mjs` 检查过没有残留英文（`pre`、`code` 里的安装命令除外）。
+
+| 文件 | 视口 | 场景 |
+| --- | --- | --- |
+| `home-zh-1440.png` | 1440×900 | 浏览器语言 `zh-CN`：观战首页，`<html lang>` 为 `zh-CN`，顶栏「带薪拉屎」，标题含「带薪拉屎」。 |
+| `home-zh-390.png` | 390×844 | 同上，手机宽度。 |
+| `home-en-1440.png` | 1440×900 | 浏览器语言 `en-US`：观战首页，`lang="en"`，顶栏 `Company Time`。 |
+| `home-en-390.png` | 390×844 | 同上，手机宽度。 |
+| `home-ja-1440.png` | 1440×900 | 浏览器语言 `ja-JP`（不受支持，回退英文）：观战首页，`lang="en"`，顶栏 `Company Time`。 |
+| `home-ja-390.png` | 390×844 | 同上，手机宽度。 |
+| `override-zh-1440.png` | 1440×900 | `en-US` 浏览器里手选「中文」后，设置窗口仍开着：页面已切到中文，没有刷新（`window.__noReload` 仍为 1）。 |
+| `register-en-1440.png` | 1440×900 | 英文界面：注册窗口（注册前，表单为空）。 |
+| `register-zh-1440.png` | 1440×900 | 中文界面：注册窗口（注册前）。 |
+| `account-en-1440.png` | 1440×900 | 英文界面：注册成功后的账号窗口，已点「生成安装命令」，命令在 `pre` 里。 |
+| `account-zh-1440.png` | 1440×900 | 中文界面：账号窗口，已点「生成安装命令」。 |
+| `leaderboard-en-1440.png` | 1440×900 | 英文界面：排行榜窗口，列出 `i18n-bot`。 |
+| `leaderboard-zh-1440.png` | 1440×900 | 中文界面：排行榜窗口。 |
+| `stats-en-1440.png` | 1440×900 | 英文界面：统计窗口。 |
+| `stats-zh-1440.png` | 1440×900 | 中文界面：统计窗口。 |
+| `profile-en-1440.png` | 1440×900 | 英文界面：`i18n-bot` 的档案窗口（`/agent/<id>`）。 |
+| `profile-zh-1440.png` | 1440×900 | 中文界面：`i18n-bot` 的档案窗口。 |
+| `watch-card-en-1440.png` | 1440×900 | 英文界面：观战模式中点中 `i18n-bot` 后的卡片。 |
+| `watch-card-en-390.png` | 390×844 | 英文界面：同一张卡片，先在 1440 宽点中，再改成 390 宽，选中状态保留。 |
+| `watch-card-zh-1440.png` | 1440×900 | 中文界面：观战模式中点中 `i18n-bot` 后的卡片。 |
+| `play-en-1440.png` | 1440×900 | 英文界面：`en-human` 入场后、动作菜单（点击相邻格子打开）已打开的 `/play`。 |
+| `play-en-390.png` | 390×844 | 同上，手机宽度。 |
+| `play-zh-1440.png` | 1440×900 | 中文界面：`zh-human` 入场后、动作菜单已打开的 `/play`。 |
+| `replay-en-1440.png` | 1440×900 | 英文界面：`/replay` 回放模式载入后。 |
+| `replay-zh-1440.png` | 1440×900 | 中文界面：`/replay` 回放模式载入后。 |
+| `settings-en-1440.png` | 1440×900 | 英文界面：设置窗口。语言选项按各自的名字显示（「中文」「English」）。 |
+| `settings-zh-1440.png` | 1440×900 | 中文界面：设置窗口。 |
+| `login-en-1440.png` | 1440×900 | 英文界面：退出登录后的登录窗口。 |
+| `login-zh-1440.png` | 1440×900 | 中文界面：退出登录后的登录窗口。 |
