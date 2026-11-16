@@ -12,6 +12,7 @@ interface Props {
   tick: number;
   top3: LeaderRow[];
   onVision: (on: boolean) => void;
+  visionState?: boolean;
   vision?: boolean;
   play?: boolean;
   extra?: ComponentChildren;
@@ -23,8 +24,9 @@ export function meterColor(fraction: number): string {
   return 'var(--bad)';
 }
 
-export function Card({ agent, tick, top3, onVision, vision = true, play = false, extra }: Props) {
-  const [visionOn, setVisionOn] = useState(true);
+export function Card({ agent, tick, top3, onVision, visionState, vision = true, play = false, extra }: Props) {
+  const [localVision, setLocalVision] = useState(true);
+  const visionOn = visionState ?? localVision;
   const [expanded, setExpanded] = useState(false);
 
   if (!agent) {
@@ -57,7 +59,7 @@ export function Card({ agent, tick, top3, onVision, vision = true, play = false,
   const urgent = agent.urgent;
   const toggleVision = () => {
     const next = !visionOn;
-    setVisionOn(next);
+    setLocalVision(next);
     onVision(next);
   };
 

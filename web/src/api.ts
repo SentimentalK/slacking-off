@@ -287,6 +287,7 @@ export function watch(
   // A page kept in the back/forward cache would otherwise hold its stream open
   // and use up the browser's per-host connection slots.
   const onHide = () => {
+    if (!stopped) onStatus('reconnecting');
     window.clearTimeout(timer);
     source?.close();
     source = null;

@@ -118,6 +118,7 @@ export function useWorld(
   const startingReplay = useRef(false);
   const [dusk, setDusk] = useState(false);
   const [choice, setChoice] = useState<QualityChoice>('high');
+  const [visionState, setVisionState] = useState(true);
   const [arrivedAt, setArrivedAt] = useState(0);
 
   const viewRef = useRef<WorldView | null>(null);
@@ -463,10 +464,12 @@ export function useWorld(
 
   const setVision = (on: boolean) => {
     live.current.vision = on;
+    setVisionState(on);
   };
 
   return {
     setVision,
+    vision: visionState,
     view: () => viewRef.current,
     projection,
     terrain,

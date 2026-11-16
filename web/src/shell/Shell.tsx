@@ -79,7 +79,7 @@ export function Shell({ route }: { route: Route }) {
           ) : (
             <>
               <Feed events={world.events} colors={world.colors} />
-              <Card agent={agent} tick={tick} top3={world.top3} onVision={world.setVision} />
+              <Card agent={agent} tick={tick} top3={world.top3} onVision={world.setVision} visionState={world.vision} />
               <BottomWatch
                 queue={world.projection?.queue ?? []}
                 replay={world.mode === 'replay' ? world.replay : null}
