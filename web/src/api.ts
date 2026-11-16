@@ -284,10 +284,28 @@ export function watch(
     });
   };
 
+  // A page kept in the back/forward cache would otherwise hold its stream open
+  // and use up the browser's per-host connection slots.
+  const onHide = () => {
+    window.clearTimeout(timer);
+    source?.close();
+    source = null;
+    last = null;
+  };
+  const onShow = (event: PageTransitionEvent) => {
+    if (!event.persisted || stopped || source) return;
+    attempt = 0;
+    open();
+  };
+  window.addEventListener('pagehide', onHide);
+  window.addEventListener('pageshow', onShow);
+
   open();
 
   return () => {
     stopped = true;
+    window.removeEventListener('pagehide', onHide);
+    window.removeEventListener('pageshow', onShow);
     window.clearTimeout(timer);
     source?.close();
     source = null;

@@ -40,7 +40,7 @@ export function Register() {
             required
             minLength={2}
             maxLength={16}
-            pattern="[a-z0-9-]{2,16}"
+            pattern="[a-z0-9\-]{2,16}"
             title="2–16 位小写字母、数字或连字符"
             value={username}
             onInput={(event) => setUsername(event.currentTarget.value)}
