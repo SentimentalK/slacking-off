@@ -128,8 +128,30 @@ export function zhAction(description: string): string {
   return zhLabel(description) ?? description;
 }
 
-function zhReason(text: string): string | null {
+const OBJECT_HAS: Record<string, string> = {
+  'a wall': '墙',
+  'a door': '门',
+  'a toilet': '厕所',
+  'an unfinished build site': '未完工的工地',
+  'a pillar': '柱子',
+};
+
+/** Strict: null when any part of the reason has no Chinese form, so the caller keeps the English. */
+function reasonZh(text: string): string | null {
   if (Object.hasOwn(REASON, text)) return REASON[text];
+  const whole = reasonPhrase(text);
+  if (whole !== null) return whole;
+  if (!text.includes('; ')) return null;
+  const parts = text.split('; ').map(reasonPhrase);
+  return parts.every((part) => part !== null) ? parts.join('；') : null;
+}
+
+/** Display form: a reason with no Chinese mapping comes back exactly as the server sent it. */
+export function zhReason(text: string): string {
+  return reasonZh(text) ?? text;
+}
+
+function reasonPhrase(text: string): string | null {
   let m: RegExpExecArray | null;
   if ((m = /^you are stunned until tick (\d+); you cannot attack$/.exec(text))) return `眩晕至第 ${m[1]} 回合，不能攻击`;
   if ((m = /^you are stunned until tick (\d+); you cannot defend$/.exec(text))) return `眩晕至第 ${m[1]} 回合，不能防御`;
@@ -150,17 +172,41 @@ function zhReason(text: string): string | null {
   if ((m = /^the toilet is under construction \(progress (\d+)\); it is not usable$/.exec(text))) {
     return `厕所施工中（进度 ${m[1]}），不能使用`;
   }
+  if ((m = /^the toilet is under construction \(progress (\d+)\)$/.exec(text))) return `厕所施工中（进度 ${m[1]}）`;
+  if (text === 'it is not usable') return '不能使用';
   if ((m = rx(`a pillar cannot be demolished; it goes when the toilet at ${P} is gone`).exec(text))) {
     return `柱子不能单独拆除，厕所 ${m[1]} 拆除后才会消失`;
   }
+  if (text === 'a toilet needs its whole 3x3 inside the map') return '厕所的 3x3 必须完全在地图内';
+  if ((m = rx(`corner ${P} of the toilet's 3x3 is no-build ground`).exec(text))) {
+    return `厕所 3x3 的角格 ${m[1]} 是禁建地面`;
+  }
+  if ((m = rx(`corner ${P} of the toilet's 3x3 has (a wall|a door|a toilet|an unfinished build site|a pillar)`).exec(text))) {
+    return `厕所 3x3 的角格 ${m[1]} 上有${OBJECT_HAS[m[2] ?? ''] ?? ''}`;
+  }
+  if ((m = rx(`corner ${P} of the toilet's 3x3 has an agent on it`).exec(text))) {
+    return `厕所 3x3 的角格 ${m[1]} 上有玩家`;
+  }
+  if ((m = rx(`this toilet's 3x3 overlaps the 3x3 of the toilet at ${P}`).exec(text))) {
+    return `这座厕所的 3x3 与 ${m[1]} 处厕所的 3x3 重叠`;
+  }
+  if ((m = /^there is no toilet there; (upgrade|downgrade) only works on a toilet$/.exec(text))) {
+    return `那里没有厕所；${m[1] === 'upgrade' ? '升级' : '降级'}只能作用于厕所`;
+  }
+  if ((m = /^your agent level is (\d+); upgrading to level (\d+) needs level (\d+); this tick's \+1 was not counted$/.exec(text))) {
+    return `你的等级是 ${m[1]}，升级到 ${m[2]} 级需要 ${m[3]} 级；本回合的 +1 不计入`;
+  }
+  if ((m = /^queue is full \((\d+) waiting\); try again later$/.exec(text))) {
+    return `排队已满（${m[1]} 人等待），请稍后再试`;
+  }
   if ((m = /^the toilet is not usable: (.+)$/.exec(text))) {
-    const parts = (m[1] ?? '').split('; ').map(zhPart);
+    const parts = (m[1] ?? '').split('; ').map(gapZh);
     return parts.some((part) => part === null) ? null : `厕所不可用：${parts.join('；')}`;
   }
-  return null;
+  return gapZh(text);
 }
 
-function zhPart(text: string): string | null {
+function gapZh(text: string): string | null {
   let m: RegExpExecArray | null;
   if ((m = /^the (north|east|south|west) side is the map edge$/.exec(text))) return `${word(m[1] ?? '')}侧是地图边缘`;
   if ((m = /^the (north|east|south|west) door is open$/.exec(text))) return `${word(m[1] ?? '')}侧的门开着`;
@@ -257,7 +303,7 @@ const RULES: Rule[] = [
     re: rx(`${N}'s (.+) failed at ${P}: (.+)`),
     build: (m) => {
       const label = zhLabel(g(m, 2));
-      const reason = zhReason(g(m, 4));
+      const reason = reasonZh(g(m, 4));
       return label === null || reason === null ? null : `${nickZh(g(m, 1))} 的${label}在 ${g(m, 3)} 失败：${reason}`;
     },
   },
@@ -313,14 +359,14 @@ const RULES: Rule[] = [
   {
     re: rx(`${N}'s use at ${P} was interrupted: (.+); recovery by tick ${NUM}`),
     build: (m) => {
-      const reason = zhReason(g(m, 3));
+      const reason = reasonZh(g(m, 3));
       return reason === null ? null : `${nickZh(g(m, 1))} 在 ${g(m, 2)} 的如厕中断：${reason}；须在第 ${g(m, 4)} 回合前恢复`;
     },
   },
   {
     re: rx(`${N}'s use was interrupted: (.+); recovery by tick ${NUM}`),
     build: (m) => {
-      const reason = zhReason(g(m, 2));
+      const reason = reasonZh(g(m, 2));
       return reason === null ? null : `${nickZh(g(m, 1))} 的如厕中断：${reason}；须在第 ${g(m, 3)} 回合前恢复`;
     },
   },
@@ -355,7 +401,7 @@ const RULES: Rule[] = [
   {
     re: rx(`${N}'s attack on (.+?) at ${P} missed: (.+)`),
     build: (m) => {
-      const reason = zhReason(g(m, 4));
+      const reason = reasonZh(g(m, 4));
       return reason === null ? null : `${nickZh(g(m, 1))} 攻击 ${nickZh(g(m, 2))} ${g(m, 3)} 未命中：${reason}`;
     },
   },
@@ -368,7 +414,7 @@ const RULES: Rule[] = [
   {
     re: rx(`${N}'s attack on (.+?) at ${P} was cancelled: (.+)`),
     build: (m) => {
-      const reason = zhReason(g(m, 4));
+      const reason = reasonZh(g(m, 4));
       return reason === null ? null : `${nickZh(g(m, 1))} 对 ${nickZh(g(m, 2))} ${g(m, 3)} 的攻击已取消：${reason}`;
     },
   },
@@ -385,7 +431,7 @@ const RULES: Rule[] = [
   {
     re: rx(`${N} is stunned until tick ${NUM}: (.+)`),
     build: (m) => {
-      const reason = zhReason(g(m, 3));
+      const reason = reasonZh(g(m, 3));
       return reason === null ? null : `${nickZh(g(m, 1))} 眩晕至第 ${g(m, 2)} 回合：${reason}`;
     },
   },
@@ -393,7 +439,7 @@ const RULES: Rule[] = [
     re: rx(`${N}'s (.+?) was rejected at ${P}: (.+)`),
     build: (m) => {
       const verb = intent(g(m, 2));
-      const reason = zhReason(g(m, 4));
+      const reason = reasonZh(g(m, 4));
       return verb === null || reason === null ? null : `${nickZh(g(m, 1))} 的${verb}指令在 ${g(m, 3)} 被拒：${reason}`;
     },
   },

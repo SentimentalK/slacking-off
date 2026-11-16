@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { zhAction, zhEvent } from '../src/eventText.ts';
+import { zhAction, zhEvent, zhReason } from '../src/eventText.ts';
 
 const NICK = /dev-\d+/g;
 const ENGLISH = /[A-Za-z]{3,}/;
@@ -64,6 +64,40 @@ test('every rule renders its sample in Chinese, nicknames aside', () => {
     assert.equal(out, chinese, english);
     assert.doesNotMatch(out.replace(NICK, ''), ENGLISH, english);
   }
+});
+
+// One sample per parameterised or composite rejection reason the core crate formats.
+const REASON_SAMPLES = [
+  ['a toilet needs its whole 3x3 inside the map', '厕所的 3x3 必须完全在地图内'],
+  ["corner (3,4) of the toilet's 3x3 is no-build ground", '厕所 3x3 的角格 (3,4) 是禁建地面'],
+  ["corner (3,4) of the toilet's 3x3 has a wall", '厕所 3x3 的角格 (3,4) 上有墙'],
+  ["corner (3,4) of the toilet's 3x3 has an unfinished build site", '厕所 3x3 的角格 (3,4) 上有未完工的工地'],
+  ["corner (3,4) of the toilet's 3x3 has an agent on it", '厕所 3x3 的角格 (3,4) 上有玩家'],
+  ["this toilet's 3x3 overlaps the 3x3 of the toilet at (6,4)", '这座厕所的 3x3 与 (6,4) 处厕所的 3x3 重叠'],
+  ['there is no toilet there; upgrade only works on a toilet', '那里没有厕所；升级只能作用于厕所'],
+  [
+    "your agent level is 2; upgrading to level 4 needs level 4; this tick's +1 was not counted",
+    '你的等级是 2，升级到 4 级需要 4 级；本回合的 +1 不计入',
+  ],
+  ['queue is full (5 waiting); try again later', '排队已满（5 人等待），请稍后再试'],
+  [
+    'the toilet is not usable: the north side is the map edge; the east side is not enclosed by a wall or a closed door',
+    '厕所不可用：北侧是地图边缘；东侧没有墙或关着的门围住',
+  ],
+  [
+    'the toilet is under construction (progress 3); it is not usable; the toilet is not usable: the north door is open',
+    '厕所施工中（进度 3）；不能使用；厕所不可用：北侧的门开着',
+  ],
+  ['a pillar cannot be demolished; it goes when the toilet at (6,4) is gone', '柱子不能单独拆除，厕所 (6,4) 拆除后才会消失'],
+];
+
+test('parameterised and composite reasons read in Chinese, or stay as the server wrote them', () => {
+  for (const [english, chinese] of REASON_SAMPLES) {
+    assert.equal(zhReason(english), chinese, english);
+    assert.doesNotMatch(zhReason(english), ENGLISH, english);
+  }
+  const partlyUnknown = 'the toilet is not usable: the north side is the map edge; a piece the server never had';
+  assert.equal(zhReason(partlyUnknown), partlyUnknown);
 });
 
 test('unrecognised text and unmapped sub-phrases come back as they were', () => {

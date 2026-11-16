@@ -16,6 +16,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import puppeteer from 'puppeteer-core';
 import { findPath } from '../src/play/path.ts';
+import { zhReason } from '../src/eventText.ts';
 import { assertChinese } from './lib-zh.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -1300,9 +1301,10 @@ async function menuVsServer(label) {
     },
     { timeout: 4_000, interval: 50, label: 'the rejected bar after the pillar demolish' },
   );
+  const expectedBar = zhReason(serverMessage);
   assert(
-    rejected.text.includes(serverMessage),
-    `the bar says ${JSON.stringify(rejected.text)}, not the server's ${JSON.stringify(serverMessage)}`,
+    rejected.text.includes(expectedBar),
+    `the bar says ${JSON.stringify(rejected.text)}, not the server's ${JSON.stringify(serverMessage)} shown as ${JSON.stringify(expectedBar)}`,
   );
   pass(`menu vs server: the pillar demolish was refused by the server and the bar shows it: ${serverMessage}`);
 

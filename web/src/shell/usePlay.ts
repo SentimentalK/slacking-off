@@ -20,6 +20,7 @@ import type {
   PlayState,
   SessionOutcome,
 } from '../types';
+import { zhAction, zhReason } from '../eventText';
 
 const EVENT_LIMIT = 50;
 
@@ -84,12 +85,12 @@ function pendingBar(
   pending: PendingAction | null,
   countdown: string,
 ): PendingBar {
-  if (error) return { tone: 'rejected', title: `被拒绝：${error}`, detail: '' };
+  if (error) return { tone: 'rejected', title: `被拒绝：${zhReason(error)}`, detail: '' };
   if (executing) {
     return {
       tone: 'executing',
-      title: `正在执行：${executing.description}`,
-      detail: `剩 ${executing.remaining} tick`,
+      title: `正在执行：${zhAction(executing.description)}`,
+      detail: `剩 ${executing.remaining} 回合`,
     };
   }
   if (pending) {
