@@ -100,6 +100,7 @@ async function liveTick() {
 
 async function screenshot(name) {
   const file = path.join(SHOTS, name);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
   await page.screenshot({ path: file, type: 'png' });
   const { size } = fs.statSync(file);
   if (size < 5_000) fail(`${name} looks blank (${size} bytes)`);
@@ -144,10 +145,19 @@ function spanOf(spans, tick) {
   return spans.find((span) => tick >= span.from && tick <= span.to) ?? null;
 }
 
-/** `/replay` keeps its tick in the numeric field next to the transport. */
+/** `/replay` keeps its tick in the numeric field of the bottom bar. */
+const TICK_FIELD = 'input[aria-label="跳转到回合"]';
+
 async function replayPageTick() {
-  const value = await page.$eval('.tick-input', (input) => input.value);
+  const value = await page.$eval(TICK_FIELD, (input) => input.value);
   return value === '' ? null : Number(value);
+}
+
+async function typeReplayTick(value) {
+  await page.click(TICK_FIELD);
+  await page.$eval(TICK_FIELD, (input) => input.select());
+  await page.keyboard.type(String(value));
+  await page.keyboard.press('Enter');
 }
 
 async function clickReplayButton(label) {
@@ -249,18 +259,20 @@ async function phaseEmptyHome() {
   // transport is disabled (the tick field still takes a jump).
   await page.goto(`${BASE}/replay`, { waitUntil: 'domcontentloaded' });
   await page.waitForSelector('.replay-timeline', { timeout: 10_000 });
-  await until(async () => (await page.$('.timeline-empty')) !== null, {
-    timeout: 10_000,
-    interval: 50,
-    label: 'the empty replay notice',
-  });
-  const notice = await page.$eval('.timeline-empty', (element) => element.textContent.trim());
+  const emptyNotice = () =>
+    page.evaluate(() =>
+      Array.from(document.querySelectorAll('.rp-empty'), (element) => element.textContent.trim()).find(
+        (text) => text === '没有可回放的区间',
+      ) ?? null,
+    );
+  await until(emptyNotice, { timeout: 10_000, interval: 50, label: 'the empty replay notice' });
+  const notice = await emptyNotice();
   if (notice !== '没有可回放的区间') fail(`the empty replay notice reads ${notice}`);
-  const emptyState = await page.evaluate(() => ({
-    rail: document.querySelector('.marker-track') !== null,
-    play: document.querySelector('button.transport')?.disabled ?? null,
-    field: document.querySelector('.tick-input')?.disabled ?? null,
-  }));
+  const emptyState = await page.evaluate((field) => ({
+    rail: document.querySelector('.rp-track') !== null,
+    play: document.querySelector('button[aria-label="播放"]')?.disabled ?? null,
+    field: document.querySelector(field)?.disabled ?? null,
+  }), TICK_FIELD);
   if (emptyState.rail) fail('a world without spans still draws the rail');
   if (emptyState.play !== true) fail('the transport is not disabled without spans');
   if (emptyState.field !== false) fail('the tick field is disabled without spans');
@@ -490,38 +502,44 @@ async function phaseBackLive() {
 
 async function phaseReplayPage() {
   phase('replay page');
-  const { spans } = await timeline();
+  const { spans, markers } = await timeline();
   if (spans.length < 2) {
     fail(`/replay needs at least two spans to navigate, got ${JSON.stringify(spans)}`);
   }
   const first = spans[0];
   const second = spans[1];
   const last = spans[spans.length - 1];
+  const spanIndexOf = (tick) => spans.findIndex((span) => tick >= span.from && tick <= span.to);
 
-  // No `?tick=`: the page opens on the first tick of the last span.
+  // No `?tick=`: the page opens on the first tick of the last span, drawn by the
+  // 3D renderer inside the shell, with the 回放 mode button selected.
   await page.goto(`${BASE}/replay`, { waitUntil: 'domcontentloaded' });
-  await page.waitForSelector('.marker-track', { timeout: 10_000 });
+  await page.waitForSelector('canvas[data-renderer="3d"]', { timeout: 15_000 });
+  await until(
+    () => page.$eval('button[data-mode-btn="replay"]', (button) => button.classList.contains('on')),
+    { timeout: 10_000, label: 'the 回放 mode button to be selected' },
+  );
   await until(async () => (await replayPageTick()) === last.from, {
     timeout: 10_000,
     interval: 50,
     label: `the default tick to be the last span start ${last.from}`,
   });
-  pass(`/replay without ?tick= opens at tick ${last.from}, the first tick of the last span`);
+  pass(`/replay opens the 3D renderer in 回放 mode at tick ${last.from}, the first tick of the last span`);
 
-  const segments = await page.$$eval('.span-segment', (nodes) => nodes.length);
+  const segments = await page.$$eval('.rp-span', (nodes) => nodes.length);
   if (segments !== spans.length) {
     fail(`the rail drew ${segments} segment(s) for ${spans.length} span(s)`);
   }
 
-  // 第一段 jumps to the first span's start; playback then walks one tick at a
-  // time (the server ticks every 0.5s, so a step lands well inside 5s).
-  await clickReplayButton('第一段');
+  // The first span is reached by typing its first tick into the field; playback
+  // then walks one tick at a time (the server ticks every 0.5s).
+  await typeReplayTick(first.from);
   await until(async () => (await replayPageTick()) === first.from, {
     timeout: 5_000,
     interval: 50,
-    label: `第一段 to land on tick ${first.from}`,
+    label: `the typed tick ${first.from} to land`,
   });
-  pass(`第一段 jumped to tick ${first.from}`);
+  pass(`typing ${first.from} into the field jumped to tick ${first.from}`);
   await screenshot('replay-spans-1440.png');
   pass(`replay-spans-1440.png shows span 1/${spans.length} at tick ${await replayPageTick()}`);
 
@@ -543,7 +561,7 @@ async function phaseReplayPage() {
   await clickReplayButton('暂停');
   pass(`playback advanced three ticks one by one to tick ${previous}`);
 
-  // 下一段 jumps to the next span's start, and the label names that span.
+  // 下一段 jumps to the next span's start, and the status names that span.
   await clickReplayButton('下一段');
   await until(async () => (await replayPageTick()) === second.from, {
     timeout: 5_000,
@@ -557,12 +575,31 @@ async function phaseReplayPage() {
   }
   pass(`下一段 jumped to tick ${second.from} and the label reads 第 2/${spans.length} 段`);
 
-  // A shared link to an empty tick still works: it snaps to the end of the span
-  // before it instead of opening on a stretch nobody can replay.
+  // Playback crosses the empty stretch in one step: from the last tick of the
+  // first span, the next tick shown is the second span's first.
+  await typeReplayTick(first.to);
+  await until(async () => (await replayPageTick()) === first.to, {
+    timeout: 5_000,
+    interval: 50,
+    label: `the typed tick ${first.to} to land`,
+  });
+  await clickReplayButton('播放');
+  const hopped = await until(
+    async () => {
+      const current = await replayPageTick();
+      return current === second.from ? current : null;
+    },
+    { timeout: 5_000, interval: 30, label: `playback to hop the gap to ${second.from}` },
+  );
+  await clickReplayButton('暂停');
+  pass(`playback hopped the gap from ${first.to} straight to ${hopped}`);
+
+  // A tick typed inside the gap still resolves; a shared link to an empty tick
+  // snaps to the end of the span before it instead of an empty stretch.
   const gapTick = first.to + 1;
-  if (spanOf(spans, gapTick)) fail(`tick ${gapTick} was meant to be empty: ${JSON.stringify(spans)}`);
+  if (spanIndexOf(gapTick) >= 0) fail(`tick ${gapTick} was meant to be empty: ${JSON.stringify(spans)}`);
   await page.goto(`${BASE}/replay?tick=${gapTick}`, { waitUntil: 'domcontentloaded' });
-  await page.waitForSelector('.marker-track', { timeout: 10_000 });
+  await page.waitForSelector('.rp-track', { timeout: 10_000 });
   await until(async () => (await replayPageTick()) === first.to, {
     timeout: 10_000,
     interval: 50,
@@ -570,16 +607,116 @@ async function phaseReplayPage() {
   });
   pass(`?tick=${gapTick} (nobody inside) snapped to tick ${first.to}, the end of the span before it`);
 
-  // The rail and the four span buttons must fit a phone without sideways scroll.
+  // Dragging the rail to 75% lands on a replayable tick inside a span.
+  await page.goto(`${BASE}/replay`, { waitUntil: 'domcontentloaded' });
+  await page.waitForSelector('.rp-track', { timeout: 10_000 });
+  const rail = await page.$eval('.rp-track', (element) => {
+    const rect = element.getBoundingClientRect();
+    return { left: rect.left, width: rect.width, y: rect.top + rect.height / 2 };
+  });
+  await page.mouse.move(rail.left + rail.width * 0.75, rail.y);
+  await page.mouse.down();
+  await page.mouse.move(rail.left + rail.width * 0.75 + 1, rail.y);
+  await page.mouse.up();
+  const dragged = await until(
+    async () => {
+      const current = await replayPageTick();
+      return current !== null && spanIndexOf(current) >= 0 ? current : null;
+    },
+    { timeout: 5_000, interval: 50, label: 'the drag to 75% to land inside a span' },
+  );
+  pass(`dragging the rail to 75% landed on tick ${dragged}, inside span ${spanIndexOf(dragged) + 1}/${spans.length}`);
+
+  // 下一个高光 jumps to the next marker after the current tick.
+  const markerTicks = markers.map((marker) => marker.tick).sort((a, b) => a - b);
+  if (markerTicks.length === 0) fail('the timeline has no marker to jump to');
+  const lowestMarker = markerTicks[0];
+  const beforeMarker = Math.max(0, lowestMarker - 1);
+  await typeReplayTick(beforeMarker);
+  await until(async () => (await replayPageTick()) === beforeMarker, {
+    timeout: 5_000,
+    interval: 50,
+    label: `the typed tick ${beforeMarker} to land`,
+  });
+  await clickReplayButton('下一个高光');
+  await until(async () => (await replayPageTick()) === lowestMarker, {
+    timeout: 5_000,
+    interval: 50,
+    label: `下一个高光 to land on marker tick ${lowestMarker}`,
+  });
+  pass(`下一个高光 from ${beforeMarker} jumped to marker tick ${lowestMarker}`);
+
+  // Clicking an agent on the field opens its card. The position comes from the
+  // renderer's own projection of that agent.
+  await typeReplayTick(first.from);
+  await until(async () => (await replayPageTick()) === first.from, {
+    timeout: 5_000,
+    interval: 50,
+    label: `the typed tick ${first.from} to land before the agent click`,
+  });
+  const { body: frameBody } = await getJSON(`/api/projection?tick=${first.from}`);
+  const agentId = frameBody.result?.agents[0]?.id;
+  if (agentId === undefined) fail(`tick ${first.from} shows nobody to click`);
+  const at = await until(
+    () =>
+      page.evaluate((id) => {
+        const point = window.__looView ? window.__looView.screenOf(id) : null;
+        return point ? { x: point.x, y: point.y } : null;
+      }, agentId),
+    { timeout: 10_000, interval: 100, label: `agent ${agentId} to be on screen` },
+  );
+  await page.mouse.click(at.x, at.y);
+  await until(async () => (await page.$('.ui-card .nick')) !== null, {
+    timeout: 5_000,
+    interval: 50,
+    label: `the card of agent ${agentId}`,
+  });
+  const cardNick = await page.$eval('.ui-card .nick', (element) => element.textContent.trim());
+  pass(`clicking agent ${agentId} on the field opens its card (${cardNick})`);
+
+  // A window opened from replay mode returns the URL to the same replay tick.
+  const tickBeforeWindow = await replayPageTick();
+  await page.click('button[data-open="leaderboard"]');
+  await until(async () => (await page.$('[data-window="leaderboard"]')) !== null, {
+    timeout: 5_000,
+    interval: 50,
+    label: 'the leaderboard window',
+  });
+  await page.click('.win-close');
+  await until(async () => (await page.$('[data-window="leaderboard"]')) === null, {
+    timeout: 5_000,
+    interval: 50,
+    label: 'the leaderboard window to close',
+  });
+  const back = new URL(page.url());
+  if (back.pathname !== '/replay' || back.searchParams.get('tick') !== String(tickBeforeWindow)) {
+    fail(`closing the window left the URL at ${back.pathname}${back.search}, not /replay?tick=${tickBeforeWindow}`);
+  }
+  pass(`closing the leaderboard window returned to ${back.pathname}${back.search}`);
+
+  // The phone layout: the rail and the controls fit 390px without sideways scroll.
   await page.setViewport({ width: 390, height: 844, deviceScaleFactor: 1 });
   await page.goto(`${BASE}/replay`, { waitUntil: 'domcontentloaded' });
-  await page.waitForSelector('.marker-track', { timeout: 10_000 });
-  const overflow = await page.evaluate(
-    () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
-  );
-  if (overflow > 0) fail(`/replay overflows horizontally at 390px by ${overflow}px`);
+  await page.waitForSelector('.rp-track', { timeout: 10_000 });
+  const overflow = await page.evaluate(() => ({
+    page: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+    bar: (() => {
+      const bar = document.querySelector('.rp-bar');
+      return bar ? bar.scrollWidth - bar.clientWidth : 0;
+    })(),
+  }));
+  if (overflow.page > 0 || overflow.bar > 0) {
+    fail(`/replay overflows horizontally at 390px: page ${overflow.page}px, bar ${overflow.bar}px`);
+  }
   pass('/replay fits 390px without horizontal overflow');
+  await screenshot('l5/replay-390.png');
   await page.setViewport({ width: 1440, height: 900, deviceScaleFactor: 1 });
+
+  // The 1440 shot shows the rail with spans and a selected agent.
+  await page.goto(`${BASE}/replay?tick=${first.from}&agent=${agentId}`, { waitUntil: 'domcontentloaded' });
+  await page.waitForSelector('.ui-card .nick', { timeout: 15_000 });
+  await sleep(800);
+  await screenshot('l5/replay-1440.png');
 }
 
 async function main() {

@@ -11,7 +11,7 @@ interface Props {
   agent: ProjectionAgent | null;
   tick: number;
   top3: LeaderRow[];
-  onVision: (on: boolean) => void;
+  onVision?: (on: boolean) => void;
   visionState?: boolean;
   vision?: boolean;
   play?: boolean;
@@ -60,7 +60,7 @@ export function Card({ agent, tick, top3, onVision, visionState, vision = true, 
   const toggleVision = () => {
     const next = !visionOn;
     setLocalVision(next);
-    onVision(next);
+    onVision?.(next);
   };
 
   return (
@@ -118,7 +118,7 @@ export function Card({ agent, tick, top3, onVision, visionState, vision = true, 
           <button type="button" onClick={() => navigate(`/agent/${agent.id}`)}>
             看档案
           </button>
-          {vision ? (
+          {vision && onVision ? (
             <button type="button" aria-pressed={visionOn ? 'true' : 'false'} onClick={toggleVision}>
               看它的视野
             </button>

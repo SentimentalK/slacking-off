@@ -25,9 +25,10 @@ export interface WorldOverride {
   cur: Projection;
   prev: Projection | null;
   arrivedAt: number;
-  vision: VisionGrid;
+  vision: VisionGrid | null;
   selected: number | null;
   path: Pos[] | null;
+  spanMs?: number;
 }
 
 const EVENT_LOG_LIMIT = 50;
@@ -347,7 +348,11 @@ export function useWorld(
           : replaying
             ? (replayCache.current.get(cur.tick - 1) ?? null)
             : state.previous;
-        const span = replaying ? 1000 / REPLAY_TICKS_PER_SECOND : cur.tick_seconds * 1000;
+        const span = ov
+          ? (ov.spanMs ?? cur.tick_seconds * 1000)
+          : replaying
+            ? 1000 / REPLAY_TICKS_PER_SECOND
+            : cur.tick_seconds * 1000;
         const arrivedAt = ov ? ov.arrivedAt : state.arrivedAt;
         const motionless = STILL_MODE || state.reduceMotion;
         const phase = motionless ? 1 : clamp01((now - arrivedAt) / span);
