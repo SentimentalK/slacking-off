@@ -3,7 +3,6 @@ import { detectLang, fill, type Vars } from './detect';
 import { en } from './en';
 import { zh, type Key } from './zh';
 
-// A third language is one more dictionary file plus one entry here.
 const DICTS = { zh, en } satisfies Record<string, Record<Key, string>>;
 
 export type Lang = keyof typeof DICTS;
@@ -50,7 +49,6 @@ export function t(key: Key, vars?: Vars): string {
   return fill(DICTS[lang][key], vars);
 }
 
-/** `base.one` when n is 1, `base.other` otherwise; `{n}` is filled in. */
 export function tn(base: PluralBase, n: number, vars?: Vars): string {
   return t(`${base}.${n === 1 ? 'one' : 'other'}` as Key, { n, ...vars });
 }
@@ -85,7 +83,6 @@ export function setLangPref(next: LangPref): void {
   notify();
 }
 
-/** Re-renders the caller whenever the language changes. */
 export function useI18n(): { t: typeof t; tn: typeof tn; lang: Lang; pref: LangPref } {
   const [, bump] = useState(0);
   useEffect(() => {

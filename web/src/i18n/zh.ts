@@ -1,4 +1,3 @@
-// Source of the key set: every other language is a Record<Key, string>.
 export const zh = {
   'meta.htmlLang': 'zh-CN',
   'meta.title': '带薪拉屎 · Company Time',

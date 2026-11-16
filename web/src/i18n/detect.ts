@@ -1,6 +1,5 @@
 export type Vars = Record<string, string | number>;
 
-/** First browser language whose primary subtag is supported wins; none -> fallback. */
 export function detectLang<L extends string>(
   pref: string | null,
   languages: readonly string[],
