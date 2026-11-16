@@ -1,0 +1,250 @@
+{
+  "load_limit": 4,
+  "other_headless_chrome_before_start": 7,
+  "gpu": "ANGLE (Intel, Mesa Intel(R) UHD Graphics (CML GT2), OpenGL ES 3.2)",
+  "fixture": "/home/sentimentalk/codes/slacking-off/.conductor/l/scenes/crowd.json",
+  "groups": [
+    {
+      "name": "ladder-0",
+      "viewport": "1440x900",
+      "quality": "high",
+      "scale": 1,
+      "grass": 1,
+      "shadow": 2048,
+      "median_frame_ms": 43.8,
+      "median_fps": 22.8,
+      "p10_fps": 21.3,
+      "load1_before": 4.05,
+      "load1_after": 3.69,
+      "load_ok": true,
+      "attempts": [
+        {
+          "attempt": 1,
+          "median_fps": 22.8,
+          "load1_before": 4.05,
+          "load1_after": 3.69
+        }
+      ]
+    },
+    {
+      "name": "ladder-1",
+      "viewport": "1440x900",
+      "quality": "high",
+      "scale": 0.75,
+      "grass": 1,
+      "shadow": 2048,
+      "median_frame_ms": 34.6,
+      "median_fps": 28.9,
+      "p10_fps": 26.9,
+      "load1_before": 3.63,
+      "load1_after": 3.6,
+      "load_ok": true,
+      "attempts": [
+        {
+          "attempt": 1,
+          "median_fps": 28.9,
+          "load1_before": 3.63,
+          "load1_after": 3.6
+        }
+      ]
+    },
+    {
+      "name": "ladder-2",
+      "viewport": "1440x900",
+      "quality": "high",
+      "scale": 0.75,
+      "grass": 0.5,
+      "shadow": 1024,
+      "median_frame_ms": 31.6,
+      "median_fps": 31.6,
+      "p10_fps": 29.9,
+      "load1_before": 3.71,
+      "load1_after": 3.3,
+      "load_ok": true,
+      "attempts": [
+        {
+          "attempt": 1,
+          "median_fps": 31.6,
+          "load1_before": 3.71,
+          "load1_after": 3.3
+        }
+      ]
+    },
+    {
+      "name": "ladder-3",
+      "viewport": "1440x900",
+      "quality": "high",
+      "scale": 0.6,
+      "grass": 0.5,
+      "shadow": 1024,
+      "median_frame_ms": 27.3,
+      "median_fps": 36.6,
+      "p10_fps": 34.5,
+      "load1_before": 3.71,
+      "load1_after": 3.65,
+      "load_ok": true,
+      "attempts": [
+        {
+          "attempt": 1,
+          "median_fps": 36.6,
+          "load1_before": 3.71,
+          "load1_after": 3.65
+        }
+      ]
+    },
+    {
+      "name": "ladder-4",
+      "viewport": "1440x900",
+      "quality": "high",
+      "scale": 0.6,
+      "grass": 0.25,
+      "shadow": 512,
+      "median_frame_ms": 26.6,
+      "median_fps": 37.6,
+      "p10_fps": 35.8,
+      "load1_before": 3.54,
+      "load1_after": 3.33,
+      "load_ok": true,
+      "attempts": [
+        {
+          "attempt": 1,
+          "median_fps": 37.6,
+          "load1_before": 3.54,
+          "load1_after": 3.33
+        }
+      ]
+    },
+    {
+      "name": "ladder-5",
+      "viewport": "1440x900",
+      "quality": "high",
+      "scale": 0.75,
+      "grass": 0,
+      "shadow": 0,
+      "median_frame_ms": 24.1,
+      "median_fps": 41.5,
+      "p10_fps": 39.4,
+      "load1_before": 3.43,
+      "load1_after": 3.86,
+      "load_ok": true,
+      "attempts": [
+        {
+          "attempt": 1,
+          "median_fps": 41.5,
+          "load1_before": 3.43,
+          "load1_after": 3.86
+        }
+      ]
+    },
+    {
+      "name": "manual-high",
+      "viewport": "1440x900",
+      "quality": "high",
+      "scale": "tier",
+      "grass": "tier",
+      "shadow": "tier",
+      "median_frame_ms": 43.3,
+      "median_fps": 23.1,
+      "p10_fps": 21.8,
+      "load1_before": 3.87,
+      "load1_after": 3.89,
+      "load_ok": true,
+      "attempts": [
+        {
+          "attempt": 1,
+          "median_fps": 23.1,
+          "load1_before": 3.87,
+          "load1_after": 3.89
+        }
+      ]
+    },
+    {
+      "name": "manual-medium",
+      "viewport": "1440x900",
+      "quality": "medium",
+      "scale": "tier",
+      "grass": "tier",
+      "shadow": "tier",
+      "median_frame_ms": 37.7,
+      "median_fps": 26.5,
+      "p10_fps": 25.5,
+      "load1_before": 3.9,
+      "load1_after": 3.93,
+      "load_ok": true,
+      "attempts": [
+        {
+          "attempt": 1,
+          "median_fps": 26.5,
+          "load1_before": 3.9,
+          "load1_after": 3.93
+        }
+      ]
+    },
+    {
+      "name": "manual-low",
+      "viewport": "1440x900",
+      "quality": "low",
+      "scale": "tier",
+      "grass": "tier",
+      "shadow": "tier",
+      "median_frame_ms": 20.9,
+      "median_fps": 47.8,
+      "p10_fps": 45.7,
+      "load1_before": 4.16,
+      "load1_after": 3.76,
+      "load_ok": true,
+      "attempts": [
+        {
+          "attempt": 1,
+          "median_fps": 47.8,
+          "load1_before": 4.16,
+          "load1_after": 3.76
+        }
+      ]
+    },
+    {
+      "name": "phone-low",
+      "viewport": "390x844",
+      "quality": "low",
+      "scale": "tier",
+      "grass": "tier",
+      "shadow": "tier",
+      "median_frame_ms": 16.7,
+      "median_fps": 59.9,
+      "p10_fps": 59.5,
+      "load1_before": 3.62,
+      "load1_after": 3.64,
+      "load_ok": true,
+      "attempts": [
+        {
+          "attempt": 1,
+          "median_fps": 59.9,
+          "load1_before": 3.62,
+          "load1_after": 3.64
+        }
+      ]
+    },
+    {
+      "name": "phone-0.75-0.5-1024",
+      "viewport": "390x844",
+      "quality": "low",
+      "scale": 0.75,
+      "grass": 0.5,
+      "shadow": 1024,
+      "median_frame_ms": 16.7,
+      "median_fps": 59.9,
+      "p10_fps": 59.5,
+      "load1_before": 3.63,
+      "load1_after": 3.79,
+      "load_ok": true,
+      "attempts": [
+        {
+          "attempt": 1,
+          "median_fps": 59.9,
+          "load1_before": 3.63,
+          "load1_after": 3.79
+        }
+      ]
+    }
+  ]
+}

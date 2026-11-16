@@ -1,0 +1,575 @@
+{
+  "note": "combined perf record for wave-5 final; each part is the unmodified output of web/scripts/l-perf.mjs or l-firstpaint.mjs",
+  "ladder": {
+    "load_limit": 4,
+    "other_headless_chrome_before_start": 7,
+    "gpu": "ANGLE (Intel, Mesa Intel(R) UHD Graphics (CML GT2), OpenGL ES 3.2)",
+    "fixture": "/home/sentimentalk/codes/slacking-off/.conductor/l/scenes/crowd.json",
+    "groups": [
+      {
+        "name": "ladder-0",
+        "viewport": "1440x900",
+        "quality": "high",
+        "scale": 1,
+        "grass": 1,
+        "shadow": 2048,
+        "median_frame_ms": 43.8,
+        "median_fps": 22.8,
+        "p10_fps": 21.3,
+        "load1_before": 4.05,
+        "load1_after": 3.69,
+        "load_ok": true,
+        "attempts": [
+          {
+            "attempt": 1,
+            "median_fps": 22.8,
+            "load1_before": 4.05,
+            "load1_after": 3.69
+          }
+        ]
+      },
+      {
+        "name": "ladder-1",
+        "viewport": "1440x900",
+        "quality": "high",
+        "scale": 0.75,
+        "grass": 1,
+        "shadow": 2048,
+        "median_frame_ms": 34.6,
+        "median_fps": 28.9,
+        "p10_fps": 26.9,
+        "load1_before": 3.63,
+        "load1_after": 3.6,
+        "load_ok": true,
+        "attempts": [
+          {
+            "attempt": 1,
+            "median_fps": 28.9,
+            "load1_before": 3.63,
+            "load1_after": 3.6
+          }
+        ]
+      },
+      {
+        "name": "ladder-2",
+        "viewport": "1440x900",
+        "quality": "high",
+        "scale": 0.75,
+        "grass": 0.5,
+        "shadow": 1024,
+        "median_frame_ms": 31.6,
+        "median_fps": 31.6,
+        "p10_fps": 29.9,
+        "load1_before": 3.71,
+        "load1_after": 3.3,
+        "load_ok": true,
+        "attempts": [
+          {
+            "attempt": 1,
+            "median_fps": 31.6,
+            "load1_before": 3.71,
+            "load1_after": 3.3
+          }
+        ]
+      },
+      {
+        "name": "ladder-3",
+        "viewport": "1440x900",
+        "quality": "high",
+        "scale": 0.6,
+        "grass": 0.5,
+        "shadow": 1024,
+        "median_frame_ms": 27.3,
+        "median_fps": 36.6,
+        "p10_fps": 34.5,
+        "load1_before": 3.71,
+        "load1_after": 3.65,
+        "load_ok": true,
+        "attempts": [
+          {
+            "attempt": 1,
+            "median_fps": 36.6,
+            "load1_before": 3.71,
+            "load1_after": 3.65
+          }
+        ]
+      },
+      {
+        "name": "ladder-4",
+        "viewport": "1440x900",
+        "quality": "high",
+        "scale": 0.6,
+        "grass": 0.25,
+        "shadow": 512,
+        "median_frame_ms": 26.6,
+        "median_fps": 37.6,
+        "p10_fps": 35.8,
+        "load1_before": 3.54,
+        "load1_after": 3.33,
+        "load_ok": true,
+        "attempts": [
+          {
+            "attempt": 1,
+            "median_fps": 37.6,
+            "load1_before": 3.54,
+            "load1_after": 3.33
+          }
+        ]
+      },
+      {
+        "name": "ladder-5",
+        "viewport": "1440x900",
+        "quality": "high",
+        "scale": 0.75,
+        "grass": 0,
+        "shadow": 0,
+        "median_frame_ms": 24.1,
+        "median_fps": 41.5,
+        "p10_fps": 39.4,
+        "load1_before": 3.43,
+        "load1_after": 3.86,
+        "load_ok": true,
+        "attempts": [
+          {
+            "attempt": 1,
+            "median_fps": 41.5,
+            "load1_before": 3.43,
+            "load1_after": 3.86
+          }
+        ]
+      },
+      {
+        "name": "manual-high",
+        "viewport": "1440x900",
+        "quality": "high",
+        "scale": "tier",
+        "grass": "tier",
+        "shadow": "tier",
+        "median_frame_ms": 43.3,
+        "median_fps": 23.1,
+        "p10_fps": 21.8,
+        "load1_before": 3.87,
+        "load1_after": 3.89,
+        "load_ok": true,
+        "attempts": [
+          {
+            "attempt": 1,
+            "median_fps": 23.1,
+            "load1_before": 3.87,
+            "load1_after": 3.89
+          }
+        ]
+      },
+      {
+        "name": "manual-medium",
+        "viewport": "1440x900",
+        "quality": "medium",
+        "scale": "tier",
+        "grass": "tier",
+        "shadow": "tier",
+        "median_frame_ms": 37.7,
+        "median_fps": 26.5,
+        "p10_fps": 25.5,
+        "load1_before": 3.9,
+        "load1_after": 3.93,
+        "load_ok": true,
+        "attempts": [
+          {
+            "attempt": 1,
+            "median_fps": 26.5,
+            "load1_before": 3.9,
+            "load1_after": 3.93
+          }
+        ]
+      },
+      {
+        "name": "manual-low",
+        "viewport": "1440x900",
+        "quality": "low",
+        "scale": "tier",
+        "grass": "tier",
+        "shadow": "tier",
+        "median_frame_ms": 20.9,
+        "median_fps": 47.8,
+        "p10_fps": 45.7,
+        "load1_before": 4.16,
+        "load1_after": 3.76,
+        "load_ok": true,
+        "attempts": [
+          {
+            "attempt": 1,
+            "median_fps": 47.8,
+            "load1_before": 4.16,
+            "load1_after": 3.76
+          }
+        ]
+      },
+      {
+        "name": "phone-low",
+        "viewport": "390x844",
+        "quality": "low",
+        "scale": "tier",
+        "grass": "tier",
+        "shadow": "tier",
+        "median_frame_ms": 16.7,
+        "median_fps": 59.9,
+        "p10_fps": 59.5,
+        "load1_before": 3.62,
+        "load1_after": 3.64,
+        "load_ok": true,
+        "attempts": [
+          {
+            "attempt": 1,
+            "median_fps": 59.9,
+            "load1_before": 3.62,
+            "load1_after": 3.64
+          }
+        ]
+      },
+      {
+        "name": "phone-0.75-0.5-1024",
+        "viewport": "390x844",
+        "quality": "low",
+        "scale": 0.75,
+        "grass": 0.5,
+        "shadow": 1024,
+        "median_frame_ms": 16.7,
+        "median_fps": 59.9,
+        "p10_fps": 59.5,
+        "load1_before": 3.63,
+        "load1_after": 3.79,
+        "load_ok": true,
+        "attempts": [
+          {
+            "attempt": 1,
+            "median_fps": 59.9,
+            "load1_before": 3.63,
+            "load1_after": 3.79
+          }
+        ]
+      }
+    ]
+  },
+  "auto_crowd_scene": {
+    "mode": "scene",
+    "base": "http://127.0.0.1:18132",
+    "fixture": "/home/sentimentalk/codes/slacking-off/.conductor/l/scenes/crowd.json",
+    "other_headless_chrome_at_mode_start": 7,
+    "load_limit": 4,
+    "runs": [
+      {
+        "run": 1,
+        "other_headless_chrome_before": 13,
+        "load1_before": 3.79,
+        "load1_after": 3.66,
+        "log": [
+          {
+            "t": 336.3,
+            "event": "start",
+            "from": 0,
+            "to": 0,
+            "p75Ms": null,
+            "medianMs": null
+          },
+          {
+            "t": 6369.3,
+            "event": "step",
+            "from": 0,
+            "to": 1,
+            "p75Ms": 50,
+            "medianMs": 49.900000000000546
+          },
+          {
+            "t": 6369.3,
+            "event": "start",
+            "from": 1,
+            "to": 1,
+            "p75Ms": null,
+            "medianMs": null
+          },
+          {
+            "t": 12385.8,
+            "event": "settle",
+            "from": 1,
+            "to": 1,
+            "p75Ms": 33.399999999999636,
+            "medianMs": 33.30000000000109
+          }
+        ],
+        "settled_index": 1,
+        "settled_settings": {
+          "scale": 0.75,
+          "grass": 1,
+          "shadow": 2048
+        },
+        "fps_after_settle": {
+          "frames": 587,
+          "median_frame_ms": 33.9,
+          "median_fps": 29.5,
+          "p10_fps": 27.9
+        },
+        "gpu": "ANGLE (Intel, Mesa Intel(R) UHD Graphics (CML GT2), OpenGL ES 3.2)",
+        "shot": "auto-scene-run1.png"
+      },
+      {
+        "run": 2,
+        "other_headless_chrome_before": 13,
+        "load1_before": 3.66,
+        "load1_after": 3.5,
+        "log": [
+          {
+            "t": 167.2,
+            "event": "start",
+            "from": 1,
+            "to": 1,
+            "p75Ms": null,
+            "medianMs": null
+          },
+          {
+            "t": 6183.6,
+            "event": "settle",
+            "from": 1,
+            "to": 1,
+            "p75Ms": 33.399999999999636,
+            "medianMs": 33.30000000000018
+          }
+        ],
+        "settled_index": 1,
+        "settled_settings": {
+          "scale": 0.75,
+          "grass": 1,
+          "shadow": 2048
+        },
+        "fps_after_settle": {
+          "frames": 586,
+          "median_frame_ms": 34,
+          "median_fps": 29.4,
+          "p10_fps": 27.9
+        },
+        "gpu": "ANGLE (Intel, Mesa Intel(R) UHD Graphics (CML GT2), OpenGL ES 3.2)",
+        "shot": "auto-scene-run2.png"
+      }
+    ]
+  },
+  "auto_home_shell": {
+    "mode": "shell",
+    "base": "http://127.0.0.1:18129",
+    "fixture": null,
+    "other_headless_chrome_at_mode_start": 10,
+    "load_limit": 4,
+    "runs": [
+      {
+        "run": 1,
+        "other_headless_chrome_before": 16,
+        "load1_before": 3.89,
+        "load1_after": 3.98,
+        "log": [
+          {
+            "t": 327.122,
+            "event": "start",
+            "from": 0,
+            "to": 0,
+            "p75Ms": null,
+            "medianMs": null
+          },
+          {
+            "t": 6360.2,
+            "event": "step",
+            "from": 0,
+            "to": 1,
+            "p75Ms": 50,
+            "medianMs": 49.900000000000546
+          },
+          {
+            "t": 6360.2,
+            "event": "start",
+            "from": 1,
+            "to": 1,
+            "p75Ms": null,
+            "medianMs": null
+          },
+          {
+            "t": 12376.6,
+            "event": "settle",
+            "from": 1,
+            "to": 1,
+            "p75Ms": 33.399999999999636,
+            "medianMs": 33.30000000000109
+          }
+        ],
+        "settled_index": 1,
+        "settled_settings": {
+          "scale": 0.75,
+          "grass": 1,
+          "shadow": 2048
+        },
+        "fps_after_settle": {
+          "frames": 591,
+          "median_frame_ms": 33.3,
+          "median_fps": 30,
+          "p10_fps": 29.9
+        },
+        "gpu": "ANGLE (Intel, Mesa Intel(R) UHD Graphics (CML GT2), OpenGL ES 3.2)",
+        "shot": "auto-shell-run1.png"
+      },
+      {
+        "run": 2,
+        "other_headless_chrome_before": 15,
+        "load1_before": 3.98,
+        "load1_after": 4.54,
+        "log": [
+          {
+            "t": 139.2,
+            "event": "start",
+            "from": 1,
+            "to": 1,
+            "p75Ms": null,
+            "medianMs": null
+          },
+          {
+            "t": 6155.7,
+            "event": "settle",
+            "from": 1,
+            "to": 1,
+            "p75Ms": 33.40000000000009,
+            "medianMs": 33.399999999999636
+          }
+        ],
+        "settled_index": 1,
+        "settled_settings": {
+          "scale": 0.75,
+          "grass": 1,
+          "shadow": 2048
+        },
+        "fps_after_settle": {
+          "frames": 599,
+          "median_frame_ms": 33.3,
+          "median_fps": 30,
+          "p10_fps": 29.9
+        },
+        "gpu": "ANGLE (Intel, Mesa Intel(R) UHD Graphics (CML GT2), OpenGL ES 3.2)",
+        "shot": "auto-shell-run2.png"
+      }
+    ]
+  },
+  "firstpaint_new": {
+    "dist": "/home/sentimentalk/codes/slacking-off/web/dist",
+    "runs": [
+      {
+        "run": 1,
+        "loadavg1": 3.03,
+        "fcp": 404,
+        "topbar": 280.5,
+        "scene": 4399.7
+      },
+      {
+        "run": 2,
+        "loadavg1": 3.43,
+        "fcp": 416,
+        "topbar": 316.8,
+        "scene": 2913.9
+      },
+      {
+        "run": 3,
+        "loadavg1": 7.4,
+        "fcp": 412,
+        "topbar": 322.8,
+        "scene": 3139
+      },
+      {
+        "run": 4,
+        "loadavg1": 2.65,
+        "fcp": 324,
+        "topbar": 278.2,
+        "scene": 2241.7
+      },
+      {
+        "run": 5,
+        "loadavg1": 2.65,
+        "fcp": 360,
+        "topbar": 302.2,
+        "scene": 2287.6
+      }
+    ],
+    "median": {
+      "fcp": 404,
+      "topbar": 302.2,
+      "scene": 2913.9
+    },
+    "conditions": {
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "network": {
+        "offline": false,
+        "latency": 40,
+        "downloadThroughput": 1250000,
+        "uploadThroughput": 625000
+      },
+      "cache": "fresh browser context per run, cache disabled"
+    },
+    "chrome": "Chrome/156.0.8078.79",
+    "gpu": "ANGLE (Intel, Mesa Intel(R) UHD Graphics (CML GT2), OpenGL ES 3.2)"
+  },
+  "firstpaint_base": {
+    "dist": "/home/sentimentalk/codes/slacking-off/.conductor/l5/baseline/dist",
+    "runs": [
+      {
+        "run": 1,
+        "loadavg1": 3.88,
+        "fcp": 748,
+        "topbar": 675.1,
+        "scene": 3009.7
+      },
+      {
+        "run": 2,
+        "loadavg1": 3.89,
+        "fcp": 636,
+        "topbar": 609.7,
+        "scene": 2438.3
+      },
+      {
+        "run": 3,
+        "loadavg1": 3.89,
+        "fcp": 632,
+        "topbar": 609.6,
+        "scene": 2462.9
+      },
+      {
+        "run": 4,
+        "loadavg1": 3.81,
+        "fcp": 628,
+        "topbar": 605.4,
+        "scene": 2399.7
+      },
+      {
+        "run": 5,
+        "loadavg1": 3.81,
+        "fcp": 620,
+        "topbar": 592.6,
+        "scene": 2357.9
+      }
+    ],
+    "median": {
+      "fcp": 632,
+      "topbar": 609.6,
+      "scene": 2438.3
+    },
+    "conditions": {
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "network": {
+        "offline": false,
+        "latency": 40,
+        "downloadThroughput": 1250000,
+        "uploadThroughput": 625000
+      },
+      "cache": "fresh browser context per run, cache disabled"
+    },
+    "chrome": "Chrome/156.0.8078.79",
+    "gpu": "ANGLE (Intel, Mesa Intel(R) UHD Graphics (CML GT2), OpenGL ES 3.2)"
+  }
+}

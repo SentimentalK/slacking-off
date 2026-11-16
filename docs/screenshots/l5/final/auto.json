@@ -1,0 +1,101 @@
+{
+  "mode": "scene",
+  "base": "http://127.0.0.1:18132",
+  "fixture": "/home/sentimentalk/codes/slacking-off/.conductor/l/scenes/crowd.json",
+  "other_headless_chrome_at_mode_start": 7,
+  "load_limit": 4,
+  "runs": [
+    {
+      "run": 1,
+      "other_headless_chrome_before": 13,
+      "load1_before": 3.79,
+      "load1_after": 3.66,
+      "log": [
+        {
+          "t": 336.3,
+          "event": "start",
+          "from": 0,
+          "to": 0,
+          "p75Ms": null,
+          "medianMs": null
+        },
+        {
+          "t": 6369.3,
+          "event": "step",
+          "from": 0,
+          "to": 1,
+          "p75Ms": 50,
+          "medianMs": 49.900000000000546
+        },
+        {
+          "t": 6369.3,
+          "event": "start",
+          "from": 1,
+          "to": 1,
+          "p75Ms": null,
+          "medianMs": null
+        },
+        {
+          "t": 12385.8,
+          "event": "settle",
+          "from": 1,
+          "to": 1,
+          "p75Ms": 33.399999999999636,
+          "medianMs": 33.30000000000109
+        }
+      ],
+      "settled_index": 1,
+      "settled_settings": {
+        "scale": 0.75,
+        "grass": 1,
+        "shadow": 2048
+      },
+      "fps_after_settle": {
+        "frames": 587,
+        "median_frame_ms": 33.9,
+        "median_fps": 29.5,
+        "p10_fps": 27.9
+      },
+      "gpu": "ANGLE (Intel, Mesa Intel(R) UHD Graphics (CML GT2), OpenGL ES 3.2)",
+      "shot": "auto-scene-run1.png"
+    },
+    {
+      "run": 2,
+      "other_headless_chrome_before": 13,
+      "load1_before": 3.66,
+      "load1_after": 3.5,
+      "log": [
+        {
+          "t": 167.2,
+          "event": "start",
+          "from": 1,
+          "to": 1,
+          "p75Ms": null,
+          "medianMs": null
+        },
+        {
+          "t": 6183.6,
+          "event": "settle",
+          "from": 1,
+          "to": 1,
+          "p75Ms": 33.399999999999636,
+          "medianMs": 33.30000000000018
+        }
+      ],
+      "settled_index": 1,
+      "settled_settings": {
+        "scale": 0.75,
+        "grass": 1,
+        "shadow": 2048
+      },
+      "fps_after_settle": {
+        "frames": 586,
+        "median_frame_ms": 34,
+        "median_fps": 29.4,
+        "p10_fps": 27.9
+      },
+      "gpu": "ANGLE (Intel, Mesa Intel(R) UHD Graphics (CML GT2), OpenGL ES 3.2)",
+      "shot": "auto-scene-run2.png"
+    }
+  ]
+}

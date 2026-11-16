@@ -1,0 +1,60 @@
+{
+  "dist": "/home/sentimentalk/codes/slacking-off/.conductor/l5/baseline/dist",
+  "runs": [
+    {
+      "run": 1,
+      "loadavg1": 3.88,
+      "fcp": 748,
+      "topbar": 675.1,
+      "scene": 3009.7
+    },
+    {
+      "run": 2,
+      "loadavg1": 3.89,
+      "fcp": 636,
+      "topbar": 609.7,
+      "scene": 2438.3
+    },
+    {
+      "run": 3,
+      "loadavg1": 3.89,
+      "fcp": 632,
+      "topbar": 609.6,
+      "scene": 2462.9
+    },
+    {
+      "run": 4,
+      "loadavg1": 3.81,
+      "fcp": 628,
+      "topbar": 605.4,
+      "scene": 2399.7
+    },
+    {
+      "run": 5,
+      "loadavg1": 3.81,
+      "fcp": 620,
+      "topbar": 592.6,
+      "scene": 2357.9
+    }
+  ],
+  "median": {
+    "fcp": 632,
+    "topbar": 609.6,
+    "scene": 2438.3
+  },
+  "conditions": {
+    "viewport": {
+      "width": 1440,
+      "height": 900
+    },
+    "network": {
+      "offline": false,
+      "latency": 40,
+      "downloadThroughput": 1250000,
+      "uploadThroughput": 625000
+    },
+    "cache": "fresh browser context per run, cache disabled"
+  },
+  "chrome": "Chrome/156.0.8078.79",
+  "gpu": "ANGLE (Intel, Mesa Intel(R) UHD Graphics (CML GT2), OpenGL ES 3.2)"
+}
