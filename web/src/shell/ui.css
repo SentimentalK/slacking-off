@@ -986,8 +986,7 @@
   top: 5px;
   bottom: 5px;
   min-width: 2px;
-  background: var(--blue);
-  opacity: 0.85;
+  background: rgba(255, 255, 255, 0.18);
   border-radius: 3px;
 }
 .shell .rp-gap {
@@ -1011,15 +1010,14 @@
   bottom: -3px;
   width: 2px;
   margin-left: -1px;
-  background: var(--gold);
-  box-shadow: 0 0 6px var(--gold);
+  background: #fff;
   pointer-events: none;
 }
 .shell .rp-labels {
   display: flex;
   justify-content: space-between;
   gap: 8px;
-  font-size: 11px;
+  font-size: 12px;
   color: var(--dim);
   font-variant-numeric: tabular-nums;
 }
@@ -1044,8 +1042,7 @@
   gap: 6px;
   color: var(--dim);
 }
-.shell .rp-field input,
-.shell .rp-world {
+.shell .rp-field input {
   font: inherit;
   color: inherit;
   background: rgba(255, 255, 255, 0.08);
@@ -1053,13 +1050,12 @@
   border-radius: 8px;
   padding: 4px 8px;
   min-width: 0;
-}
-.shell .rp-field input {
   width: 84px;
   font-variant-numeric: tabular-nums;
 }
 .shell .rp-world {
   max-width: 180px;
+  min-width: 0;
 }
 .shell .rp-world:disabled {
   opacity: 0.6;
@@ -1067,6 +1063,15 @@
 .shell .rp-retry {
   color: var(--gold);
   border-color: var(--gold);
+}
+.shell .rp-loading {
+  position: fixed;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  font-size: 14px;
+  color: #c9c2a8;
+  pointer-events: none;
 }
 
 @media (max-width: 700px) {
@@ -1078,11 +1083,7 @@
     transform: none;
     padding: 8px 10px;
   }
-  .shell .rp-labels {
-    font-size: 10px;
-  }
-  .shell .rp-controls button,
-  .shell .rp-world {
+  .shell .rp-controls button {
     padding-left: 8px;
     padding-right: 8px;
   }

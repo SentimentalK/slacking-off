@@ -59,6 +59,7 @@ export function ReplayMode({ override, clickRef, blocked, queryRef, onFrame, ui 
   const [loadError, setLoadError] = useState(false);
   const [retryToken, setRetryToken] = useState(0);
   const [reduceMotion, setReduceMotion] = useState(false);
+  const [narrow, setNarrow] = useState(false);
 
   const frameRef = useRef<Projection | null>(null);
   const selectedRef = useRef<number | null>(initial.agent);
@@ -204,6 +205,14 @@ export function ReplayMode({ override, clickRef, blocked, queryRef, onFrame, ui 
     return () => query.removeEventListener('change', update);
   }, []);
 
+  useEffect(() => {
+    const query = window.matchMedia('(max-width: 480px)');
+    const update = () => setNarrow(query.matches);
+    update();
+    query.addEventListener('change', update);
+    return () => query.removeEventListener('change', update);
+  }, []);
+
   const playInterval = Math.max(MIN_STEP_MS, ((frame?.tick_seconds ?? 5) * 1000) / speed);
   useEffect(() => {
     intervalRef.current = playInterval;
@@ -282,8 +291,9 @@ export function ReplayMode({ override, clickRef, blocked, queryRef, onFrame, ui 
   if (!ui) return null;
   return (
     <>
-      <Feed events={feedEvents} colors={colors} />
+      {narrow ? null : <Feed events={feedEvents} colors={colors} />}
       <Card agent={agent} tick={frame?.tick ?? 0} top3={[]} visionState={false} />
+      {frame === null && !loadError ? <div class="rp-loading">正在载入回放…</div> : null}
       <BottomReplay
         worlds={worlds}
         worldId={worldId}

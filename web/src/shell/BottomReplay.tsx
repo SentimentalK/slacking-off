@@ -2,7 +2,7 @@
 // gaps between spans, the marker highlights and the pointer, plus transport and
 // navigation. Every position is in replayable offsets, so the gaps take no room.
 
-import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
+import { useMemo, useRef, useState } from 'preact/hooks';
 import { MARKER_COLOR, SPEEDS, offsetOfTick, pointerOffset, precedingSpanIndex, spanIndexAt, tickAtOffset } from '../replay-source';
 import type { SpanIndex } from '../replay-source';
 import type { Timeline, WorldSummary } from '../types';
@@ -51,17 +51,21 @@ export function BottomReplay({
   const anchor = current >= 0 ? current : precedingSpanIndex(index, tick);
   const dragging = useRef(false);
 
-  const [tickText, setTickText] = useState('');
-  useEffect(() => {
-    setTickText(tick >= 0 ? String(tick) : '');
-  }, [tick]);
+  const [draft, setDraft] = useState<string | null>(null);
+  const tickText = draft ?? (tick >= 0 ? String(tick) : '');
 
-  const segments = spans.map((span, i) => ({
-    key: `span:${i}`,
-    left: index.starts[i] * scale,
-    width: (span.to - span.from + 1) * scale,
-    title: `第 ${i + 1} 段 · TICK ${span.from}–${span.to}`,
-  }));
+  const pointer = pointerOffset(index, tick);
+  const segments = spans.map((span, i) => {
+    const length = span.to - span.from + 1;
+    const played = Math.min(1, Math.max(0, (pointer - index.starts[i]) / length)) * 100;
+    return {
+      key: `span:${i}`,
+      left: index.starts[i] * scale,
+      width: length * scale,
+      played,
+      title: `第 ${i + 1} 段 · TICK ${span.from}–${span.to}`,
+    };
+  });
   const gaps = spans.slice(1).map((span, i) => ({
     key: `gap:${i}`,
     left: index.starts[i + 1] * scale,
@@ -98,14 +102,11 @@ export function BottomReplay({
 
   const commitTick = () => {
     const value = Number(tickText);
-    if (tickText.trim() === '' || !Number.isFinite(value)) {
-      setTickText(tick >= 0 ? String(tick) : '');
-      return;
+    if (tickText.trim() !== '' && Number.isFinite(value)) {
+      const rounded = Math.round(value);
+      onSeek(Math.max(0, Math.min(lastTick ?? rounded, rounded)));
     }
-    const rounded = Math.round(value);
-    const clamped = Math.max(0, Math.min(lastTick ?? rounded, rounded));
-    onSeek(clamped);
-    setTickText(String(clamped));
+    setDraft(null);
   };
 
   const cycleSpeed = () => {
@@ -157,7 +158,11 @@ export function BottomReplay({
                 <span
                   key={segment.key}
                   class="rp-span"
-                  style={{ left: `${segment.left}%`, width: `${segment.width}%` }}
+                  style={{
+                    left: `${segment.left}%`,
+                    width: `${segment.width}%`,
+                    background: `linear-gradient(to right, #ffd54a ${segment.played}%, rgba(255, 255, 255, 0.18) ${segment.played}%)`,
+                  }}
                   title={segment.title}
                 />
               ))}
@@ -172,7 +177,7 @@ export function BottomReplay({
                   title={mark.title}
                 />
               ))}
-              <span class="rp-pointer" style={{ left: `${pointerOffset(index, tick) * scale}%` }} />
+              <span class="rp-pointer" style={{ left: `${pointer * scale}%` }} />
             </div>
             <div class="rp-labels">
               <span>{spans[0].from}</span>
@@ -238,7 +243,7 @@ export function BottomReplay({
             inputMode="numeric"
             value={tickText}
             aria-label="跳转到回合"
-            onInput={(event) => setTickText(event.currentTarget.value)}
+            onInput={(event) => setDraft(event.currentTarget.value)}
             onBlur={commitTick}
             onKeyDown={(event) => {
               if (event.key === 'Enter') {
