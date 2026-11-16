@@ -51,6 +51,7 @@ const browser = await puppeteer.launch({
   executablePath,
   headless: true,
   args: [
+    '--lang=zh-CN', '--accept-lang=zh-CN',
     '--headless=new',
     '--no-sandbox',
     '--use-angle=gl',

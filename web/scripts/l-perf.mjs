@@ -90,7 +90,7 @@ async function measureGroup(group, shotPath) {
     executablePath,
     headless: !args.headed,
     defaultViewport: null,
-    args: ['--no-sandbox', '--hide-scrollbars', ...headlessArgs, `--window-size=${group.width},${group.height}`],
+    args: ['--lang=zh-CN', '--accept-lang=zh-CN', '--no-sandbox', '--hide-scrollbars', ...headlessArgs, `--window-size=${group.width},${group.height}`],
   });
   try {
     const page = await browser.newPage();
@@ -206,7 +206,7 @@ async function runMatrix() {
   const report = {
     fixture: args.fixture,
     chrome: await (async () => {
-      const b = await puppeteer.launch({ executablePath, headless: true, args: ['--no-sandbox', ...headlessArgs] });
+      const b = await puppeteer.launch({ executablePath, headless: true, args: ['--lang=zh-CN', '--accept-lang=zh-CN', '--no-sandbox', ...headlessArgs] });
       try {
         return await b.version();
       } finally {
@@ -370,7 +370,7 @@ async function runAuto(mode) {
     executablePath,
     headless: true,
     defaultViewport: null,
-    args: ['--no-sandbox', '--hide-scrollbars', ...headlessArgs, '--window-size=1440,900'],
+    args: ['--lang=zh-CN', '--accept-lang=zh-CN', '--no-sandbox', '--hide-scrollbars', ...headlessArgs, '--window-size=1440,900'],
   });
   const runs = [];
   try {
@@ -476,7 +476,7 @@ for (const config of selected) {
     executablePath,
     headless: !args.headed,
     defaultViewport: null,
-    args: ['--no-sandbox', '--hide-scrollbars', ...headlessArgs, ...windowArgs],
+    args: ['--lang=zh-CN', '--accept-lang=zh-CN', '--no-sandbox', '--hide-scrollbars', ...headlessArgs, ...windowArgs],
   });
   try {
     chromeVersion = await browser.version();

@@ -163,6 +163,7 @@ try {
     headless: true,
     defaultViewport: null,
     args: [
+      '--lang=zh-CN', '--accept-lang=zh-CN',
       '--no-sandbox',
       '--hide-scrollbars',
       '--headless=new',

@@ -749,6 +749,7 @@ async function main() {
     executablePath: CHROME,
     headless: true,
     args: [
+      '--lang=zh-CN', '--accept-lang=zh-CN',
       '--no-sandbox',
       '--disable-dev-shm-usage',
       '--hide-scrollbars',

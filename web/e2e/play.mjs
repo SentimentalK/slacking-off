@@ -1480,6 +1480,7 @@ async function main() {
     userDataDir: CHROME_DIR,
     defaultViewport: { width: 1440, height: 900, deviceScaleFactor: 1 },
     args: [
+      '--lang=zh-CN', '--accept-lang=zh-CN',
       '--no-sandbox',
       '--disable-dev-shm-usage',
       '--hide-scrollbars',
