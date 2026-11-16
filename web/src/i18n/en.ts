@@ -192,7 +192,7 @@ export const en: Record<Key, string> = {
   'shell.unknownPage': 'No such page: {path}',
   'shell.sceneFailed': "The scene didn't load. Refresh the page.",
   'top.watch': 'Watch',
-  'top.play': 'Jump in',
+  'top.play': 'Play',
   'top.replay': 'Replay',
   'top.replaying': '● Replay',
   'top.reconnecting': 'Reconnecting…',
