@@ -11,10 +11,11 @@ import { createGround } from './ground';
 import { createLighting, duskK } from './lighting';
 import { applyLamps, applyVision, installVisionShader } from './vision';
 import { allLampSources, LAMPS_OFF } from './lamplight';
-import type { FrameInput, Layer, Quality, SceneCtx } from './types';
+import type { FrameInput, Layer, Quality, RenderSettings, SceneCtx } from './types';
+import { overrideSettings, settingsFor } from './quality';
 
-export type { FrameInput, Layer, Quality, SceneCtx, UiState, VisionGrid } from './types';
-export { chooseQuality, rendererName, AutoQuality } from './quality';
+export type { FrameInput, Layer, Quality, RenderSettings, SceneCtx, UiState, VisionGrid } from './types';
+export { chooseQuality, rendererName, AutoQuality, settingsFor } from './quality';
 
 export interface ClickHit {
   clientX: number;
@@ -36,6 +37,7 @@ export interface WorldView {
   pick(x: number, y: number): number | null;
   resize(): void;
   setQuality(q: Quality): void;
+  setSettings(s: RenderSettings): void;
   setView(view: { focus?: Pos; zoom?: number }): void;
   frameCells(center: Pos, cells: number): void;
   capture(): { tick: number; png: string; calls: number; triangles: number };
@@ -80,6 +82,7 @@ const projectToPage = (v: THREE.Vector3, canvas: HTMLCanvasElement): { x: number
 export function createWorldView(canvas: HTMLCanvasElement, opts: WorldViewOptions): WorldView {
   const vision = installVisionShader();
   let quality: Quality = opts.quality;
+  let settings: RenderSettings = overrideSettings(settingsFor(quality), location.search);
   const renderer = new THREE.WebGLRenderer({ canvas, antialias: quality !== 'low' });
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -95,6 +98,7 @@ export function createWorldView(canvas: HTMLCanvasElement, opts: WorldViewOption
     scene,
     world,
     quality,
+    settings,
     worldId: 0,
     terrain: EMPTY_TERRAIN,
     pickables,
@@ -103,7 +107,7 @@ export function createWorldView(canvas: HTMLCanvasElement, opts: WorldViewOption
 
   let last: FrameInput | null = null;
   let layers: Layer[] = [];
-  let builtFor: { terrain: Terrain; worldId: number; quality: Quality } | null = null;
+  let builtFor: { terrain: Terrain; worldId: number; quality: Quality; grass: number } | null = null;
   let controls: CameraControls | null = null;
   let controlsDims = '';
   let pendingView: { focus?: Pos; zoom?: number } = {};
@@ -119,9 +123,9 @@ export function createWorldView(canvas: HTMLCanvasElement, opts: WorldViewOption
     }
   };
 
-  const applyRenderer = (q: Quality): void => {
-    renderer.setPixelRatio(q === 'high' ? Math.min(window.devicePixelRatio, 2) : 1);
-    renderer.shadowMap.enabled = q !== 'low';
+  const applyRenderer = (): void => {
+    renderer.setPixelRatio((quality === 'high' ? Math.min(window.devicePixelRatio, 2) : 1) * settings.scale);
+    renderer.shadowMap.enabled = settings.shadow > 0;
     renderer.shadowMap.type = THREE.PCFShadowMap;
     resize();
   };
@@ -129,15 +133,16 @@ export function createWorldView(canvas: HTMLCanvasElement, opts: WorldViewOption
   const ensureLayers = (input: FrameInput): void => {
     const terrain = input.terrain;
     const worldId = input.cur.world;
-    if (builtFor && builtFor.terrain === terrain && builtFor.worldId === worldId && builtFor.quality === quality) return;
+    if (builtFor && builtFor.terrain === terrain && builtFor.worldId === worldId && builtFor.quality === quality && builtFor.grass === settings.grass) return;
     for (const l of layers) l.dispose();
     layers = [];
     pickables.clear();
     ctx.terrain = terrain;
     ctx.worldId = worldId;
     ctx.quality = quality;
+    ctx.settings = settings;
     layers = [createGround(ctx), createForest(ctx), createDecor(ctx), ...extraLayers.map((make) => make(ctx))];
-    builtFor = { terrain, worldId, quality };
+    builtFor = { terrain, worldId, quality, grass: settings.grass };
   };
 
   const syncLamps = (input: FrameInput): void => {
@@ -191,7 +196,14 @@ export function createWorldView(canvas: HTMLCanvasElement, opts: WorldViewOption
     controls?.resize();
   }
 
-  applyRenderer(quality);
+  applyRenderer();
+
+  function setSettings(s: RenderSettings): void {
+    settings = s;
+    ctx.settings = s;
+    applyRenderer();
+    if (last) ensureLayers(last);
+  }
 
   return {
     draw(input) {
@@ -200,7 +212,7 @@ export function createWorldView(canvas: HTMLCanvasElement, opts: WorldViewOption
       ctx.camera = cam.camera;
       ensureLayers(input);
       for (const l of layers) l.update(input, ctx);
-      lighting.update(input, quality);
+      lighting.update(input, settings);
       cam.apply();
       if (PROTO_PITCH) tiltToPrototype(cam.camera);
       applyVision(vision, input.ui.vision);
@@ -215,13 +227,13 @@ export function createWorldView(canvas: HTMLCanvasElement, opts: WorldViewOption
       if (q === quality) return;
       quality = q;
       ctx.quality = q;
-      applyRenderer(q);
-      if (last) ensureLayers(last);
+      setSettings(settingsFor(q));
     },
+    setSettings,
     capture() {
       if (!last || !controls) throw new Error('capture before the first draw');
       ensureLayers(last);
-      lighting.update(last, quality);
+      lighting.update(last, settings);
       controls.apply();
       applyVision(vision, last.ui.vision);
       syncLamps(last);
