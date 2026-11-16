@@ -80,11 +80,19 @@ test('a window with median 33.4 ms but a 75th percentile of 50 ms steps down', (
   assert.ok(Math.abs(step.medianMs - 33.4) < 0.5);
 });
 
-test('a window whose 75th percentile is 33.4 ms settles at the current level', () => {
+test('a level that only just holds 30 fps (steady 33.4 ms) steps down for margin', () => {
   const { events, onEvent } = recorder();
   const auto = new LadderQuality(true, 0, onEvent);
   feedPattern(auto, [33.4], 6100);
+  assert.equal(auto.level, 1);
+  assert.equal(events.find((e) => e.event === 'step').from, 0);
+});
+
+test('a window with a 31 ms median and a 75th percentile of 33.4 ms settles at the current level', () => {
+  const { events, onEvent } = recorder();
+  const auto = new LadderQuality(true, 0, onEvent);
+  feedPattern(auto, [16.7, 16.7, 33.4, 16.7, 33.4], 6100);
   assert.equal(auto.level, 0);
   assert.equal(events.at(-1).event, 'settle');
-  assert.ok(Math.abs(events.at(-1).p75Ms - 33.4) < 0.5);
+  assert.ok(events.at(-1).medianMs <= 32);
 });

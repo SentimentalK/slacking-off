@@ -76,6 +76,7 @@ export const AUTO_LADDER: RenderSettings[] = [
 ];
 
 const LADDER_SLOW_P75_MS = 34;
+const LADDER_SLOW_MEDIAN_MS = 32;
 
 export function describeSettings(s: RenderSettings): string {
   const shadow = s.shadow === 0 ? '阴影 关' : `阴影 ${s.shadow}`;
@@ -125,7 +126,7 @@ export class LadderQuality {
     if (elapsed <= WINDOW_END_MS) return null;
     const p75Ms = percentile(this.intervals, 0.75);
     const medianMs = median(this.intervals);
-    if (p75Ms > LADDER_SLOW_P75_MS && this.index < AUTO_LADDER.length - 1) {
+    if ((medianMs > LADDER_SLOW_MEDIAN_MS || p75Ms > LADDER_SLOW_P75_MS) && this.index < AUTO_LADDER.length - 1) {
       this.onEvent({ t: now, event: 'step', from: this.index, to: this.index + 1, p75Ms, medianMs });
       this.index += 1;
       this.begin(now);
