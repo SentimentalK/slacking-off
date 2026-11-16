@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import type { VisionGrid } from './types';
-import { lampIrradiance, type LampSource } from './lamplight';
+import { FIELD_COLOR, FIELD_LAYERS, FIELD_STEP, lampField, type LampSource } from './lamplight';
 
 export interface VisionUniforms {
   visionMap: { value: THREE.DataTexture };
@@ -12,6 +12,12 @@ export interface VisionUniforms {
 }
 
 const LAMP_RES = 4;
+// Surfaces above the lamp (roofs, canopies) cannot be lit by its direct light; they get this share of the
+// unoriented lamp light instead, standing in for the glow bounced off the ground and walls below. Ramps in over
+// LAMP_WRAP_FROM..LAMP_WRAP_TO metres, so ground-level things (grass, roads, characters) stay purely oriented.
+const LAMP_WRAP = 1.2;
+const LAMP_WRAP_FROM = 1.4;
+const LAMP_WRAP_TO = 1.9;
 
 const VERTEX_HEAD = 'varying vec2 vVisionXZ;\nvarying float vVisionY;\n';
 const VERTEX_AFTER_PROJECT = [
@@ -36,7 +42,23 @@ const FRAGMENT_HEAD = [
   '',
 ].join('\n');
 const FRAGMENT_AFTER_LIGHTS = [
-  'if ( lampK > 0.0 ) { vec2 lampUV = vVisionXZ / lampSize; if ( lampUV.x >= 0.0 && lampUV.y >= 0.0 && lampUV.x <= 1.0 && lampUV.y <= 1.0 ) { float lampH = clamp( ( 2.3 - vVisionY ) / 0.9, 0.0, 1.0 ); reflectedLight.directDiffuse += BRDF_Lambert( diffuseColor.rgb ) * texture2D( lampMap, lampUV ).rgb * lampK * lampH; } }',
+  'if ( lampK > 0.0 ) {',
+  '  vec2 lampUV = vVisionXZ / lampSize;',
+  '  if ( lampUV.x >= 0.0 && lampUV.y >= 0.0 && lampUV.x <= 1.0 && lampUV.y <= 1.0 ) {',
+  `    float lampLf = clamp( vVisionY / ${FIELD_STEP.toFixed(2)}, 0.0, ${(FIELD_LAYERS - 1).toFixed(1)} );`,
+  '    float lampL0 = floor( lampLf );',
+  '    float lampL1 = min( lampL0 + 1.0, ' + (FIELD_LAYERS - 1).toFixed(1) + ' );',
+  '    float lampRows = lampSize.y * ' + LAMP_RES.toFixed(1) + ';',
+  '    float lampV = clamp( lampUV.y * lampRows, 0.5, lampRows - 0.5 );',
+  `    vec4 lampA = texture2D( lampMap, vec2( lampUV.x, ( lampL0 * lampRows + lampV ) / ( lampRows * ${FIELD_LAYERS.toFixed(1)} ) ) );`,
+  `    vec4 lampB = texture2D( lampMap, vec2( lampUV.x, ( lampL1 * lampRows + lampV ) / ( lampRows * ${FIELD_LAYERS.toFixed(1)} ) ) );`,
+  '    vec3 lampVec = mix( lampA.xyz, lampB.xyz, lampLf - lampL0 );',
+  '    float lampS = mix( lampA.w, lampB.w, lampLf - lampL0 );',
+  `    float lampWrap = ${LAMP_WRAP.toFixed(3)} * smoothstep( ${LAMP_WRAP_FROM.toFixed(1)}, ${LAMP_WRAP_TO.toFixed(1)}, vVisionY );`,
+  '    float lampE = max( 0.0, ( dot( inverseTransformDirection( normal, viewMatrix ), lampVec ) + lampWrap * lampS ) / ( 1.0 + lampWrap ) );',
+  `    reflectedLight.directDiffuse += BRDF_Lambert( diffuseColor.rgb ) * vec3( ${FIELD_COLOR.map((c) => c.toFixed(4)).join(', ')} ) * ( lampE * lampK );`,
+  '  }',
+  '}',
   '',
 ].join('\n');
 const FRAGMENT_BEFORE_TONEMAP = [
@@ -129,17 +151,11 @@ export function applyLamps(u: VisionUniforms, sources: LampSource[] | null, k: n
   const key = `${W}x${H}|` + sources.map((s) => [s.x, s.y, s.z, s.color.join(','), s.intensity, s.distance, s.decay].join(',')).join(';');
   if (key !== lampKey) {
     lampKey = key;
-    const rgb = lampIrradiance(sources, W, H, LAMP_RES);
+    const field = lampField(sources, W, H, LAMP_RES);
     const w = W * LAMP_RES;
-    const h = H * LAMP_RES;
+    const h = H * LAMP_RES * FIELD_LAYERS;
     const half = new Uint16Array(w * h * 4);
-    const one = THREE.DataUtils.toHalfFloat(1);
-    for (let i = 0; i < w * h; i++) {
-      half[i * 4] = THREE.DataUtils.toHalfFloat(rgb[i * 3]);
-      half[i * 4 + 1] = THREE.DataUtils.toHalfFloat(rgb[i * 3 + 1]);
-      half[i * 4 + 2] = THREE.DataUtils.toHalfFloat(rgb[i * 3 + 2]);
-      half[i * 4 + 3] = one;
-    }
+    for (let i = 0; i < half.length; i++) half[i] = THREE.DataUtils.toHalfFloat(field[i]);
     u.lampMap.value.dispose();
     u.lampMap.value = makeLampTexture(half, w, h);
   }
