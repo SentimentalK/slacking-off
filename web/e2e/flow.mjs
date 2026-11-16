@@ -159,10 +159,10 @@ function assert(ok, message) {
 
 async function waitForWindow(page, key) {
   await page.waitForSelector(`.win[data-window="${key}"]`, { timeout: 10_000 });
-  // The window's Escape listener and close-button focus are set up in the same
-  // effect pass, so focus means the key handler is attached.
+  // The window's Escape listener and its initial focus are set up in the same
+  // effect pass, so focus inside the window means the key handler is attached.
   await until(
-    () => page.evaluate(() => document.activeElement?.classList.contains('win-close') === true),
+    () => page.evaluate(() => document.activeElement?.closest('.win') !== null && document.activeElement?.closest('.win') !== undefined),
     { timeout: 10_000, label: `${key} window focus` },
   );
 }
@@ -227,11 +227,28 @@ async function main() {
       '--disable-dev-shm-usage',
       '--hide-scrollbars',
       '--use-gl=angle',
-      '--use-angle=swiftshader',
-      '--enable-unsafe-swiftshader',
+      '--use-angle=gl',
+      '--enable-gpu',
+      '--ignore-gpu-blocklist',
     ],
   });
   const page = await browser.newPage();
+  await page.evaluateOnNewDocument(() => {
+    try {
+      localStorage.setItem('loo.quality', 'low');
+    } catch {}
+  });
+  const renderer = await page.evaluate(() => {
+    const gl = document.createElement('canvas').getContext('webgl2');
+    const info = gl && gl.getExtension('WEBGL_debug_renderer_info');
+    return info ? String(gl.getParameter(info.UNMASKED_RENDERER_WEBGL)) : 'unknown';
+  });
+  if (/swiftshader|llvmpipe|softpipe|software/i.test(renderer)) {
+    console.error(`FAIL: software renderer: ${renderer}`);
+    await browser.close();
+    process.exit(1);
+  }
+  console.log(`PASS: browser renderer is ${renderer}`);
   const pageErrors = [];
   page.on('pageerror', (error) => pageErrors.push(error.message));
   page.on('dialog', (dialog) => {

@@ -592,11 +592,28 @@ async function main() {
       '--disable-dev-shm-usage',
       '--hide-scrollbars',
       '--use-gl=angle',
-      '--use-angle=swiftshader',
-      '--enable-unsafe-swiftshader',
+      '--use-angle=gl',
+      '--enable-gpu',
+      '--ignore-gpu-blocklist',
     ],
   });
   page = await browser.newPage();
+  await page.evaluateOnNewDocument(() => {
+    try {
+      localStorage.setItem('loo.quality', 'low');
+    } catch {}
+  });
+  const renderer = await page.evaluate(() => {
+    const gl = document.createElement('canvas').getContext('webgl2');
+    const info = gl && gl.getExtension('WEBGL_debug_renderer_info');
+    return info ? String(gl.getParameter(info.UNMASKED_RENDERER_WEBGL)) : 'unknown';
+  });
+  if (/swiftshader|llvmpipe|softpipe|software/i.test(renderer)) {
+    console.error(`FAIL: software renderer: ${renderer}`);
+    await browser.close();
+    process.exit(1);
+  }
+  console.log(`PASS: browser renderer is ${renderer}`);
   page.on('pageerror', (error) => pageErrors.push(error.message));
   await page.setViewport({ width: 1440, height: 900, deviceScaleFactor: 1 });
 
