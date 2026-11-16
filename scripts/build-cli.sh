@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Build the six `loo` CLI binaries into dist/ on Linux with cargo-zigbuild.
 # Every binary is stamped with the build commit (LOO_BUILD_SHA, read by
-# crates/cli/build.rs). Only Linux x64 and Windows x64 run here, through
-# binfmt and wine; the other four are checked with `file` alone.
+# crates/cli/build.rs). Linux x64 runs natively, Linux arm64 through qemu
+# binfmt and Windows x64 through wine; macOS and Windows arm64 are checked
+# with `file` alone.
 set -euo pipefail
 shopt -s nullglob
 cd "$(dirname "$0")/.."
