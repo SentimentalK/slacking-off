@@ -20,6 +20,10 @@ const ICON_MAX = 3.6;
 const ICON_OUTLINE = '#16120e';
 const ICON_LIFT = 0.45;
 const ICON_MIN_PX = 24;
+const ICON_RING = '#e5484d';
+const ICON_SIZE_UP = 1.5;
+const DUCK_SAT = 0.7;
+const DUCK_LIGHT = 0.95;
 const NAME_H = 0.38;
 const NAME_LIFT = 0.55;
 const tmpIconAt = new THREE.Vector3();
@@ -112,6 +116,13 @@ const minWorldSize = (camera: THREE.PerspectiveCamera, x: number, z: number): nu
   return (ICON_MIN_PX * 2 * d * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2)) / viewH;
 };
 
+/** The 3D shell of a duck: the UI palette colour with saturation x0.7 and lightness -5 % (the palette itself is untouched). */
+function calmShell(hex: string): THREE.Color {
+  const c = new THREE.Color(hex);
+  const hsl = c.getHSL({ h: 0, s: 0, l: 0 }, THREE.SRGBColorSpace);
+  return c.setHSL(hsl.h, hsl.s * DUCK_SAT, hsl.l * DUCK_LIGHT, THREE.SRGBColorSpace);
+}
+
 function canvasTexture(w: number, h: number, draw: (g: CanvasRenderingContext2D) => void): THREE.CanvasTexture {
   const c = document.createElement('canvas');
   c.width = w;
@@ -140,8 +151,21 @@ function drawAlert(g: CanvasRenderingContext2D): void {
   g.fillRect(27, 44, 10, 9);
 }
 
+/** The 2 px red ring the exclamation mark has, on a dark disc, for the small drops and sparks. */
+function drawIconRing(g: CanvasRenderingContext2D, size: number): void {
+  const c = size / 2;
+  g.beginPath();
+  g.arc(c, c, c - 3, 0, TAU);
+  g.fillStyle = 'rgba(22,18,14,0.78)';
+  g.fill();
+  g.lineWidth = 2;
+  g.strokeStyle = ICON_RING;
+  g.stroke();
+}
+
 function drawSweat(g: CanvasRenderingContext2D): void {
-  g.translate(4, 3);
+  drawIconRing(g, 48);
+  g.translate(8, 4);
   g.beginPath();
   g.moveTo(16, 2);
   g.quadraticCurveTo(29, 18, 27, 23);
@@ -191,7 +215,7 @@ class Actor {
     this.color = color;
     this.nick = nick;
     this.shared = shared;
-    this.duck = buildDuck(AGENT_COLORS[color], ACCENTS[color]);
+    this.duck = buildDuck(calmShell(AGENT_COLORS[color]), ACCENTS[color]);
   }
 
   get<T extends THREE.Object3D>(key: string, make: () => T): T {
@@ -332,7 +356,7 @@ function drawActor(a: Actor, s: Snap, link: Snap | null, input: FrameInput, ctx:
     for (let i = 0; i < 2; i++) {
       const sweat = a.get('sweat' + i, () => a.sweatSprite());
       sweat.position.set(cx + (i === 0 ? -0.3 : 0.3), 1.55 + 0.05 * Math.sin(clock * 5 + i) + lift, cz);
-      sweat.scale.setScalar(Math.max(0.35 * icon, minWorld));
+      sweat.scale.setScalar(Math.max(0.35 * ICON_SIZE_UP * icon, minWorld));
       sweat.visible = true;
     }
     const pulse = a.get('pulse', () => flatRing(RED, 0.46, 0.6, 32, { transparent: true, depthWrite: false }));
@@ -444,7 +468,7 @@ function drawActor(a: Actor, s: Snap, link: Snap | null, input: FrameInput, ctx:
         return mesh;
       });
       const ang = clock * 3 + (i * TAU) / 3;
-      star.scale.setScalar(icon);
+      star.scale.setScalar(icon * ICON_SIZE_UP);
       star.position.set(cx + 0.32 * icon * Math.cos(ang), STAR_Y + lift, cz + 0.32 * icon * Math.sin(ang));
       star.visible = true;
     }
@@ -455,7 +479,7 @@ export function createAgentsLayer(ctx: SceneCtx): Layer {
   const actors = new Map<string, Actor>();
   const shared: Shared = {
     alert: canvasTexture(64, 64, drawAlert),
-    sweat: canvasTexture(40, 40, drawSweat),
+    sweat: canvasTexture(48, 48, drawSweat),
   };
 
   const release = (key: string, c: SceneCtx): void => {

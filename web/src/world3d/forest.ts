@@ -19,8 +19,28 @@ const TREE_FADE_SECONDS = 0.25;
 const TREE_ZONE_AHEAD = 4;
 const TREE_ZONE_SIDE = 2;
 
-function inTreeZone(tree: Pos, me: Pos): boolean {
-  return tree.y > me.y && tree.y <= me.y + TREE_ZONE_AHEAD && Math.abs(tree.x - me.x) <= TREE_ZONE_SIDE;
+// The own shack is a 3x3 ring around its toilet cell; trees up to this many cells beyond that ring fade too.
+const TREE_ZONE_SHACK = 1;
+const SHACK_REACH = 2;
+
+function inTreeZone(tree: Pos, me: Pos, shack: Pos | null): boolean {
+  if (tree.y > me.y && tree.y <= me.y + TREE_ZONE_AHEAD && Math.abs(tree.x - me.x) <= TREE_ZONE_SIDE) return true;
+  return !!shack && Math.max(Math.abs(tree.x - shack.x), Math.abs(tree.y - shack.y)) <= 1 + TREE_ZONE_SHACK;
+}
+
+/** The shack the agent stands in or at the door of: the nearest toilet cell within SHACK_REACH (Chebyshev). */
+function ownShack(objects: readonly { kind: string; pos: Pos }[], me: Pos): Pos | null {
+  let best: Pos | null = null;
+  let bestD = SHACK_REACH + 1;
+  for (const o of objects) {
+    if (o.kind !== 'toilet') continue;
+    const d = Math.max(Math.abs(o.pos.x - me.x), Math.abs(o.pos.y - me.y));
+    if (d < bestD) {
+      bestD = d;
+      best = o.pos;
+    }
+  }
+  return best;
 }
 
 function fadeMaterial(src: THREE.Material): THREE.Material {
@@ -74,11 +94,12 @@ export class TreeFade {
     const dt = this.last ? Math.min(0.1, (now - this.last) / 1000) : 0;
     this.last = now;
     const me = input.ui.vision ? input.cur.agents.find((a) => a.id === input.ui.selected) : undefined;
-    const key = me ? `${me.pos.x},${me.pos.y}` : '';
+    const shack = me ? ownShack(input.cur.objects, me.pos) : null;
+    const key = me ? `${me.pos.x},${me.pos.y}|${shack ? `${shack.x},${shack.y}` : ''}` : '';
     if (key !== this.key) {
       this.key = key;
       for (let i = 0; i < this.roots.length; i++) {
-        this.target[i] = me && inTreeZone(this.roots[i], me.pos) ? TREE_FADE_OPACITY : 1;
+        this.target[i] = me && inTreeZone(this.roots[i], me.pos, shack) ? TREE_FADE_OPACITY : 1;
       }
       this.active = true;
     }

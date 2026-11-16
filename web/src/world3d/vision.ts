@@ -62,7 +62,7 @@ const FRAGMENT_AFTER_LIGHTS = [
   '',
 ].join('\n');
 const FRAGMENT_BEFORE_TONEMAP = [
-  'if ( visionOn > 0.5 ) { vec2 visionUV = vVisionXZ / visionSize; float visionK = ( visionUV.x < 0.0 || visionUV.y < 0.0 || visionUV.x > 1.0 || visionUV.y > 1.0 ) ? 0.30 : texture2D( visionMap, visionUV ).r; float visionSat = 0.65 + 0.35 * smoothstep( 0.5, 1.0, visionK ); vec3 visionL = vec3( dot( gl_FragColor.rgb, vec3( 0.2126, 0.7152, 0.0722 ) ) ); gl_FragColor.rgb = mix( visionL, gl_FragColor.rgb, visionSat ) * visionK; }',
+  'if ( visionOn > 0.5 ) { vec2 visionUV = vVisionXZ / visionSize; float visionK = ( visionUV.x < 0.0 || visionUV.y < 0.0 || visionUV.x > 1.0 || visionUV.y > 1.0 ) ? 0.36 : texture2D( visionMap, visionUV ).r; float visionSat = 0.75 + 0.25 * smoothstep( 0.5, 1.0, visionK ); vec3 visionL = vec3( dot( gl_FragColor.rgb, vec3( 0.2126, 0.7152, 0.0722 ) ) ); gl_FragColor.rgb = mix( visionL, gl_FragColor.rgb, visionSat ) * visionK; }',
   '',
 ].join('\n');
 

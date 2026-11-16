@@ -3,7 +3,7 @@ import type { VisionGrid } from '../world3d/types';
 
 const VISIBLE = 255;
 const MEMORY = 128;
-const DARK = 77;
+const DARK = 92;
 const SCALE = 4;
 const FADE = 1.5;
 const WILDERNESS = '~';

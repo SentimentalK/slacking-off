@@ -13,6 +13,11 @@ const BLADE_HEIGHT = 1.5;
 const GRASS_SALT = 200;
 const GRASS_SAT = 0.92;
 const GRASS_VALUE_MIN = 0.72;
+const GRASS_LIGHT = 0.9; // lightness x0.9 against the previous grass, hue nudged toward green
+const GRASS_HUE_SHIFT = 0.011;
+const BLOTCH_SCALE = 3.5; // cells
+const BLOTCH_AMP = 0.12; // lightness, +-
+const BLOTCH_SALT = 301;
 const GRASS_VALUE_SPAN = 0.45;
 const PATCH_AREA = (18 + 2 * MG) * (12 + 2 * MG);
 const PATCH_COUNT = 840;
@@ -23,6 +28,52 @@ const PATH_BLOBS = ['#82604a', '#8e6b54', '#7a5a40'];
 const PATH_CORE = '#6f5138';
 const PATH_EDGE_GRASS = 'rgba(88,122,46,0.85)';
 const FLOOR_HEX = 0x2c3a1c;
+
+function smooth(t: number): number {
+  return t * t * (3 - 2 * t);
+}
+
+/** Low-frequency lightness field in [-1, 1], one lattice cell per BLOTCH_SCALE world cells, deterministic per world seed. */
+export function blotch(worldId: number, x: number, z: number): number {
+  const u = x / BLOTCH_SCALE;
+  const v = z / BLOTCH_SCALE;
+  const i = Math.floor(u);
+  const j = Math.floor(v);
+  const fu = smooth(u - i);
+  const fv = smooth(v - j);
+  const at = (a: number, b: number) => rand01(worldId, a, b, BLOTCH_SALT) * 2 - 1;
+  const top = at(i, j) * (1 - fu) + at(i + 1, j) * fu;
+  const bottom = at(i, j + 1) * (1 - fu) + at(i + 1, j + 1) * fu;
+  return Math.max(-1, Math.min(1, 1.5 * (top * (1 - fv) + bottom * fv)));
+}
+
+function toneGrass(color: THREE.Color): THREE.Color {
+  const hsl = color.getHSL({ h: 0, s: 0, l: 0 }, THREE.SRGBColorSpace);
+  return color.setHSL(hsl.h + GRASS_HUE_SHIFT, hsl.s, hsl.l * GRASS_LIGHT, THREE.SRGBColorSpace);
+}
+
+/** The blotch field as a translucent black/white layer, 4 px per cell, to be stretched over the ground canvas. */
+function blotchLayer(worldId: number, GW: number, GH: number): HTMLCanvasElement {
+  const R = 4;
+  const c = document.createElement('canvas');
+  c.width = GW * R;
+  c.height = GH * R;
+  const g = c.getContext('2d');
+  if (!g) throw new Error('2d canvas context unavailable');
+  const img = g.createImageData(c.width, c.height);
+  for (let py = 0; py < c.height; py++) {
+    for (let px = 0; px < c.width; px++) {
+      const n = blotch(worldId, (px + 0.5) / R - FOREST_MG, (py + 0.5) / R - FOREST_MG);
+      const o = (py * c.width + px) * 4;
+      const dark = n < 0;
+      img.data[o] = img.data[o + 1] = img.data[o + 2] = dark ? 0 : 255;
+      // A white layer of alpha 0.08 lifts a mid-green about as much as a black one of 0.12 lowers it.
+      img.data[o + 3] = Math.round(255 * Math.abs(n) * (dark ? BLOTCH_AMP : BLOTCH_AMP * 0.67));
+    }
+  }
+  g.putImageData(img, 0, 0);
+  return c;
+}
 
 const textures = new WeakMap<Terrain, Map<string, THREE.CanvasTexture>>();
 
@@ -69,13 +120,16 @@ function paintGround(terrain: Terrain, worldId: number, TS: number): THREE.Canva
     g.fill();
   };
 
-  g.fillStyle = '#4a6629';
+  g.fillStyle = '#' + toneGrass(new THREE.Color(0x4a6629)).getHexString(THREE.SRGBColorSpace);
   g.fillRect(0, 0, c.width, c.height);
   const patches = Math.round((PATCH_COUNT * GW * GH) / PATCH_AREA);
   for (let i = 0; i < patches; i++) {
     g.fillStyle = pick(PATCH_COLORS);
     ellipse(rng.next() * c.width, rng.next() * c.height, (11.25 + rng.next() * 36) * s, (8.1 + rng.next() * 24.75) * s, rng.next() * 3);
   }
+
+  g.imageSmoothingEnabled = true;
+  g.drawImage(blotchLayer(worldId, GW, GH), 0, 0, c.width, c.height);
 
   const ey = terrain.entrance.y;
 
@@ -200,7 +254,8 @@ function grassLayer(ctx: SceneCtx, root: THREE.Group, density: number): GrassLay
       inst.set(i, [m]);
       const color = new THREE.Color(GRASS_COLORS[Math.floor(r(7) * GRASS_COLORS.length)]);
       const hsl = color.getHSL({ h: 0, s: 0, l: 0 });
-      color.setHSL(hsl.h, hsl.s * GRASS_SAT, hsl.l * (GRASS_VALUE_MIN + r(8) * GRASS_VALUE_SPAN));
+      const tone = 1 + BLOTCH_AMP * blotch(ctx.worldId, cell.x + r(0), cell.y + r(1));
+      color.setHSL(hsl.h + GRASS_HUE_SHIFT, hsl.s * GRASS_SAT, hsl.l * GRASS_LIGHT * tone * (GRASS_VALUE_MIN + r(8) * GRASS_VALUE_SPAN));
       mesh.setColorAt(i, color);
     }
   });
