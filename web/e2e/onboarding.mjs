@@ -722,6 +722,17 @@ async function phaseReplayPage() {
     fail(`/replay overflows horizontally at 390px: page ${overflow.page}px, bar ${overflow.bar}px`);
   }
   pass('/replay fits 390px without horizontal overflow');
+  const drawn = await until(
+    () =>
+      page.evaluate(() => {
+        const input = document.querySelector('.rp-field input');
+        const typed = input ? Number(input.value) : Number.NaN;
+        const shown = window.__looView ? window.__looView.tick() : -1;
+        return shown > 0 && shown === typed ? { shown, typed } : null;
+      }),
+    { timeout: 10_000, interval: 100, label: 'the 390 scene to draw the tick shown in the tick field' },
+  );
+  pass(`390 scene draws tick ${drawn.shown}, the tick field shows ${drawn.typed}`);
   await screenshot('l5/replay-390.png');
   await page.setViewport({ width: 1440, height: 900, deviceScaleFactor: 1 });
 

@@ -138,7 +138,8 @@
   align-items: center;
   gap: 8px;
 }
-.shell .win .bctl select.model-select {
+.shell .win .bctl select.model-select,
+.shell .rp-world {
   appearance: none;
   -webkit-appearance: none;
   font: inherit;
@@ -153,10 +154,18 @@
   padding: 6px 30px 6px 11px;
   cursor: pointer;
 }
-.shell .win .bctl select.model-select:hover {
+.shell .win .bctl select.model-select:hover,
+.shell .rp-world:hover {
   background-color: rgba(255, 255, 255, 0.16);
 }
-.shell .win .bctl select.model-select option {
+.shell .win .bctl select.model-select:focus-visible,
+.shell .rp-world:focus-visible {
+  outline: none;
+  border-color: rgba(255, 213, 74, 0.7);
+  box-shadow: 0 0 0 1.5px rgba(255, 213, 74, 0.7);
+}
+.shell .win .bctl select.model-select option,
+.shell .rp-world option {
   background: #1b2230;
   color: #f6f3ea;
 }
