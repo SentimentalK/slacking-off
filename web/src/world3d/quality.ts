@@ -52,42 +52,11 @@ export function rendererName(): string {
 
 const WINDOW_START_MS = 3000;
 const WINDOW_END_MS = 6000;
-const SLOW_FRAME_MS = 25;
 
-const STEP_DOWN: Partial<Record<Quality, Quality>> = { high: 'medium', medium: 'low' };
-
-export class AutoQuality {
-  private tier: Quality | null = null;
-  private t0 = 0;
-  private last: number | null = null;
-  private intervals: number[] = [];
-  private settled = false;
-
-  private readonly enabled: boolean;
-
-  constructor(enabled: boolean) {
-    this.enabled = enabled;
-  }
-
-  frame(now: number, current: Quality): Quality | null {
-    const lower = STEP_DOWN[current];
-    if (!this.enabled || this.settled || lower === undefined) return null;
-    if (this.tier !== current) {
-      this.tier = current;
-      this.t0 = now;
-      this.last = null;
-      this.intervals = [];
-    }
-    const elapsed = now - this.t0;
-    if (this.last !== null && elapsed >= WINDOW_START_MS && elapsed <= WINDOW_END_MS) {
-      this.intervals.push(now - this.last);
-    }
-    this.last = now;
-    if (elapsed <= WINDOW_END_MS) return null;
-    if (median(this.intervals) > SLOW_FRAME_MS) return lower;
-    this.settled = true;
-    return null;
-  }
+export function percentile(xs: number[], p: number): number {
+  if (xs.length === 0) return 0;
+  const s = [...xs].sort((a, b) => a - b);
+  return s[Math.min(s.length - 1, Math.floor(p * s.length))];
 }
 
 function median(xs: number[]): number {
@@ -106,7 +75,7 @@ export const AUTO_LADDER: RenderSettings[] = [
   { scale: 0.75, grass: 0, shadow: 0 },
 ];
 
-const LADDER_SLOW_MS = 33.4;
+const LADDER_SLOW_P75_MS = 34;
 
 export function describeSettings(s: RenderSettings): string {
   const shadow = s.shadow === 0 ? '阴影 关' : `阴影 ${s.shadow}`;
@@ -122,6 +91,7 @@ export interface LadderEvent {
   event: 'start' | 'step' | 'settle';
   from: number;
   to: number;
+  p75Ms: number | null;
   medianMs: number | null;
 }
 
@@ -153,15 +123,16 @@ export class LadderQuality {
     }
     this.last = now;
     if (elapsed <= WINDOW_END_MS) return null;
+    const p75Ms = percentile(this.intervals, 0.75);
     const medianMs = median(this.intervals);
-    if (medianMs > LADDER_SLOW_MS && this.index < AUTO_LADDER.length - 1) {
-      this.onEvent({ t: now, event: 'step', from: this.index, to: this.index + 1, medianMs });
+    if (p75Ms > LADDER_SLOW_P75_MS && this.index < AUTO_LADDER.length - 1) {
+      this.onEvent({ t: now, event: 'step', from: this.index, to: this.index + 1, p75Ms, medianMs });
       this.index += 1;
       this.begin(now);
       return this.index;
     }
     this.settled = true;
-    this.onEvent({ t: now, event: 'settle', from: this.index, to: this.index, medianMs });
+    this.onEvent({ t: now, event: 'settle', from: this.index, to: this.index, p75Ms, medianMs });
     return null;
   }
 
@@ -169,7 +140,7 @@ export class LadderQuality {
     this.t0 = now;
     this.last = null;
     this.intervals = [];
-    this.onEvent({ t: now, event: 'start', from: this.index, to: this.index, medianMs: null });
+    this.onEvent({ t: now, event: 'start', from: this.index, to: this.index, p75Ms: null, medianMs: null });
   }
 }
 
