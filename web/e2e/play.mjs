@@ -850,6 +850,71 @@ async function framingCheck(label) {
   pass(`framing: ${label} 9x9 view spans ${span.value.toFixed(0)} px ${span.axis}ly, need ${span.need.toFixed(0)} px`);
 }
 
+function hexOf(text) {
+  const n = Number.parseInt(text.replace('#', ''), 16);
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
+
+function duckColours() {
+  const sprites = fs.readFileSync(path.join(ROOT, 'web/src/sprites.ts'), 'utf8');
+  const block = sprites.match(/export const AGENT_COLORS = \[([\s\S]*?)\]/)[1];
+  const shells = [...block.matchAll(/'(#[0-9a-fA-F]{6})'/g)].map((m) => m[1]);
+  const ground = fs.readFileSync(path.join(ROOT, 'web/src/world3d/ground.ts'), 'utf8').match(/FLOOR_HEX = 0x([0-9a-fA-F]{6})/)[1];
+  return { shells, floor: `#${ground}` };
+}
+
+async function duckVisibleCheck(label) {
+  await sleep(800);
+  const me = (await playSnap()).body.result.me;
+  const { shells, floor } = duckColours();
+  const sample = await page.evaluate(
+    async (agentId, half) => {
+      const view = window.__looView;
+      const canvas = document.querySelector('canvas.ui-canvas');
+      const at = view ? view.screenOf(agentId) : null;
+      if (!canvas || !at) return null;
+      const rect = canvas.getBoundingClientRect();
+      const frame = view.capture();
+      const image = new Image();
+      image.src = frame.png;
+      await image.decode();
+      const work = document.createElement('canvas');
+      work.width = image.width;
+      work.height = image.height;
+      const context = work.getContext('2d');
+      context.drawImage(image, 0, 0);
+      const k = image.width / rect.width;
+      const cx = Math.round((at.x - rect.left) * k);
+      const cy = Math.round((at.y - rect.top) * k);
+      const size = Math.round(half * 2 * k);
+      const data = context.getImageData(cx - Math.round(half * k), cy - Math.round(half * k), size, size).data;
+      const sum = [0, 0, 0];
+      for (let i = 0; i < data.length; i += 4) {
+        sum[0] += data[i];
+        sum[1] += data[i + 1];
+        sum[2] += data[i + 2];
+      }
+      const n = data.length / 4;
+      return { mean: sum.map((v) => v / n), at };
+    },
+    me.agent_id,
+    12,
+  );
+  assert(sample, `${label}: the duck is not on the canvas`);
+  const shell = hexOf(shells[me.color]);
+  const forest = hexOf(floor);
+  const dist = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+  const toShell = dist(sample.mean, shell);
+  const toForest = dist(sample.mean, forest);
+  assert(
+    toShell < toForest,
+    `${label}: the 24x24 patch around the duck averages ${sample.mean.map((v) => v.toFixed(0)).join(',')}, ${toShell.toFixed(0)} from the shell and ${toForest.toFixed(0)} from the forest`,
+  );
+  pass(
+    `duck visible: ${label} patch around the duck averages ${sample.mean.map((v) => v.toFixed(0)).join(',')}, ${toShell.toFixed(0)} from the shell colour and ${toForest.toFixed(0)} from the forest floor`,
+  );
+}
+
 async function assertMenuClearOfShack(label, toilet) {
   const box = await page.evaluate((cell) => {
     const view = window.__looView;
@@ -1055,6 +1120,8 @@ async function shotSession(label, { entry = null, menu = null, using = null, che
   await joinWithRoom(label);
   if (entry) {
     await framingCheck(label);
+    const vp = page.viewport();
+    if (vp.width < vp.height) await duckVisibleCheck(label);
     await shot(entry, `${label}: just joined`, { checkWidth });
   }
   if (menu || using) await walkToToiletByClicks(label);
@@ -1164,7 +1231,7 @@ async function clickOnlyRound({ label, shots = {}, memory = false, checkWidth = 
     pass(
       `${label}: one-click far walk (${pathSteps} steps), ${clicks} clicks into the shack, closed the door, used, success at tick ${successTick}`,
     );
-    await assertChinese(page, ['.play-feed', '.ui-card', '.ui-bottom'], `${label}: my events, card and bottom bar`);
+    await assertChinese(page, ['.play-feed', '.ui-card', '.ui-bottom'], `${label}: my events, card and bottom bar`, [(await playSnap()).body.result.me.nick]);
 
     if (memory) {
       const walked = await centreOffset(me);
@@ -1622,17 +1689,17 @@ async function main() {
     const humanBlocked = await until(
       async () => {
         const text = await pageEventsText();
-        return text.includes(`blocked by agent ${AI_NICK}`) ? text : null;
+        return text.includes(`被玩家 ${AI_NICK}`) && text.includes('挡住') ? text : null;
       },
       { timeout: 6_000, interval: 150, label: 'the page showing the human blocked by the AI' },
     );
     assert(
-      /towards the west is blocked by agent e2e-ai/.test(humanBlocked),
+      new RegExp(`朝西被玩家 ${AI_NICK}.*挡住`).test(humanBlocked),
       `unexpected page block text: ${humanBlocked.slice(-300)}`,
     );
     const humanPos = (await playSnap()).body.result.agents.find((agent) => agent.id === humanId)?.pos;
     assert(humanPos && humanPos.x === ENTRANCE.x + 1 && humanPos.y === ENTRANCE.y, `human moved to ${JSON.stringify(humanPos)}`);
-    pass(`page action was stopped by the AI: ${humanBlocked.split('\n').find((line) => line.includes('blocked by'))?.trim()}`);
+    pass(`page action was stopped by the AI: ${humanBlocked.split('\n').find((line) => line.includes('挡住'))?.trim()}`);
 
     // --- attack ------------------------------------------------------------
     phase('CLI attack');
@@ -1646,12 +1713,12 @@ async function main() {
     const attackText = await until(
       async () => {
         const text = await pageEventsText();
-        return text.includes(`hit ${HUMAN_NICK}`) ? text : null;
+        return text.includes(`打中了 ${HUMAN_NICK}`) ? text : null;
       },
       { timeout: 6_000, interval: 200, label: 'the hit in the page event stream' },
     );
     assert(
-      new RegExp(`hit ${HUMAN_NICK} .*deadline -6`).test(attackText),
+      new RegExp(`打中了 ${HUMAN_NICK} .*期限减 6，`).test(attackText),
       `the page event stream has no AttackLanded line: ${attackText.slice(-400)}`,
     );
     const cliHit = cliEvents();

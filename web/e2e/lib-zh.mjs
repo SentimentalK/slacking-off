@@ -11,8 +11,8 @@ async function nicknames(page) {
   return [...(body.agents ?? []), ...(body.queue ?? [])].map((entry) => entry.nick).filter(Boolean);
 }
 
-export async function assertChinese(page, selectors, label) {
-  const names = [...new Set(await nicknames(page))].sort((a, b) => b.length - a.length);
+export async function assertChinese(page, selectors, label, extraNicks = []) {
+  const names = [...new Set([...(await nicknames(page)), ...extraNicks])].sort((a, b) => b.length - a.length);
   const text = await page.evaluate((list) => {
     return list
       .flatMap((selector) => Array.from(document.querySelectorAll(selector), (node) => node.innerText))
