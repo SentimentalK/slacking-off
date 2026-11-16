@@ -18,7 +18,8 @@ import {
 import { duskK } from './lighting';
 import { clearLampSources, setLampSources, type LampSource } from './lamplight';
 import { rand01 } from './rng';
-import type { Layer, SceneCtx } from './types';
+import { TreeFade } from './forest';
+import type { FrameInput, Layer, SceneCtx } from './types';
 
 const PI = Math.PI;
 const LAMP_BULB_Y = 1.45;
@@ -117,10 +118,12 @@ export function createDecor(ctx: SceneCtx): Layer {
     { inst: crateI, items: crates },
     { inst: lampI, items: lamps },
   ];
+  const fades = [new TreeFade(pineI, pines), new TreeFade(bigPineI, bigPines)];
   let sig: string | null = null;
 
   return {
-    update(input) {
+    update(input: FrameInput) {
+      for (const f of fades) f.update(input);
       const occ = objectKeys(input.cur.objects);
       const s = signature(occ);
       if (s !== sig) {
@@ -135,6 +138,7 @@ export function createDecor(ctx: SceneCtx): Layer {
       LAMP_BULB_MAT.emissiveIntensity = 0.2 + 2.2 * k;
     },
     dispose() {
+      for (const f of fades) f.dispose();
       for (const { inst } of groups) inst.remove();
       clearLampSources(LAMP_OWNER);
       root.removeFromParent();

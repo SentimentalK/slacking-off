@@ -5,7 +5,7 @@ import { Instancer } from './instancer';
 import { PINE_PARTS, STUMP_PARTS, pineMatrices, place, local } from './models';
 import { S } from './materials';
 import { rand01 } from './rng';
-import type { Layer, SceneCtx } from './types';
+import type { FrameInput, Layer, SceneCtx } from './types';
 
 const PI = Math.PI;
 const FIELD_DIRS: Array<[number, number]> = [[1, 0], [-1, 0], [0, 1], [0, -1]];
@@ -13,6 +13,98 @@ const CAST_RING = 3;
 export const FOREST_MG = 36;
 const FAR_RING = 12;
 const NO_SHADOW_PINE_PARTS = PINE_PARTS.map((p) => ({ ...p, shadow: false }));
+
+export const TREE_FADE_OPACITY = 0.25;
+const TREE_FADE_SECONDS = 0.25;
+const TREE_ZONE_AHEAD = 4;
+const TREE_ZONE_SIDE = 2;
+
+function inTreeZone(tree: Pos, me: Pos): boolean {
+  return tree.y > me.y && tree.y <= me.y + TREE_ZONE_AHEAD && Math.abs(tree.x - me.x) <= TREE_ZONE_SIDE;
+}
+
+function fadeMaterial(src: THREE.Material): THREE.Material {
+  const mat = src.clone();
+  const base = src.onBeforeCompile;
+  mat.transparent = true;
+  mat.onBeforeCompile = (shader, renderer) => {
+    base.call(mat, shader, renderer);
+    shader.vertexShader =
+      'attribute float aFade;\nvarying float vFade;\n' +
+      shader.vertexShader.replace('#include <begin_vertex>', (m) => `${m}\nvFade = aFade;`);
+    shader.fragmentShader =
+      'varying float vFade;\n' +
+      shader.fragmentShader.replace('#include <color_fragment>', (m) => `${m}\ndiffuseColor.a *= vFade;`);
+  };
+  return mat;
+}
+
+export class TreeFade {
+  private readonly values: Float32Array;
+  private readonly target: Float32Array;
+  private readonly attrs: THREE.InstancedBufferAttribute[] = [];
+  private readonly mats: THREE.Material[] = [];
+  private readonly geos: THREE.BufferGeometry[] = [];
+  private key = '';
+  private last = 0;
+  private active = false;
+
+  constructor(
+    inst: Instancer,
+    private readonly roots: Pos[],
+  ) {
+    this.values = new Float32Array(roots.length).fill(1);
+    this.target = new Float32Array(roots.length).fill(1);
+    for (const m of inst.meshes) {
+      const geo = m.geometry.clone();
+      const attr = new THREE.InstancedBufferAttribute(this.values, 1);
+      attr.setUsage(THREE.DynamicDrawUsage);
+      geo.setAttribute('aFade', attr);
+      const mat = fadeMaterial(m.material as THREE.Material);
+      m.geometry = geo;
+      m.material = mat;
+      this.attrs.push(attr);
+      this.mats.push(mat);
+      this.geos.push(geo);
+    }
+  }
+
+  update(input: FrameInput): void {
+    const now = performance.now();
+    const dt = this.last ? Math.min(0.1, (now - this.last) / 1000) : 0;
+    this.last = now;
+    const me = input.ui.vision ? input.cur.agents.find((a) => a.id === input.ui.selected) : undefined;
+    const key = me ? `${me.pos.x},${me.pos.y}` : '';
+    if (key !== this.key) {
+      this.key = key;
+      for (let i = 0; i < this.roots.length; i++) {
+        this.target[i] = me && inTreeZone(this.roots[i], me.pos) ? TREE_FADE_OPACITY : 1;
+      }
+      this.active = true;
+    }
+    if (!this.active) return;
+    const step = (dt * (1 - TREE_FADE_OPACITY)) / TREE_FADE_SECONDS;
+    let changed = false;
+    let moving = false;
+    for (let i = 0; i < this.values.length; i++) {
+      const v = this.values[i];
+      const t = this.target[i];
+      if (v !== t) {
+        const next = Math.abs(t - v) <= step ? t : v + Math.sign(t - v) * step;
+        this.values[i] = next;
+        changed = true;
+      }
+      if (this.values[i] !== t) moving = true;
+    }
+    if (changed) for (const a of this.attrs) a.needsUpdate = true;
+    this.active = moving;
+  }
+
+  dispose(): void {
+    for (const m of this.mats) m.dispose();
+    for (const g of this.geos) g.dispose();
+  }
+}
 
 interface PineRec {
   x: number;
@@ -196,11 +288,14 @@ export function createForest(ctx: SceneCtx): Layer {
   const stumpInst = new Instancer(STUMP_PARTS, stumps.length, root);
   stumps.forEach((s, i) => stumpInst.set(i, s.mats));
 
+  const fades = [new TreeFade(pineInst, nearPines), new TreeFade(farInst, farPines)];
+
   checkpoint(root, ex, ey);
 
   let sig: string | null = null;
   return {
     update(input) {
+      for (const f of fades) f.update(input);
       const walls = wallKeys(input.cur.objects);
       const s = signature(walls);
       if (s === sig) return;
@@ -211,6 +306,7 @@ export function createForest(ctx: SceneCtx): Layer {
       stumpInst.flush();
     },
     dispose() {
+      for (const f of fades) f.dispose();
       pineInst.remove();
       farInst.remove();
       stumpInst.remove();
