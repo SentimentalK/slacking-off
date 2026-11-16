@@ -59,6 +59,11 @@ export function percentile(xs: number[], p: number): number {
   return s[Math.min(s.length - 1, Math.floor(p * s.length))];
 }
 
+function mean(xs: number[]): number {
+  if (xs.length === 0) return 0;
+  return xs.reduce((a, b) => a + b, 0) / xs.length;
+}
+
 function median(xs: number[]): number {
   if (xs.length === 0) return 0;
   const s = [...xs].sort((a, b) => a - b);
@@ -75,8 +80,8 @@ export const AUTO_LADDER: RenderSettings[] = [
   { scale: 0.75, grass: 0, shadow: 0 },
 ];
 
-const LADDER_SLOW_P75_MS = 34;
-const LADDER_SLOW_MEDIAN_MS = 32;
+// Mean, not median: vsync snaps single intervals to 16.7 / 33.3 / 50 ms.
+const LADDER_SLOW_MEAN_MS = 32.5;
 
 export function describeSettings(s: RenderSettings): string {
   const shadow = s.shadow === 0 ? '阴影 关' : `阴影 ${s.shadow}`;
@@ -92,6 +97,7 @@ export interface LadderEvent {
   event: 'start' | 'step' | 'settle';
   from: number;
   to: number;
+  meanMs: number | null;
   p75Ms: number | null;
   medianMs: number | null;
 }
@@ -126,14 +132,15 @@ export class LadderQuality {
     if (elapsed <= WINDOW_END_MS) return null;
     const p75Ms = percentile(this.intervals, 0.75);
     const medianMs = median(this.intervals);
-    if ((medianMs > LADDER_SLOW_MEDIAN_MS || p75Ms > LADDER_SLOW_P75_MS) && this.index < AUTO_LADDER.length - 1) {
-      this.onEvent({ t: now, event: 'step', from: this.index, to: this.index + 1, p75Ms, medianMs });
+    const meanMs = mean(this.intervals);
+    if (meanMs > LADDER_SLOW_MEAN_MS && this.index < AUTO_LADDER.length - 1) {
+      this.onEvent({ t: now, event: 'step', from: this.index, to: this.index + 1, meanMs, p75Ms, medianMs });
       this.index += 1;
       this.begin(now);
       return this.index;
     }
     this.settled = true;
-    this.onEvent({ t: now, event: 'settle', from: this.index, to: this.index, p75Ms, medianMs });
+    this.onEvent({ t: now, event: 'settle', from: this.index, to: this.index, meanMs, p75Ms, medianMs });
     return null;
   }
 
@@ -141,7 +148,7 @@ export class LadderQuality {
     this.t0 = now;
     this.last = null;
     this.intervals = [];
-    this.onEvent({ t: now, event: 'start', from: this.index, to: this.index, p75Ms: null, medianMs: null });
+    this.onEvent({ t: now, event: 'start', from: this.index, to: this.index, meanMs: null, p75Ms: null, medianMs: null });
   }
 }
 

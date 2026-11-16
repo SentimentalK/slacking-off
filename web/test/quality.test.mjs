@@ -70,29 +70,28 @@ function feedPattern(auto, pattern, untilMs) {
   }
 }
 
-test('a window with median 33.4 ms but a 75th percentile of 50 ms steps down', () => {
+test('a level that mixes 33.3 and 50 ms frames (about 25 fps) steps down', () => {
   const { events, onEvent } = recorder();
   const auto = new LadderQuality(true, 0, onEvent);
-  feedPattern(auto, [16.7, 16.7, 33.4, 33.4, 33.4, 33.4, 33.4, 50, 50, 50], 6100);
+  feedPattern(auto, [33.3, 33.3, 50], 6100);
   assert.equal(auto.level, 1);
   const step = events.find((e) => e.event === 'step');
-  assert.equal(step.p75Ms, 50);
-  assert.ok(Math.abs(step.medianMs - 33.4) < 0.5);
+  assert.ok(step.meanMs > 32.5);
 });
 
-test('a level that only just holds 30 fps (steady 33.4 ms) steps down for margin', () => {
+test('a level locked to 30 fps by vsync with some 60 fps frames (mean about 31 ms) settles', () => {
+  const { events, onEvent } = recorder();
+  const auto = new LadderQuality(true, 0, onEvent);
+  feedPattern(auto, [33.3, 33.3, 33.3, 33.3, 33.3, 33.3, 33.3, 16.7], 6100);
+  assert.equal(auto.level, 0);
+  assert.equal(events.at(-1).event, 'settle');
+  assert.ok(events.at(-1).meanMs <= 32.5);
+});
+
+test('a level that only holds a steady 33.4 ms steps down for margin', () => {
   const { events, onEvent } = recorder();
   const auto = new LadderQuality(true, 0, onEvent);
   feedPattern(auto, [33.4], 6100);
   assert.equal(auto.level, 1);
   assert.equal(events.find((e) => e.event === 'step').from, 0);
-});
-
-test('a window with a 31 ms median and a 75th percentile of 33.4 ms settles at the current level', () => {
-  const { events, onEvent } = recorder();
-  const auto = new LadderQuality(true, 0, onEvent);
-  feedPattern(auto, [16.7, 16.7, 33.4, 16.7, 33.4], 6100);
-  assert.equal(auto.level, 0);
-  assert.equal(events.at(-1).event, 'settle');
-  assert.ok(events.at(-1).medianMs <= 32);
 });
