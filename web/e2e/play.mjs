@@ -560,6 +560,7 @@ async function roundAt(label, { takeAtStep, successShot = null } = {}) {
   await sleep(6_000);
   phase(`${label}: join`);
   await joinWithRoom(label);
+  ensureAiInWorld();
 
   phase(`${label}: walk`);
   await walkToToiletByClicks(label, async () => {
@@ -1134,6 +1135,14 @@ async function clickOnlyRound({ label, shots = {}, memory = false, checkWidth = 
   } finally {
     keyboardForbidden = false;
   }
+}
+
+// Mixed stats count a human session only when an AI session overlaps it, and
+// the deadline redraws before a round can outlast the parked AI's own deadline.
+function ensureAiInWorld() {
+  const state = cliStatus().state;
+  if (state?.placement === 'inside' || state?.placement === 'waiting') return;
+  run(LOO, ['join', '--sent-by', 'self', '--why', 'e2e'], { LOO_HOME: HOME });
 }
 
 async function parkAi() {
