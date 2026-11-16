@@ -3,7 +3,10 @@ import { App } from './app';
 import { initLang } from './i18n';
 import { loadScene } from './sceneLoader';
 
-initLang();
 void loadScene();
 const root = document.getElementById('root');
-if (root) render(<App />, root);
+void initLang()
+  .catch((error: unknown) => console.error('loading the dictionary failed', error))
+  .then(() => {
+    if (root) render(<App />, root);
+  });
