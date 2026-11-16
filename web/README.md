@@ -4,6 +4,16 @@ PROJECT-126-E 的观战网页：Preact + TypeScript + Vite，棋盘是 three.js 
 界面外壳在 `src/shell/`；观战与回放共用同一个渲染器。美术依据 `docs/art/`。构建产物 `dist/` 打进服务端二进制，
 由 `include_dir` 提供。
 
+## 语言
+
+界面有简体中文与英文两套文字，选择顺序见 `docs/design.md` §21。
+
+- **词条位置**：`src/i18n/zh.ts` 是键的来源（中文）；`src/i18n/en.ts` 是 `Record<Key, string>`。每种语言一个文件，按语言异步加载，首帧前等当前语言。加第三种语言 = 加一份词条文件 + 在 `src/i18n/registry.ts` 登记一行。`test/i18n.test.mjs` 检查键集合相同、无空值、占位符一致。
+- **用法**：组件里 `const { t, tn, lang } = useI18n()`。`t('键', { 变量 })` 替换 `{变量}`；`tn('前缀', n)` 按 `.one` / `.other` 选词条，`n` 同时作为 `{n}` 传入。`t`、`tn` 也可以从 `src/i18n/index.ts` 直接导入。
+- **依赖**：`useMemo` / `useCallback` 里产生文字的，依赖数组要带 `lang`，否则切换语言后不会重算。
+- **事件文本**：`src/eventText.ts` 的 `eventIn(lang, text)`、`actionIn(lang, description)` 按语言取文本。中文界面把服务端事件与动作文本映射成中文；英文界面显示服务端原文，做少量润色（tick → turn、结局代码换成短语、`->` → `→`）。未识别的原样显示；服务端与 CLI 的文本不翻译。
+- **新增文字**：中英两份词条都要加，缺一份时 `npm test` 失败。
+
 ## 命令
 
 ```sh
@@ -62,7 +72,7 @@ LOO_API_URL=http://127.0.0.1:5174 npm run dev -- --port 5173   # 另一个终端
 网页唯一的字体是 Noto Sans SC，通过 npm 的 `@fontsource/noto-sans-sc` 自托管，构建时打包进
 `dist/assets/`，页面运行时不请求 `fonts.googleapis.com`、Google Fonts 或任何 CDN。字重 400 /
 700 / 900 在 `web/src/shell/ui.css` 顶部引入。等宽数字与命令用系统字体（`ui-monospace, Menlo,
-Consolas, monospace`），不打包。
+Consolas, monospace`），不打包。英文界面同样用 Noto Sans SC（含拉丁字形），不另打包西文字体。
 
 | 字体 | 用途 | 软件包 | 许可 | 许可文件 |
 |---|---|---|---|---|
