@@ -136,6 +136,8 @@ export function useWorld(
   const [autoLabel, setAutoLabel] = useState('');
   const [visionState, setVisionState] = useState(true);
   const [arrivedAt, setArrivedAt] = useState(0);
+  const [viewReady, setViewReady] = useState(false);
+  const [sceneFailed, setSceneFailed] = useState(false);
 
   const viewRef = useRef<WorldView | null>(null);
   const autoRef = useRef<LadderQuality | null>(null);
@@ -413,13 +415,20 @@ export function useWorld(
       };
     };
 
-    void loadScene().then(({ createWorldView }) => {
-      if (alive) stop = mount(createWorldView);
-    });
+    loadScene()
+      .then(({ createWorldView }) => {
+        if (!alive) return;
+        stop = mount(createWorldView);
+        setViewReady(true);
+      })
+      .catch(() => {
+        if (alive) setSceneFailed(true);
+      });
 
     return () => {
       alive = false;
       stop?.();
+      setViewReady(false);
     };
   }, []);
 
@@ -526,6 +535,8 @@ export function useWorld(
     setVision,
     vision: visionState,
     view: () => viewRef.current,
+    viewReady,
+    sceneFailed,
     projection,
     terrain,
     status,

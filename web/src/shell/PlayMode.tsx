@@ -58,6 +58,7 @@ interface Props {
   terrain: Terrain | null;
   top3: LeaderRow[];
   view: () => WorldView | null;
+  viewReady: boolean;
   override: RefObject<WorldOverride | null>;
   clickRef: RefObject<((hit: ClickHit) => void) | null>;
   cameraRef: RefObject<(() => void) | null>;
@@ -217,7 +218,7 @@ function placeMenu(el: HTMLElement, rect: Rect, target: { x: number; y: number }
   el.style.setProperty('--pm-arrow', `${Math.min(Math.max(ARROW_INSET, along), span - ARROW_INSET)}px`);
 }
 
-export function PlayMode({ terrain, top3, view, override, clickRef, cameraRef, blocked }: Props) {
+export function PlayMode({ terrain, top3, view, viewReady, override, clickRef, cameraRef, blocked }: Props) {
   const play = usePlay(true);
   const state = play.state;
   const [worldId, setWorldId] = useState<number | null>(null);
@@ -472,10 +473,10 @@ export function PlayMode({ terrain, top3, view, override, clickRef, cameraRef, b
   };
 
   useEffect(() => {
-    if (!inScene) return;
+    if (!inScene || !viewReady) return;
     frameOnSelf();
     setFollow(true);
-  }, [inScene]);
+  }, [inScene, viewReady]);
 
   const toiletsOf = (): Pos[] =>
     override.current?.cur.objects.filter((o) => o.kind === 'toilet').map((o) => o.pos) ?? [];

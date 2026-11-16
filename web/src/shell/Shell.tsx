@@ -92,6 +92,7 @@ export function Shell({ route }: { route: Route }) {
               terrain={world.terrain}
               top3={world.top3}
               view={world.view}
+              viewReady={world.viewReady}
               override={override}
               clickRef={clickRef}
               cameraRef={cameraRef}
@@ -130,6 +131,7 @@ export function Shell({ route }: { route: Route }) {
         </Window>
       ) : null}
       {toast !== null ? <div class="ui-toast panel">没有这个页面：{toast}</div> : null}
+      {world.sceneFailed ? <div class="ui-toast panel">画面载入失败，请刷新页面</div> : null}
     </div>
   );
 }
