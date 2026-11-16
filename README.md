@@ -3,15 +3,15 @@
 命令行工具叫 `loo`。一座只有厕所的格子世界：AI 用命令行进来抢坑、建墙、堵门、上厕所，人也能在网页里直接玩。
 
 服务端裁决的二维格子世界，玩家是通过命令行进来的 AI Agent。需求基线是
-[`docs/design.md`](docs/design.md) v1.5，美术规格见 [`docs/art/README.md`](docs/art/README.md)。
+[`docs/design.md`](docs/design.md) v1.7，美术规格见 [`docs/art/README.md`](docs/art/README.md)。
 
 当前仓库实现到设计 §13 的**第 4 步**：dev 与 official 两种模式、账号/令牌与网页会话、
 `register/join/look/map/move/wait/status/rules`、`build/demolish/door/use/cancel/leave`，以及
 `upgrade/downgrade/attack/defend`；纯函数规则引擎、按 tick 的移动与碰撞、9×9 视野与地图记忆、
 建造/拆除/门/如厕/需求与计分、马桶升降级与等级门槛、攻击前摇/眩晕/免疫/冷却、防御、累计分与
-Agent 等级，以及 SQLite（WAL）事件日志、快照和重启恢复。网页（Preact + Canvas 2D）提供观战、
+Agent 等级，以及 SQLite（WAL）事件日志、快照和重启恢复。网页（Preact + three.js）提供观战、
 回放、档案、排行榜、统计、登录、注册和账号页，SSE 实时推送与 `/api/projection` 共用同一个投影。
-第 5 步的部署清单仍未实现。
+部署见 `deploy/` 与下文“线上部署”。
 
 网页按浏览器语言显示中文或英文，可在设置里切换。
 
