@@ -48,12 +48,14 @@ test('the stored index is the start: fast settles there, slow keeps walking down
   assert.equal(slow.level, AUTO_LADDER.length - 1);
 });
 
-test('the stored record only applies to the same renderer and a valid index', () => {
+test('a stored record starts one level better on the same renderer and is ignored otherwise', () => {
   const store = new Map();
   const storage = { getItem: (k) => store.get(k) ?? null, setItem: (k, v) => store.set(k, v) };
   assert.equal(startIndexFor('gpu-a', storage), 0);
   saveAutoRecord('gpu-a', 4, storage);
-  assert.equal(startIndexFor('gpu-a', storage), 4);
+  assert.equal(startIndexFor('gpu-a', storage), 3);
+  saveAutoRecord('gpu-a', 0, storage);
+  assert.equal(startIndexFor('gpu-a', storage), 0);
   assert.equal(startIndexFor('gpu-b', storage), 0);
   store.set('loo.autoQuality', '{not json');
   assert.equal(startIndexFor('gpu-a', storage), 0);
@@ -94,4 +96,12 @@ test('a level that only holds a steady 33.4 ms steps down for margin', () => {
   feedPattern(auto, [33.4], 6100);
   assert.equal(auto.level, 1);
   assert.equal(events.find((e) => e.event === 'step').from, 0);
+});
+
+test('a few long stalls in an otherwise 30 fps window do not step the level down', () => {
+  const { events, onEvent } = recorder();
+  const auto = new LadderQuality(true, 0, onEvent);
+  feedPattern(auto, [31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 250], 6100);
+  assert.equal(auto.level, 0);
+  assert.equal(events.at(-1).event, 'settle');
 });

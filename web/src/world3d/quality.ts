@@ -59,9 +59,10 @@ export function percentile(xs: number[], p: number): number {
   return s[Math.min(s.length - 1, Math.floor(p * s.length))];
 }
 
-function mean(xs: number[]): number {
+function trimmedMean(xs: number[]): number {
   if (xs.length === 0) return 0;
-  return xs.reduce((a, b) => a + b, 0) / xs.length;
+  const s = [...xs].sort((a, b) => a - b).slice(0, Math.max(1, Math.ceil(xs.length * 0.9)));
+  return s.reduce((a, b) => a + b, 0) / s.length;
 }
 
 function median(xs: number[]): number {
@@ -80,7 +81,7 @@ export const AUTO_LADDER: RenderSettings[] = [
   { scale: 0.75, grass: 0, shadow: 0 },
 ];
 
-// Mean, not median: vsync snaps single intervals to 16.7 / 33.3 / 50 ms.
+// Mean of the fastest 90 %, not the median: vsync snaps single intervals to 16.7 / 33.3 / 50 ms, and a few stalls should not decide.
 const LADDER_SLOW_MEAN_MS = 32.5;
 
 export function describeSettings(s: RenderSettings): string {
@@ -132,7 +133,7 @@ export class LadderQuality {
     if (elapsed <= WINDOW_END_MS) return null;
     const p75Ms = percentile(this.intervals, 0.75);
     const medianMs = median(this.intervals);
-    const meanMs = mean(this.intervals);
+    const meanMs = trimmedMean(this.intervals);
     if (meanMs > LADDER_SLOW_MEAN_MS && this.index < AUTO_LADDER.length - 1) {
       this.onEvent({ t: now, event: 'step', from: this.index, to: this.index + 1, meanMs, p75Ms, medianMs });
       this.index += 1;
@@ -174,7 +175,7 @@ export function startIndexFor(renderer: string, storage: KeyValue | null = defau
     const record = JSON.parse(raw) as { renderer?: unknown; index?: unknown };
     if (record.renderer === renderer && Number.isInteger(record.index)) {
       const index = record.index as number;
-      if (index >= 0 && index < AUTO_LADDER.length) return index;
+      if (index >= 0 && index < AUTO_LADDER.length) return Math.max(0, index - 1);
     }
   } catch {
     return 0;
