@@ -81,8 +81,11 @@ export const AUTO_LADDER: RenderSettings[] = [
   { scale: 0.75, grass: 0, shadow: 0 },
 ];
 
-// Mean of the fastest 90 %, not the median: vsync snaps single intervals to 16.7 / 33.3 / 50 ms, and a few stalls should not decide.
+// vsync snaps single intervals to 16.7 / 33.3 / 50 ms, so the judge is a mean (of the fastest 90 %).
+// The 3–6 s window right after a switch reads ~1.5 ms faster than the steady state on the reference iGPU, hence 32.5 < 33.3.
 const LADDER_SLOW_MEAN_MS = 32.5;
+const LADDER_MIN_SAMPLES = 30;
+const RETRY_BETTER_AFTER_MS = 7 * 24 * 3600 * 1000;
 
 export function describeSettings(s: RenderSettings): string {
   const shadow = s.shadow === 0 ? '阴影 关' : `阴影 ${s.shadow}`;
@@ -101,6 +104,7 @@ export interface LadderEvent {
   meanMs: number | null;
   p75Ms: number | null;
   medianMs: number | null;
+  ok?: boolean;
 }
 
 export class LadderQuality {
@@ -131,6 +135,10 @@ export class LadderQuality {
     }
     this.last = now;
     if (elapsed <= WINDOW_END_MS) return null;
+    if (this.intervals.length < LADDER_MIN_SAMPLES) {
+      this.begin(now);
+      return null;
+    }
     const p75Ms = percentile(this.intervals, 0.75);
     const medianMs = median(this.intervals);
     const meanMs = trimmedMean(this.intervals);
@@ -141,7 +149,7 @@ export class LadderQuality {
       return this.index;
     }
     this.settled = true;
-    this.onEvent({ t: now, event: 'settle', from: this.index, to: this.index, meanMs, p75Ms, medianMs });
+    this.onEvent({ t: now, event: 'settle', from: this.index, to: this.index, meanMs, p75Ms, medianMs, ok: meanMs <= LADDER_SLOW_MEAN_MS });
     return null;
   }
 
@@ -168,14 +176,16 @@ function defaultStorage(): KeyValue | null {
   }
 }
 
-export function startIndexFor(renderer: string, storage: KeyValue | null = defaultStorage()): number {
+export function startIndexFor(renderer: string, storage: KeyValue | null = defaultStorage(), now = Date.now()): number {
   try {
     const raw = storage?.getItem(AUTO_KEY);
     if (!raw) return 0;
-    const record = JSON.parse(raw) as { renderer?: unknown; index?: unknown };
+    const record = JSON.parse(raw) as { renderer?: unknown; index?: unknown; at?: unknown };
     if (record.renderer === renderer && Number.isInteger(record.index)) {
       const index = record.index as number;
-      if (index >= 0 && index < AUTO_LADDER.length) return Math.max(0, index - 1);
+      if (index < 0 || index >= AUTO_LADDER.length) return 0;
+      const stale = typeof record.at !== 'number' || now - record.at > RETRY_BETTER_AFTER_MS;
+      return stale ? Math.max(0, index - 1) : index;
     }
   } catch {
     return 0;
@@ -183,9 +193,9 @@ export function startIndexFor(renderer: string, storage: KeyValue | null = defau
   return 0;
 }
 
-export function saveAutoRecord(renderer: string, index: number, storage: KeyValue | null = defaultStorage()): void {
+export function saveAutoRecord(renderer: string, index: number, storage: KeyValue | null = defaultStorage(), now = Date.now()): void {
   try {
-    storage?.setItem(AUTO_KEY, JSON.stringify({ renderer, index }));
+    storage?.setItem(AUTO_KEY, JSON.stringify({ renderer, index, at: now }));
   } catch {
     return;
   }

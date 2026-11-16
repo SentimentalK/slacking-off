@@ -121,9 +121,6 @@
 .shell .win th,
 .shell .win td {
   min-width: 3.5em;
-}
-.shell .win th,
-.shell .win td {
   white-space: nowrap;
 }
 .shell .win td .hb {
