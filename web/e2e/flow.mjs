@@ -522,7 +522,16 @@ async function main() {
       { timeout: 5_000 },
     );
     pass('clicking the agent on the field selects it into the card');
-    await page.waitForSelector('.ui-feed .feed-row', { timeout: 10_000 });
+    const moves = ['E', 'W', 'N', 'S'];
+    let fed = false;
+    for (let attempt = 0; attempt < 8 && !fed; attempt += 1) {
+      run(LOO, ['move', moves[attempt % moves.length]], { LOO_HOME: HOME }, { allowFail: true });
+      fed = await page
+        .waitForSelector('.ui-feed .feed-row', { timeout: 3_000 })
+        .then(() => true)
+        .catch(() => false);
+    }
+    assert(fed, 'the event feed stayed empty after the bot moved');
     await assertChinese(page, ['.ui-feed'], 'watch: event feed');
     await assertChinese(page, ['.ui-card'], 'watch: selected card');
     await assertChinese(page, ['.ui-bottom'], 'watch: bottom bar');
@@ -531,11 +540,10 @@ async function main() {
     // --- replay / profile / leaderboard / stats ---------------------------
     const tick = await currentTick();
     await page.goto(`${BASE}/replay?tick=${tick}`, { waitUntil: 'domcontentloaded' });
-    await page.waitForSelector('canvas.board', { timeout: 10_000 });
-    await page.waitForFunction(
-      () => !document.body.innerText.includes('回放棋盘，正在载入'),
-      { timeout: 15_000 },
-    );
+    await page.waitForSelector('canvas[data-renderer="3d"]', { timeout: 10_000 });
+    await page.waitForSelector('.rp-bar .rp-track', { timeout: 15_000 });
+    await page.waitForFunction(() => (window.__looView?.tick() ?? -1) >= 0, { timeout: 15_000 });
+    pass('/replay opens the replay mode of the shell on the 3D renderer');
     await sleep(300);
     await screenshot(page, 'replay-1440.png');
 

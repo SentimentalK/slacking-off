@@ -8,7 +8,8 @@ async function nicknames(page) {
   const response = await fetch(new URL('/api/projection', page.url()), { headers: { accept: 'application/json' } });
   if (!response.ok) throw new Error(`/api/projection answered ${response.status} while checking Chinese text`);
   const body = await response.json();
-  return [...(body.agents ?? []), ...(body.queue ?? [])].map((entry) => entry.nick).filter(Boolean);
+  const projection = body.result ?? body;
+  return [...(projection.agents ?? []), ...(projection.queue ?? [])].map((entry) => entry.nick).filter(Boolean);
 }
 
 export async function assertChinese(page, selectors, label, extraNicks = []) {
@@ -22,7 +23,7 @@ export async function assertChinese(page, selectors, label, extraNicks = []) {
   for (const name of names) rest = rest.split(name).join('');
   for (const word of KEPT) rest = rest.split(word).join('');
   if (LATIN_WORD.test(rest)) {
-    throw new Error(`FAIL: ${label} still shows Latin text ${JSON.stringify(rest.trim())} (selectors ${selectors.join(', ')})`);
+    throw new Error(`FAIL: ${label} still shows Latin text ${JSON.stringify(rest.trim())} (selectors ${selectors.join(', ')}; nicknames ${JSON.stringify(names)})`);
   }
   console.log(`PASS: ${label} reads in Chinese (${selectors.join(', ')})`);
 }
