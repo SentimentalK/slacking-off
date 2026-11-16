@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import type { FrameInput, Quality, UiState } from './types';
+import type { FrameInput, RenderSettings, UiState } from './types';
 
 const SUN_DAY = new THREE.Color(0xffdfae);
 const SUN_DUSK = new THREE.Color(0xff7a3a);
@@ -17,14 +17,14 @@ export function duskK(ui: UiState, clock: number): number {
 }
 
 export interface Lighting {
-  update(input: FrameInput, quality: Quality): void;
+  update(input: FrameInput, settings: RenderSettings): void;
 }
 
 export function createLighting(scene: THREE.Scene): Lighting {
   const hemi = new THREE.HemisphereLight(HEM_DAY, GND_DAY, 0.42 * Math.PI);
   const sun = new THREE.DirectionalLight(SUN_DAY, 2.6 * Math.PI);
   scene.add(hemi, sun, sun.target);
-  let mapQuality: Quality | null = null;
+  let mapShadow = 0;
   sun.shadow.radius = 3;
   sun.shadow.bias = -0.0006;
   sun.shadow.normalBias = 0.08;
@@ -32,7 +32,7 @@ export function createLighting(scene: THREE.Scene): Lighting {
   sun.shadow.camera.far = 140;
 
   return {
-    update(input, quality) {
+    update(input, settings) {
       const k = duskK(input.ui, input.clock);
       const W = input.terrain.width;
       const H = input.terrain.height;
@@ -49,13 +49,12 @@ export function createLighting(scene: THREE.Scene): Lighting {
       sun.target.position.set(cx, 0, cz);
       sun.target.updateMatrixWorld();
 
-      sun.castShadow = quality !== 'low';
-      if (quality !== mapQuality) {
+      sun.castShadow = settings.shadow > 0;
+      if (settings.shadow > 0 && settings.shadow !== mapShadow) {
         sun.shadow.map?.dispose();
         sun.shadow.map = null;
-        const size = quality === 'high' ? 2048 : 1024;
-        sun.shadow.mapSize.set(size, size);
-        mapQuality = quality;
+        sun.shadow.mapSize.set(settings.shadow, settings.shadow);
+        mapShadow = settings.shadow;
       }
       const r = Math.max(W, H) / 2 + 3;
       const cam = sun.shadow.camera;

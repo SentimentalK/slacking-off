@@ -28,10 +28,17 @@ export interface FrameInput {
 
 export type Quality = 'high' | 'medium' | 'low';
 
+export interface RenderSettings {
+  scale: number;
+  grass: number;
+  shadow: 0 | 512 | 1024 | 2048;
+}
+
 export interface SceneCtx {
   scene: THREE.Scene;
   world: THREE.Group;
   quality: Quality;
+  settings: RenderSettings;
   worldId: number;
   terrain: Terrain;
   pickables: Map<THREE.Object3D, number>;

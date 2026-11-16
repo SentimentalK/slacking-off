@@ -4,7 +4,7 @@ import { getJSON, watch } from '../api';
 import type { WatchStatus } from '../api';
 import { eventColors } from '../components/EventText';
 import { pickReplaySpan, REPLAY_TICKS_PER_SECOND } from '../replay-source';
-import { AutoQuality, chooseQuality, createWorldView, rendererName } from '../world3d';
+import { AutoQuality, chooseQuality, rendererName } from '../world3d/quality';
 import type { ClickHit, Quality, UiState, VisionGrid, WorldView } from '../world3d';
 import type { LeaderRow, Pos, Projection, ProjectionEvent, Terrain, Timeline } from '../types';
 
@@ -29,6 +29,8 @@ export interface WorldOverride {
   selected: number | null;
   path: Pos[] | null;
 }
+
+type CreateWorldView = typeof import('../world3d').createWorldView;
 
 const EVENT_LOG_LIMIT = 50;
 const QUALITY_KEY = 'loo.quality';
@@ -287,14 +289,6 @@ export function useWorld(
     const urlQuality = params.get('quality');
     const stored = readStoredQuality();
     const initial = chooseQuality(urlQuality, stored, innerWidth, navigator.hardwareConcurrency ?? 8, rendererName());
-    const view = createWorldView(canvas, {
-      quality: initial,
-      still: STILL_MODE,
-      onSelect: select,
-      onClick: (hit) => onClick.current?.(hit),
-      onUserCamera: () => onUserCamera.current?.(),
-    });
-    viewRef.current = view;
     qualityRef.current = initial;
     const autoPick = !STILL_MODE && urlQuality === null && stored === null;
     autoRef.current = new AutoQuality(autoPick);
@@ -303,85 +297,107 @@ export function useWorld(
     live.current.dusk = initialDusk;
     live.current.duskT = 0;
     setDusk(initialDusk);
-    window.__looView = {
-      capture: () => view.capture(),
-      screenOf: (id) => view.screenOf(id),
-      tick: () => view.lastTick(),
-      screenOfCell: (x, y) => view.screenOfCell(x, y),
-      cellAt: (x, y) => view.groundCell(x, y),
-    };
 
-    const observer = new ResizeObserver(() => view.resize());
-    observer.observe(canvas);
+    let alive = true;
+    let stop: (() => void) | null = null;
+    const mount = (createWorldView: CreateWorldView) => {
+      const view = createWorldView(canvas, {
+        quality: qualityRef.current,
+        still: STILL_MODE,
+        onSelect: select,
+        onClick: (hit) => onClick.current?.(hit),
+        onUserCamera: () => onUserCamera.current?.(),
+      });
+      viewRef.current = view;
+      window.__looView = {
+        capture: () => view.capture(),
+        screenOf: (id) => view.screenOf(id),
+        tick: () => view.lastTick(),
+        screenOfCell: (x, y) => view.screenOfCell(x, y),
+        cellAt: (x, y) => view.groundCell(x, y),
+      };
 
-    const onMove = (event: PointerEvent) => {
-      if (STILL_MODE) return;
-      const current = live.current.projection;
-      const cell = view.groundCell(event.clientX, event.clientY);
-      const scene = override.current?.cur ?? current;
-      live.current.hoverToilet = scene && cell ? toiletNear(scene, cell) : null;
-    };
-    const onLeave = () => {
-      live.current.hoverToilet = null;
-    };
-    canvas.addEventListener('pointermove', onMove);
-    canvas.addEventListener('pointerleave', onLeave);
+      const observer = new ResizeObserver(() => view.resize());
+      observer.observe(canvas);
 
-    let frame = 0;
-    const loop = (now: number) => {
-      const state = live.current;
-      const auto = autoRef.current;
-      if (auto) {
-        const next = auto.frame(now, qualityRef.current);
-        if (next) {
-          qualityRef.current = next;
-          view.setQuality(next);
+      const onMove = (event: PointerEvent) => {
+        if (STILL_MODE) return;
+        const current = live.current.projection;
+        const cell = view.groundCell(event.clientX, event.clientY);
+        const scene = override.current?.cur ?? current;
+        live.current.hoverToilet = scene && cell ? toiletNear(scene, cell) : null;
+      };
+      const onLeave = () => {
+        live.current.hoverToilet = null;
+      };
+      canvas.addEventListener('pointermove', onMove);
+      canvas.addEventListener('pointerleave', onLeave);
+
+      let frame = 0;
+      const loop = (now: number) => {
+        const state = live.current;
+        const auto = autoRef.current;
+        if (auto) {
+          const next = auto.frame(now, qualityRef.current);
+          if (next) {
+            qualityRef.current = next;
+            view.setQuality(next);
+          }
         }
-      }
-      const ov = override.current;
-      const cur = ov ? ov.cur : state.projection;
-      if (cur && state.terrain) {
-        const replaying = !ov && modeRef.current === 'replay';
-        const prev = ov
-          ? ov.prev
-          : replaying
-            ? (replayCache.current.get(cur.tick - 1) ?? null)
-            : state.previous;
-        const span = replaying ? 1000 / REPLAY_TICKS_PER_SECOND : cur.tick_seconds * 1000;
-        const arrivedAt = ov ? ov.arrivedAt : state.arrivedAt;
-        const motionless = STILL_MODE || state.reduceMotion;
-        const phase = motionless ? 1 : clamp01((now - arrivedAt) / span);
-        const ui: UiState = {
-          selected: ov ? ov.selected : STILL_MODE ? null : state.selected,
-          hoverToilet: STILL_MODE ? null : state.hoverToilet,
-          dusk: state.dusk,
-          duskT: state.duskT,
-          visionOf: ov || STILL_MODE || !state.vision ? null : state.selected,
-          vision: ov ? ov.vision : null,
-          path: ov ? ov.path : null,
-        };
-        view.draw({
-          terrain: state.terrain,
-          prev,
-          cur,
-          phase,
-          clock: motionless ? 0 : now / 1000,
-          ui,
-        });
-      }
+        const ov = override.current;
+        const cur = ov ? ov.cur : state.projection;
+        if (cur && state.terrain) {
+          const replaying = !ov && modeRef.current === 'replay';
+          const prev = ov
+            ? ov.prev
+            : replaying
+              ? (replayCache.current.get(cur.tick - 1) ?? null)
+              : state.previous;
+          const span = replaying ? 1000 / REPLAY_TICKS_PER_SECOND : cur.tick_seconds * 1000;
+          const arrivedAt = ov ? ov.arrivedAt : state.arrivedAt;
+          const motionless = STILL_MODE || state.reduceMotion;
+          const phase = motionless ? 1 : clamp01((now - arrivedAt) / span);
+          const ui: UiState = {
+            selected: ov ? ov.selected : STILL_MODE ? null : state.selected,
+            hoverToilet: STILL_MODE ? null : state.hoverToilet,
+            dusk: state.dusk,
+            duskT: state.duskT,
+            visionOf: ov || STILL_MODE || !state.vision ? null : state.selected,
+            vision: ov ? ov.vision : null,
+            path: ov ? ov.path : null,
+          };
+          view.draw({
+            terrain: state.terrain,
+            prev,
+            cur,
+            phase,
+            clock: motionless ? 0 : now / 1000,
+            ui,
+          });
+        }
+        frame = window.requestAnimationFrame(loop);
+      };
       frame = window.requestAnimationFrame(loop);
+
+      return () => {
+        window.cancelAnimationFrame(frame);
+        observer.disconnect();
+        canvas.removeEventListener('pointermove', onMove);
+        canvas.removeEventListener('pointerleave', onLeave);
+        view.dispose();
+        viewRef.current = null;
+        autoRef.current = null;
+        delete window.__looView;
+      };
     };
-    frame = window.requestAnimationFrame(loop);
+
+    void import('../world3d').then(({ createWorldView }) => {
+      if (alive) stop = mount(createWorldView);
+    });
 
     return () => {
-      window.cancelAnimationFrame(frame);
-      observer.disconnect();
-      canvas.removeEventListener('pointermove', onMove);
-      canvas.removeEventListener('pointerleave', onLeave);
-      view.dispose();
-      viewRef.current = null;
-      autoRef.current = null;
-      delete window.__looView;
+      alive = false;
+      stop?.();
     };
   }, []);
 

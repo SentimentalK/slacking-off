@@ -1,6 +1,7 @@
-import type { Quality } from './types';
+import type { Quality, RenderSettings } from './types';
 
 const LEVELS: readonly string[] = ['high', 'medium', 'low'];
+const SHADOW_SIZES: readonly number[] = [0, 512, 1024, 2048];
 
 function level(s: string | null): Quality | null {
   return s !== null && LEVELS.includes(s) ? (s as Quality) : null;
@@ -17,6 +18,24 @@ export function chooseQuality(
 ): Quality {
   const software = SOFTWARE_RENDERER.test(renderer);
   return level(param) ?? level(stored) ?? (software || width < 700 || cores <= 4 ? 'low' : 'high');
+}
+
+export function settingsFor(q: Quality): RenderSettings {
+  if (q === 'high') return { scale: 1, grass: 1, shadow: 2048 };
+  if (q === 'medium') return { scale: 1, grass: 0, shadow: 1024 };
+  return { scale: 1, grass: 0, shadow: 0 };
+}
+
+export function overrideSettings(base: RenderSettings, search: string): RenderSettings {
+  const params = new URLSearchParams(search);
+  const scale = Number(params.get('scale'));
+  const grass = Number(params.get('grass'));
+  const shadow = Number(params.get('shadow'));
+  return {
+    scale: params.has('scale') && scale > 0 && scale <= 2 ? scale : base.scale,
+    grass: params.has('grass') && grass >= 0 && grass <= 1 ? grass : base.grass,
+    shadow: params.has('shadow') && SHADOW_SIZES.includes(shadow) ? (shadow as RenderSettings['shadow']) : base.shadow,
+  };
 }
 
 export function rendererName(): string {

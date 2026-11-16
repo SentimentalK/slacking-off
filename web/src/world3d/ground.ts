@@ -158,16 +158,35 @@ function paintGround(terrain: Terrain, worldId: number, TS: number): THREE.Canva
   return t;
 }
 
-function grassLayer(ctx: SceneCtx, root: THREE.Group): { inst: Instancer; cells: Array<{ x: number; y: number }> } {
+function shuffledSlots(n: number, worldId: number): Int32Array {
+  const perm = Int32Array.from({ length: n }, (_, k) => k);
+  const rng = new SeededRandom(worldId * 3571 + 11);
+  for (let k = n - 1; k > 0; k--) {
+    const j = Math.floor(rng.next() * (k + 1));
+    [perm[k], perm[j]] = [perm[j], perm[k]];
+  }
+  return perm;
+}
+
+interface GrassLayer {
+  inst: Instancer;
+  cells: Array<{ x: number; y: number }>;
+  slots: Int32Array;
+}
+
+function grassLayer(ctx: SceneCtx, root: THREE.Group, density: number): GrassLayer {
   const cells: Array<{ x: number; y: number }> = [];
   forEachCell(ctx.terrain, (x, y, ch) => {
     if (ch === '.') cells.push({ x, y });
   });
-  const inst = new Instancer(GRASS_PARTS, cells.length * BLADES, root);
+  const total = cells.length * BLADES;
+  const slots = shuffledSlots(total, ctx.worldId);
+  const inst = new Instancer(GRASS_PARTS, total, root);
   const mesh = inst.meshes[0];
+  mesh.count = Math.round(total * density);
   cells.forEach((cell, ci) => {
     for (let b = 0; b < BLADES; b++) {
-      const i = ci * BLADES + b;
+      const i = slots[ci * BLADES + b];
       const r = (k: number) => rand01(ctx.worldId, cell.x, cell.y, GRASS_SALT + b * 9 + k);
       const sc = 0.6 + r(5) * 0.9;
       const m = new THREE.Matrix4().compose(
@@ -181,7 +200,7 @@ function grassLayer(ctx: SceneCtx, root: THREE.Group): { inst: Instancer; cells:
     }
   });
   if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
-  return { inst, cells };
+  return { inst, cells, slots };
 }
 
 function blockedCells(objects: ProjectionObject[]): Set<string> {
@@ -227,7 +246,7 @@ export function createGround(ctx: SceneCtx): Layer {
   plane.receiveShadow = true;
   root.add(plane);
 
-  const grass = quality === 'high' ? grassLayer(ctx, root) : null;
+  const grass = ctx.settings.grass > 0 ? grassLayer(ctx, root, ctx.settings.grass) : null;
   let sig: string | null = null;
 
   return {
@@ -239,7 +258,7 @@ export function createGround(ctx: SceneCtx): Layer {
       sig = s;
       grass.cells.forEach((cell, ci) => {
         const on = !blocked.has(cellKey(cell.x, cell.y));
-        for (let b = 0; b < BLADES; b++) grass.inst.show(ci * BLADES + b, on);
+        for (let b = 0; b < BLADES; b++) grass.inst.show(grass.slots[ci * BLADES + b], on);
       });
       grass.inst.flush();
     },
