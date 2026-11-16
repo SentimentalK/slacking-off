@@ -1,17 +1,18 @@
 import { useEffect, useMemo, useState } from 'preact/hooks';
 import { getJSON } from '../api';
+import { useI18n, type Key } from '../i18n';
 import { formatNumber, formatPercent } from '../labels';
 import type { KindStats, StatsResponse } from '../types';
 
 const SCOPES = [
-  { key: 'all', label: '全部会话' },
-  { key: 'mixed', label: '有另一类在场' },
+  { key: 'all', label: 'stats.scope.all' },
+  { key: 'mixed', label: 'stats.scope.mixed' },
 ] as const;
 
 const PROMPT_FILTERS = [
-  { key: 'any', label: '全部' },
-  { key: 'on', label: '装了提示' },
-  { key: 'off', label: '没装提示' },
+  { key: 'any', label: 'stats.prompt.any' },
+  { key: 'on', label: 'stats.prompt.on' },
+  { key: 'off', label: 'stats.prompt.off' },
 ] as const;
 
 type ScopeKey = (typeof SCOPES)[number]['key'];
@@ -22,38 +23,39 @@ function KindCard({
   hint,
   stats,
 }: {
-  label: string;
-  hint: string;
+  label: Key;
+  hint: Key;
   stats: KindStats;
 }) {
+  const { t } = useI18n();
   return (
     <section class="wsec">
-      <h3>{label}</h3>
-      <p class="sub">{hint}</p>
+      <h3>{t(label)}</h3>
+      <p class="sub">{t(hint)}</p>
       <div class="tiles six">
         <div class="tile">
           <b class="mono">{formatNumber(stats.agents)}</b>
-          角色
+          {t('stats.tile.agents')}
         </div>
         <div class="tile">
           <b class="mono">{formatNumber(stats.sessions)}</b>
-          会话
+          {t('stats.tile.sessions')}
         </div>
         <div class="tile">
           <b class="mono">{formatNumber(stats.successes)}</b>
-          成功
+          {t('stats.tile.successes')}
         </div>
         <div class="tile">
           <b class="mono">{formatPercent(stats.success_rate)}</b>
-          成功率
+          {t('common.successRate')}
         </div>
         <div class="tile">
           <b class="mono">{formatNumber(stats.total_score)}</b>
-          累计分
+          {t('common.totalScore')}
         </div>
         <div class="tile">
           <b class="mono">{formatNumber(stats.best_score)}</b>
-          单次最高
+          {t('common.bestRun')}
         </div>
       </div>
     </section>
@@ -61,6 +63,7 @@ function KindCard({
 }
 
 export function Stats() {
+  const { t } = useI18n();
   const [stats, setStats] = useState<StatsResponse | null>(null);
   const [error, setError] = useState(false);
   const [scope, setScope] = useState<ScopeKey>('all');
@@ -89,14 +92,14 @@ export function Stats() {
 
   return error ? (
     <section class="wsec">
-      <p class="note">统计没取到</p>
-      <p class="sub">服务端可能没开，或者这是 dev 模式（没有正式数据）。</p>
+      <p class="note">{t('stats.loadFailed')}</p>
+      <p class="sub">{t('stats.loadFailedHelp')}</p>
     </section>
   ) : !stats || !current ? (
-    <p class="sub">载入中…</p>
+    <p class="sub">{t('common.loading')}</p>
   ) : (
     <>
-      <div class="tabs" role="tablist" aria-label="统计范围">
+      <div class="tabs" role="tablist" aria-label={t('stats.scopeAria')}>
         {SCOPES.map((entry) => (
           <button
             key={entry.key}
@@ -107,12 +110,12 @@ export function Stats() {
             aria-selected={entry.key === scope}
             onClick={() => setScope(entry.key)}
           >
-            {entry.label}
+            {t(entry.label)}
           </button>
         ))}
       </div>
 
-      <div class="tabs" role="tablist" aria-label="摸鱼提示切分">
+      <div class="tabs" role="tablist" aria-label={t('stats.promptAria')}>
         {PROMPT_FILTERS.map((entry) => (
           <button
             key={entry.key}
@@ -123,7 +126,7 @@ export function Stats() {
             aria-selected={entry.key === prompt}
             onClick={() => setPrompt(entry.key)}
           >
-            {entry.label}
+            {t(entry.label)}
           </button>
         ))}
       </div>
@@ -131,33 +134,33 @@ export function Stats() {
       <div class="tiles two">
         <div class="tile">
           <b class="mono">{formatNumber(current.total_sessions)}</b>
-          总会话
+          {t('stats.totalSessions')}
         </div>
         <div class="tile">
           <b class="mono">{formatPercent(current.success_rate)}</b>
-          总成功率
+          {t('stats.totalRate')}
         </div>
       </div>
 
       <div class="even">
-        <KindCard label="AI 的 接口来的" hint="通过命令行注册的 AI" stats={current.ai} />
-        <KindCard label="人 · 网页里玩的" hint="账号在观战页亲手操作的人类角色" stats={current.human} />
+        <KindCard label="stats.ai.label" hint="stats.ai.hint" stats={current.ai} />
+        <KindCard label="stats.human.label" hint="stats.human.hint" stats={current.human} />
       </div>
 
       <section class="wsec">
-        <h3>按型号（仅 AI）</h3>
+        <h3>{t('stats.byModel')}</h3>
         {models.length === 0 ? (
-          <p class="sub">暂无数据</p>
+          <p class="sub">{t('common.noData')}</p>
         ) : (
           <div class="ui-scroll">
             <table>
               <thead>
                 <tr>
-                  <th>型号</th>
-                  <th class="num">AI 数</th>
-                  <th class="num">会话数</th>
-                  <th>成功率</th>
-                  <th class="num">总分</th>
+                  <th>{t('common.model')}</th>
+                  <th class="num">{t('stats.aiCount')}</th>
+                  <th class="num">{t('stats.sessionCount')}</th>
+                  <th>{t('common.successRate')}</th>
+                  <th class="num">{t('stats.totalScore')}</th>
                 </tr>
               </thead>
               <tbody>

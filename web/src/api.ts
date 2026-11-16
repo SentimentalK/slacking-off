@@ -1,6 +1,7 @@
 // Same-origin API client. Every `/api/*` answer is an `Envelope<T>`:
 // `{ok, result?, error?}` (see `crates/proto/src/lib.rs`).
 
+import { t } from './i18n';
 import type {
   AgentView,
   EventView,
@@ -51,7 +52,7 @@ function unwrap<T>(body: unknown, path: string): T {
     if (!envelope.ok || envelope.result === undefined) {
       throw new ApiError(
         envelope.error?.code ?? 'unknown',
-        envelope.error?.message ?? `${path} 返回失败`,
+        envelope.error?.message ?? t('error.failed', { path }),
         envelope.error?.retry_after_seconds ?? null,
       );
     }
@@ -66,7 +67,7 @@ export async function getJSON<T>(path: string): Promise<T> {
   try {
     res = await fetch(path, { headers: { accept: 'application/json' } });
   } catch {
-    throw new ApiError('network', `${path} 连不上服务端`);
+    throw new ApiError('network', t('error.noServer', { path }));
   }
   let body: unknown = null;
   try {
@@ -75,7 +76,7 @@ export async function getJSON<T>(path: string): Promise<T> {
     body = null;
   }
   if (!res.ok && !(body && typeof body === 'object' && 'ok' in body)) {
-    throw new ApiError(`http_${res.status}`, `${path} 返回 HTTP ${res.status}`);
+    throw new ApiError(`http_${res.status}`, t('error.http', { path, status: res.status }));
   }
   return unwrap<T>(body, path);
 }
@@ -115,7 +116,7 @@ async function envelopeRequest<T>(
       body: body === undefined ? undefined : JSON.stringify(body),
     });
   } catch {
-    throw new ApiError('network', `${path} 连不上服务端`);
+    throw new ApiError('network', t('error.noServer', { path }));
   }
 
   let text = '';
@@ -134,7 +135,7 @@ async function envelopeRequest<T>(
   if (!parsed || typeof parsed !== 'object' || !('ok' in parsed)) {
     throw new ApiError(
       `http_${res.status}`,
-      `${path} 返回 HTTP ${res.status}${text.trim() ? `: ${text.trim().slice(0, 120)}` : ''}`,
+      `${t('error.http', { path, status: res.status })}${text.trim() ? `: ${text.trim().slice(0, 120)}` : ''}`,
     );
   }
 
@@ -142,7 +143,7 @@ async function envelopeRequest<T>(
   if (!envelope.ok || envelope.result === undefined) {
     throw new ApiError(
       envelope.error?.code ?? 'unknown',
-      envelope.error?.message ?? `${path} 返回失败`,
+      envelope.error?.message ?? t('error.failed', { path }),
       envelope.error?.retry_after_seconds ?? null,
     );
   }

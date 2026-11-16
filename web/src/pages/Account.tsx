@@ -4,6 +4,8 @@ import { useEffect, useState } from 'preact/hooks';
 import { getJSON } from '../api';
 import { AuthError, account, createToken, logout, revokeToken } from '../auth';
 import { Link } from '../components/Link';
+import { useI18n } from '../i18n';
+import { defaultInstallTab } from '../installTab';
 import { commandMessage, loadMe } from '../play/client';
 import { navigate } from '../router';
 import { agentColor } from '../palette';
@@ -14,6 +16,7 @@ import type {
   PlayMe,
   TokenCreateResponse,
 } from '../types';
+import { problemText, type Problem } from './problem';
 
 const FILE_LABEL: Record<string, string> = {
   'loo-linux-x64': 'Linux x64',
@@ -47,6 +50,14 @@ function formatTime(ms: number | null): string {
   )}:${pad(date.getMinutes())}`;
 }
 
+function platformString(): string {
+  return (
+    (navigator as Navigator & { userAgentData?: { platform?: string } }).userAgentData?.platform ||
+    navigator.userAgent ||
+    ''
+  );
+}
+
 async function writeClipboard(text: string): Promise<boolean> {
   try {
     if (navigator.clipboard) {
@@ -73,12 +84,13 @@ async function writeClipboard(text: string): Promise<boolean> {
 }
 
 export function Account() {
+  const { t } = useI18n();
   const [data, setData] = useState<AccountResponse | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<Problem | null>(null);
   const [busy, setBusy] = useState(false);
   const [tokenBusy, setTokenBusy] = useState(false);
   const [install, setInstall] = useState<TokenCreateResponse | null>(null);
-  const [tab, setTab] = useState<keyof InstallCommands>('sh');
+  const [tab, setTab] = useState<keyof InstallCommands>(() => defaultInstallTab(platformString()));
   const [copied, setCopied] = useState(false);
   const [copyError, setCopyError] = useState(false);
   const [downloads, setDownloads] = useState<DownloadEntry[] | null>(null);
@@ -125,7 +137,7 @@ export function Account() {
         if (!alive) return;
         // A 401 already redirected to /login inside the auth client.
         if (!(failure instanceof AuthError && failure.status === 401)) {
-          setError(failure instanceof Error ? failure.message : '账号信息没取到');
+          setError(failure instanceof Error ? { text: failure.message } : { key: 'account.loadFailed' });
         }
       });
     return () => {
@@ -143,14 +155,14 @@ export function Account() {
       await logout();
       navigate('/login');
     } catch (failure) {
-      setError(failure instanceof Error ? failure.message : '退出失败');
+      setError(failure instanceof Error ? { text: failure.message } : { key: 'account.logoutFailed' });
       setBusy(false);
     }
   };
 
   const onGenerate = async () => {
     if (tokenBusy) return;
-    if (tokenActive && !window.confirm('重新生成会让旧令牌立即失效，正在运行的 AI 需要换新命令。继续？')) {
+    if (tokenActive && !window.confirm(t('account.confirmRegenerate'))) {
       return;
     }
     setTokenBusy(true);
@@ -158,7 +170,7 @@ export function Account() {
     try {
       const next = await createToken();
       setInstall(next);
-      setTab('sh');
+      setTab(defaultInstallTab(platformString()));
       setCopied(false);
       setCopyError(false);
       setData((current) =>
@@ -170,7 +182,7 @@ export function Account() {
           : current,
       );
     } catch (failure) {
-      setError(failure instanceof Error ? failure.message : '生成令牌失败');
+      setError(failure instanceof Error ? { text: failure.message } : { key: 'account.genFailed' });
     } finally {
       setTokenBusy(false);
     }
@@ -178,7 +190,7 @@ export function Account() {
 
   const onRevoke = async () => {
     if (tokenBusy) return;
-    if (!window.confirm('吊销后，使用这个令牌的 AI 会失去鉴权。继续？')) return;
+    if (!window.confirm(t('account.confirmRevoke'))) return;
     setTokenBusy(true);
     setError(null);
     try {
@@ -197,7 +209,7 @@ export function Account() {
           : current,
       );
     } catch (failure) {
-      setError(failure instanceof Error ? failure.message : '吊销令牌失败');
+      setError(failure instanceof Error ? { text: failure.message } : { key: 'account.revokeFailed' });
     } finally {
       setTokenBusy(false);
     }
@@ -213,30 +225,34 @@ export function Account() {
   return (
     <>
       <div class="acct">
-        <span class="nick">{data?.username ?? '载入中…'}</span>
+        <span class="nick">{data?.username ?? t('common.loading')}</span>
         <button type="button" onClick={onLogout} disabled={busy || !data}>
-          退出登录
+          {t('account.logout')}
         </button>
       </div>
       {error ? (
         <p class="err" role="alert">
-          {error}
+          {problemText(error)}
         </p>
       ) : null}
 
       <div class="grid2">
         <section class="wsec">
-          <h3>账号令牌</h3>
+          <h3>{t('account.tokenHeading')}</h3>
           <div class="tokline">
             <span class="tag" data-active={tokenActive} data-testid="token-status">
-              {tokenActive ? '有效' : tokenExists ? '已吊销' : '未生成'}
+              {tokenActive
+                ? t('account.tokenActive')
+                : tokenExists
+                  ? t('account.tokenRevoked')
+                  : t('account.tokenNone')}
             </span>
-            <span class="sub">创建时间：{formatTime(data?.token.created_at_ms ?? null)}</span>
+            <span class="sub">{t('account.created', { time: formatTime(data?.token.created_at_ms ?? null) })}</span>
             {data?.token.revoked_at_ms != null ? (
-              <span class="sub">吊销时间：{formatTime(data.token.revoked_at_ms)}</span>
+              <span class="sub">{t('account.revokedAt', { time: formatTime(data.token.revoked_at_ms) })}</span>
             ) : null}
           </div>
-          <p class="sub">令牌用于命令行工具与 AI。生成安装命令时会同时签发新令牌，旧令牌立刻失效。</p>
+          <p class="sub">{t('account.tokenHelp')}</p>
           <div class="acts">
             <button
               class="gold"
@@ -245,19 +261,19 @@ export function Account() {
               onClick={onGenerate}
               disabled={tokenBusy || !data}
             >
-              {tokenActive ? '重新生成' : '生成安装命令'}
+              {tokenActive ? t('account.regenerate') : t('account.generate')}
             </button>
             {tokenActive ? (
               <button type="button" data-testid="revoke-token" onClick={onRevoke} disabled={tokenBusy}>
-                吊销
+                {t('account.revoke')}
               </button>
             ) : null}
           </div>
 
           {install ? (
             <div>
-              <p class="sub">安装命令只显示一次，刷新或重新进入后不再显示。请现在复制保存。</p>
-              <div class="tabs" role="tablist" aria-label="安装命令平台">
+              <p class="sub">{t('account.installOnce')}</p>
+              <div class="tabs" role="tablist" aria-label={t('account.platforms')}>
                 <button
                   type="button"
                   role="tab"
@@ -269,7 +285,7 @@ export function Account() {
                     setCopyError(false);
                   }}
                 >
-                  sh · Linux / macOS
+                  {t('account.tab.sh')}
                 </button>
                 <button
                   type="button"
@@ -282,18 +298,18 @@ export function Account() {
                     setCopyError(false);
                   }}
                 >
-                  ps1 · Windows
+                  {t('account.tab.ps1')}
                 </button>
               </div>
               <pre data-testid="install-command">{install.install[tab]}</pre>
               <div class="acts">
                 <button type="button" data-testid="copy-command" onClick={onCopy}>
-                  {copied ? '已复制' : '复制命令'}
+                  {copied ? t('account.copied') : t('account.copy')}
                 </button>
               </div>
               {copyError ? (
                 <p class="err" role="alert">
-                  复制失败，请手动选择命令文本。
+                  {t('account.copyFailed')}
                 </p>
               ) : null}
             </div>
@@ -301,19 +317,19 @@ export function Account() {
         </section>
 
         <section class="wsec">
-          <h3>下载</h3>
-          <p class="sub">二进制对应的平台文件名。只列出这台服务器上真实存在的构建。</p>
+          <h3>{t('account.downloads')}</h3>
+          <p class="sub">{t('account.downloadsHelp')}</p>
           {downloads === null ? (
-            <p class="sub">载入中…</p>
+            <p class="sub">{t('common.loading')}</p>
           ) : downloads.length === 0 ? (
-            <p class="sub">暂无构建</p>
+            <p class="sub">{t('account.noBuilds')}</p>
           ) : (
             <div>
               {downloads.map((entry) => (
                 <div class="rowl" key={entry.file}>
                   <span class="n">{FILE_LABEL[entry.file] ?? entry.file}</span>
                   <span class="sub">{formatBytes(entry.bytes)}</span>
-                  <a href={`/downloads/${entry.file}`}>下载</a>
+                  <a href={`/downloads/${entry.file}`}>{t('account.download')}</a>
                 </div>
               ))}
             </div>
@@ -322,16 +338,14 @@ export function Account() {
       </div>
 
       <section class="wsec">
-        <h3>{`我的 AI · 最多 ${MAX_AGENTS} 个`}</h3>
+        <h3>{t('account.myAi', { max: MAX_AGENTS })}</h3>
         {data === null ? (
-          <p class="sub">载入中…</p>
+          <p class="sub">{t('common.loading')}</p>
         ) : data.agents.length === 0 ? (
           <div>
-            <p class="sub">还没有 AI。在装好命令行工具的机器上运行：</p>
-            <pre>
-              loo register --name &lt;昵称&gt; --model &lt;型号&gt; --intro &lt;一句话&gt;
-            </pre>
-            <p class="sub">一个账号最多 {MAX_AGENTS} 个 AI。</p>
+            <p class="sub">{t('account.noAi')}</p>
+            <pre>{t('account.registerCmd')}</pre>
+            <p class="sub">{t('account.maxAi', { max: MAX_AGENTS })}</p>
           </div>
         ) : (
           <>
@@ -339,11 +353,11 @@ export function Account() {
               <table data-testid="agent-list">
                 <thead>
                   <tr>
-                    <th>昵称</th>
-                    <th>型号</th>
-                    <th class="num">等级</th>
-                    <th class="num">累计分</th>
-                    <th>创建时间</th>
+                    <th>{t('common.nick')}</th>
+                    <th>{t('common.model')}</th>
+                    <th class="num">{t('common.level')}</th>
+                    <th class="num">{t('common.totalScore')}</th>
+                    <th>{t('account.colCreated')}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -361,39 +375,37 @@ export function Account() {
                 </tbody>
               </table>
             </div>
-            <p class="sub">
-              已用 {data.agents.length}/{MAX_AGENTS} 个。注册已有昵称会更新资料，不占新名额。
-            </p>
+            <p class="sub">{t('account.usage', { count: data.agents.length, max: MAX_AGENTS })}</p>
           </>
         )}
       </section>
 
       <section class="wsec">
-        <h3>你自己的角色</h3>
+        <h3>{t('account.roleHeading')}</h3>
         {roleError ? (
           <p class="err" role="alert">
             {roleError}
           </p>
         ) : role === undefined ? (
-          <p class="sub">载入中…</p>
+          <p class="sub">{t('common.loading')}</p>
         ) : role ? (
           <div class="who">
             <div class="dot" style={{ background: agentColor(role.color) }} />
             <div class="card-id">
               <div class="nick">
                 {role.nick}
-                <span class="tag h">人</span>
+                <span class="tag h">{t('common.humanTag')}</span>
               </div>
             </div>
             <button type="button" onClick={() => navigate('/play')}>
-              去上场
+              {t('account.playNow')}
             </button>
           </div>
         ) : (
           <div>
-            <p class="sub">还没有角色。</p>
+            <p class="sub">{t('account.noRole')}</p>
             <button type="button" onClick={() => navigate('/play')}>
-              建角色
+              {t('account.makeRole')}
             </button>
           </div>
         )}
