@@ -155,10 +155,10 @@ W5f（删除像素界面）对 `docs/screenshots/` 下全部 131 张 PNG 做了�
 | `l/using.png` | web/scripts/l-shots.mjs | 3D（林地） | 保留：脚本仍生成 |
 | `l/wall-half.png` | web/scripts/l-shots.mjs | 3D（林地） | 保留：脚本仍生成 |
 | `l/windup.png` | web/scripts/l-shots.mjs | 3D（林地） | 保留：脚本仍生成 |
-| `perf-after-replay-213.png` | scripts/perf.sh（visual-screenshots） | 2D（旧像素棋盘） | 保留：脚本仍生成；内容为 2D 旧画面，待决（不在本次删除） |
-| `perf-after-spectator.png` | scripts/perf.sh（visual-screenshots） | 2D（旧像素棋盘） | 保留：脚本仍生成；内容为 2D 旧画面，待决（不在本次删除） |
-| `perf-before-replay-213.png` | scripts/perf.sh（visual-screenshots） | 2D（旧像素棋盘） | 保留：脚本仍生成；内容为 2D 旧画面，待决（不在本次删除） |
-| `perf-before-spectator.png` | scripts/perf.sh（visual-screenshots） | 2D（旧像素棋盘） | 保留：脚本仍生成；内容为 2D 旧画面，待决（不在本次删除） |
+| `perf-after-replay-213.png` | scripts/perf.sh（visual-screenshots） | 2D（旧像素棋盘） | 已删除（2D 旧画面，见 git 历史 `8e32592`）；重跑 `scripts/perf.sh` 会按现在的 3D 画面重新生成 |
+| `perf-after-spectator.png` | scripts/perf.sh（visual-screenshots） | 2D（旧像素棋盘） | 已删除（2D 旧画面，见 git 历史 `8e32592`）；重跑 `scripts/perf.sh` 会按现在的 3D 画面重新生成 |
+| `perf-before-replay-213.png` | scripts/perf.sh（visual-screenshots） | 2D（旧像素棋盘） | 已删除（2D 旧画面，见 git 历史 `8e32592`）；重跑 `scripts/perf.sh` 会按现在的 3D 画面重新生成 |
+| `perf-before-spectator.png` | scripts/perf.sh（visual-screenshots） | 2D（旧像素棋盘） | 已删除（2D 旧画面，见 git 历史 `8e32592`）；重跑 `scripts/perf.sh` 会按现在的 3D 画面重新生成 |
 | `play-1440.png` | web/e2e/play.mjs | 3D（林地） | 保留：脚本仍生成 |
 | `play-390.png` | web/e2e/play.mjs | 3D（林地） | 保留：脚本仍生成 |
 | `play-pending-390.png` | web/e2e/play.mjs | 3D（林地） | 保留：脚本仍生成 |

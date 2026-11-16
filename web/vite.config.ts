@@ -8,9 +8,6 @@ export default defineConfig({
   plugins: [presetPreact()],
   server: {
     port: 5173,
-    // `web/` renders sprites straight out of `docs/art/sprites.svg`, which sits
-    // outside the Vite root.
-    fs: { allow: ['..'] },
     proxy: {
       '/api': { target: apiTarget, changeOrigin: true },
       '/install.sh': { target: apiTarget, changeOrigin: true },

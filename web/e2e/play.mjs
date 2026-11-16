@@ -856,8 +856,8 @@ function hexOf(text) {
 }
 
 function duckColours() {
-  const sprites = fs.readFileSync(path.join(ROOT, 'web/src/sprites.ts'), 'utf8');
-  const block = sprites.match(/export const AGENT_COLORS = \[([\s\S]*?)\]/)[1];
+  const palette = fs.readFileSync(path.join(ROOT, 'web/src/palette.ts'), 'utf8');
+  const block = palette.match(/export const AGENT_COLORS = \[([\s\S]*?)\]/)[1];
   const shells = [...block.matchAll(/'(#[0-9a-fA-F]{6})'/g)].map((m) => m[1]);
   const ground = fs.readFileSync(path.join(ROOT, 'web/src/world3d/ground.ts'), 'utf8').match(/FLOOR_HEX = 0x([0-9a-fA-F]{6})/)[1];
   return { shells, floor: `#${ground}` };
