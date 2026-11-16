@@ -102,19 +102,6 @@ export function Leaderboard() {
           ))}
         </div>
         <div class="mrow">
-          {showsModel ? (
-            <label class="field">
-              <span>型号</span>
-              <select value={model ?? ''} onChange={(event) => setModel(event.currentTarget.value || null)}>
-                <option value="">全部型号</option>
-                {models.map((entry) => (
-                  <option key={entry} value={entry}>
-                    {entry}
-                  </option>
-                ))}
-              </select>
-            </label>
-          ) : null}
           <div class="tabs" role="tablist" aria-label="榜单">
             {METRICS.map((entry) => (
               <button
@@ -129,6 +116,23 @@ export function Leaderboard() {
               </button>
             ))}
           </div>
+          {showsModel ? (
+            <label class="field model-field">
+              <span>型号</span>
+              <select
+                class="model-select"
+                value={model ?? ''}
+                onChange={(event) => setModel(event.currentTarget.value || null)}
+              >
+                <option value="">全部型号</option>
+                {models.map((entry) => (
+                  <option key={entry} value={entry}>
+                    {entry}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : null}
         </div>
       </div>
 
