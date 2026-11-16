@@ -1,0 +1,50 @@
+{
+  "mode": "headless-gpu",
+  "results": [
+    {
+      "width": 1440,
+      "height": 900,
+      "quality": "high",
+      "frames": 516,
+      "median_fps": 26.9,
+      "p10_fps": 23,
+      "calls": 516,
+      "triangles": 2062474
+    },
+    {
+      "width": 1440,
+      "height": 900,
+      "quality": "medium",
+      "frames": 287,
+      "median_fps": 14.5,
+      "p10_fps": 13,
+      "calls": 515,
+      "triangles": 1870954
+    },
+    {
+      "width": 1440,
+      "height": 900,
+      "quality": "low",
+      "frames": 714,
+      "median_fps": 37.2,
+      "p10_fps": 25.6,
+      "calls": 265,
+      "triangles": 888288
+    },
+    {
+      "width": 390,
+      "height": 844,
+      "quality": "low",
+      "frames": 1199,
+      "median_fps": 59.9,
+      "p10_fps": 54.9,
+      "calls": 114,
+      "triangles": 778408
+    }
+  ],
+  "chrome": "Chrome/156.0.8078.79",
+  "gpu": "ANGLE (Intel, Mesa Intel(R) UHD Graphics (CML GT2), OpenGL ES 3.2)",
+  "loadavg_1m": 2.6,
+  "loadavg_1m_after": 3.76,
+  "note": "loadavg_1m is /proc/loadavg before the run (no dev stress running; the shot servers were stopped); loadavg_1m_after is after it. Vite dev server serves scene.html on 18132."
+}

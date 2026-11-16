@@ -161,6 +161,199 @@ async function windowFlow(browser) {
   await page.close();
 }
 
+const FINAL_LAUNCH = {
+  executablePath: CHROME,
+  headless: true,
+  args: ['--headless=new', '--no-sandbox', '--use-angle=gl', '--enable-gpu', '--ignore-gpu-blocklist', '--hide-scrollbars'],
+};
+
+async function runFinal() {
+  const finalFailures = [];
+  const fcheck = (ok, message) => {
+    if (!ok) finalFailures.push(message);
+  };
+  mkdirSync(args.out, { recursive: true });
+  const browser = await puppeteer.launch(FINAL_LAUNCH);
+  const newPage = async (base, route, viewport) => {
+    const page = await browser.newPage();
+    await page.setViewport({ ...viewport, deviceScaleFactor: 1 });
+    await page.goto(new URL(route, base).href, { waitUntil: 'domcontentloaded', timeout: 60000 });
+    return page;
+  };
+  const snap = async (page, name) => {
+    const { scroll, inner } = await page.evaluate(() => ({
+      scroll: document.documentElement.scrollWidth,
+      inner: window.innerWidth,
+    }));
+    fcheck(scroll <= inner, `${name}: horizontal scroll (scrollWidth ${scroll} > ${inner})`);
+    await page.screenshot({ path: path.join(args.out, `${name}.png`) });
+    console.log(`shot ${name}`);
+  };
+  const settle = (page, selector) =>
+    page.waitForFunction(
+      (sel) => {
+        const win = document.querySelector(sel);
+        return win !== null && !win.textContent.includes('载入中…');
+      },
+      { timeout: 30000 },
+      selector,
+    );
+  const windowShot = async (base, route, key, viewport, name) => {
+    const page = await newPage(base, route, viewport);
+    try {
+      await page.waitForSelector(`.win[data-window="${key}"]`, { timeout: 30000 });
+      await settle(page, `.win[data-window="${key}"]`);
+      await snap(page, name);
+    } finally {
+      await page.close();
+    }
+  };
+  const watchPage = async (viewport) => {
+    const page = await newPage(args.base, '/', viewport);
+    await page.waitForFunction(() => window.__looView && window.__looView.tick() >= 0, { timeout: 60000 });
+    await page.waitForSelector('.ui-card', { timeout: 30000 });
+    await sleep(2500);
+    return page;
+  };
+  const devAgents = async () => {
+    const { result } = await (await fetch(new URL('/api/projection', args.base))).json();
+    return result.agents;
+  };
+
+  try {
+    if (args.final === '1') {
+      for (const [w, viewport] of [['1440', DESKTOP], ['390', PHONE]]) {
+        const page = await watchPage(viewport);
+        const bar = await page.evaluate(() => document.querySelector('.ui-bottom')?.getBoundingClientRect().height ?? 0);
+        fcheck(bar <= 96, `watch-${w}: .ui-bottom height ${bar.toFixed(1)} > 96`);
+        await snap(page, `watch-${w}`);
+        await page.close();
+      }
+
+      {
+        const agents = await devAgents();
+        fcheck(agents.length >= 2, `watch-selected: only ${agents.length} agents on the field`);
+        const target = agents[agents.length - 1];
+        const page = await watchPage(DESKTOP);
+        await page.waitForFunction(
+          (id) => window.__looView.screenOf(id) !== null,
+          { timeout: 30000 },
+          target.id,
+        );
+        const at = await page.evaluate((id) => window.__looView.screenOf(id), target.id);
+        await page.mouse.click(at.x, at.y);
+        await page.waitForFunction(
+          (nick) => document.querySelector('.ui-card .nick')?.firstChild?.textContent?.trim() === nick,
+          { timeout: 15000 },
+          target.nick,
+        );
+        await sleep(800);
+        await snap(page, 'watch-selected-1440');
+        await page.close();
+      }
+
+      for (const [w, viewport] of [['1440', DESKTOP], ['390', PHONE]]) {
+        const page = await watchPage(viewport);
+        if (viewport === PHONE) {
+          await page.click('[data-open="menu"]');
+          await page.click('.ui-menu [data-open="settings"]');
+        } else {
+          await page.click('[data-open="settings"]');
+        }
+        await page.waitForSelector('.win[data-window="settings"]', { timeout: 15000 });
+        await sleep(400);
+        await snap(page, `settings-${w}`);
+        await page.close();
+      }
+
+      const agentId = (await devAgents())[0].id;
+      await windowShot(args.base, '/leaderboard', 'leaderboard', DESKTOP, 'board-1440');
+      await windowShot(args.base, '/leaderboard', 'leaderboard', PHONE, 'board-390');
+      await windowShot(args.base, '/stats', 'stats', DESKTOP, 'stats-1440');
+      await windowShot(args.base, '/stats', 'stats', PHONE, 'stats-390');
+      await windowShot(args.base, `/agent/${agentId}`, 'agent', DESKTOP, 'profile-1440');
+      await windowShot(args.base, `/agent/${agentId}`, 'agent', PHONE, 'profile-390');
+    }
+
+    if (args.final === '1' && args.official) {
+      const officialRound = async (viewport, w) => {
+        const username = `w3f-user${w}`;
+        const page = await newPage(args.official, '/register', viewport);
+        try {
+          await page.waitForSelector('.win[data-window="register"] input[name="username"]', { timeout: 60000 });
+          await snap(page, `register-${w}`);
+          await page.type('.win[data-window="register"] input[name="username"]', username);
+          await page.type('.win[data-window="register"] input[name="password"]', 'w3f-password-1');
+          await page.click('.win[data-window="register"] button[type="submit"]');
+          await page.waitForSelector('.win[data-window="account"]', { timeout: 30000 });
+          await page.waitForFunction(
+            (name) => document.querySelector('.acct .nick')?.textContent === name,
+            { timeout: 30000 },
+            username,
+          );
+          await settle(page, '.win[data-window="account"]');
+          await snap(page, `account-${w}`);
+          await page.evaluate(() => {
+            const logout = [...document.querySelectorAll('.acct button')].find((button) =>
+              button.textContent.includes('退出登录'),
+            );
+            logout?.click();
+          });
+          await page.waitForFunction(() => location.pathname === '/login', { timeout: 30000 });
+          await page.waitForSelector('.win[data-window="login"]', { timeout: 30000 });
+          await snap(page, `login-${w}`);
+        } catch (error) {
+          finalFailures.push(`official round ${w}: ${error.message}`);
+        } finally {
+          await page.close();
+        }
+      };
+      await officialRound(DESKTOP, '1440');
+      await officialRound(PHONE, '390');
+    }
+
+    if (args['replay-auto'] === '1') {
+      const deadline = Date.now() + 10 * 60 * 1000;
+      let inside = null;
+      while (Date.now() < deadline) {
+        const { result } = await (await fetch(new URL('/api/projection', args.base))).json();
+        inside = result.counts.inside;
+        if (inside === 0) break;
+        await sleep(3000);
+      }
+      if (inside !== 0) {
+        console.log(`SKIP replay-auto-1440: field still has ${inside} agents after 10 minutes`);
+      } else {
+        const page = await newPage(args.base, '/', DESKTOP);
+        await page.waitForFunction(() => window.__looView && window.__looView.tick() >= 0, { timeout: 60000 });
+        try {
+          await page.waitForFunction(
+            () => document.querySelector('.ui-clock .live.rp') !== null,
+            { timeout: 120000, polling: 500 },
+          );
+          await sleep(1200);
+          await snap(page, 'replay-auto-1440');
+        } catch (error) {
+          console.log(`SKIP replay-auto-1440: no replay badge within 2 minutes (${error.message.split('\n')[0]})`);
+        }
+        await page.close();
+      }
+    }
+  } finally {
+    await browser.close();
+  }
+  if (finalFailures.length > 0) {
+    for (const failure of finalFailures) console.error(`FAIL ${failure}`);
+    process.exit(1);
+  }
+  console.log('final shots passed');
+  process.exit(0);
+}
+
+if (args.final === '1' || args['replay-auto'] === '1') {
+  await runFinal();
+}
+
 const browser = await puppeteer.launch({
   executablePath: CHROME,
   headless: true,
