@@ -1,0 +1,77 @@
+{
+  "base": "http://127.0.0.1:18128",
+  "other_headless_chrome_before_start": 7,
+  "load_limit": 4,
+  "runs": [
+    {
+      "run": 1,
+      "load1_before": 2.77,
+      "load1_after": 3.15,
+      "settled_index": 0,
+      "settled_settings": {
+        "scale": 1,
+        "grass": 1,
+        "shadow": 2048
+      },
+      "log": [
+        {
+          "t": 864.762,
+          "event": "start",
+          "from": 0,
+          "to": 0,
+          "medianMs": null
+        },
+        {
+          "t": 6897.8,
+          "event": "settle",
+          "from": 0,
+          "to": 0,
+          "medianMs": 33.399999999999636
+        }
+      ],
+      "fps_after_settle": {
+        "frames": 524,
+        "median_frame_ms": 33.4,
+        "median_fps": 29.9,
+        "p10_fps": 20
+      },
+      "gpu": "ANGLE (Intel, Mesa Intel(R) UHD Graphics (CML GT2), OpenGL ES 3.2)",
+      "shot": "auto-run1.png"
+    },
+    {
+      "run": 2,
+      "load1_before": 3.15,
+      "load1_after": 4.61,
+      "settled_index": 0,
+      "settled_settings": {
+        "scale": 1,
+        "grass": 1,
+        "shadow": 2048
+      },
+      "log": [
+        {
+          "t": 462.1,
+          "event": "start",
+          "from": 0,
+          "to": 0,
+          "medianMs": null
+        },
+        {
+          "t": 6478.5,
+          "event": "settle",
+          "from": 0,
+          "to": 0,
+          "medianMs": 33.399999999999636
+        }
+      ],
+      "fps_after_settle": {
+        "frames": 506,
+        "median_frame_ms": 33.4,
+        "median_fps": 29.9,
+        "p10_fps": 20
+      },
+      "gpu": "ANGLE (Intel, Mesa Intel(R) UHD Graphics (CML GT2), OpenGL ES 3.2)",
+      "shot": "auto-run2.png"
+    }
+  ]
+}
