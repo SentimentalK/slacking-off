@@ -242,6 +242,49 @@ async function setupAi() {
   pass(`${AI_NICK} is inside the world`);
 }
 
+async function assertBrandClear(target, label) {
+  const geometry = await target.evaluate(() => {
+    const brand = document.querySelector('.ui-brand .t1');
+    const pill = document.querySelector('.ui-navr .cnt');
+    if (!brand || !pill) return null;
+    const a = brand.getBoundingClientRect();
+    const b = pill.getBoundingClientRect();
+    return {
+      brand: [a.left, a.top, a.right, a.bottom],
+      pill: [b.left, b.top, b.right, b.bottom],
+      scrollWidth: brand.scrollWidth,
+      clientWidth: brand.clientWidth,
+    };
+  });
+  assert(geometry, `${label}: the brand name or the counter capsule is missing from the top bar`);
+  const [al, at, ar, ab] = geometry.brand;
+  const [bl, bt, br, bb] = geometry.pill;
+  const overlap = al < br && bl < ar && at < bb && bt < ab;
+  assert(!overlap, `${label}: brand name ${JSON.stringify(geometry.brand)} overlaps counter capsule ${JSON.stringify(geometry.pill)}`);
+  assert(
+    geometry.scrollWidth <= geometry.clientWidth,
+    `${label}: brand name is cut off (scrollWidth ${geometry.scrollWidth} > clientWidth ${geometry.clientWidth})`,
+  );
+  pass(`${label}: brand name and counter capsule do not overlap, and the brand name is not cut off`);
+}
+
+async function assertLastSessionColumnReachable(target, label) {
+  const column = await target.evaluate(() => {
+    const headers = document.querySelectorAll('.win[data-window="agent"] table thead th');
+    const last = headers[headers.length - 1];
+    if (!last) return null;
+    last.scrollIntoView({ block: 'nearest', inline: 'end' });
+    const rect = last.getBoundingClientRect();
+    return { text: last.textContent.trim(), left: rect.left, right: rect.right, width: window.innerWidth };
+  });
+  assert(column, `${label}: the agent window has no session table header row`);
+  assert(
+    column.left >= 0 && column.right <= column.width,
+    `${label}: last session column "${column.text}" is still outside the window after scrolling its table (${column.left}–${column.right} in ${column.width}px)`,
+  );
+  pass(`${label}: last session column "${column.text}" scrolls into view`);
+}
+
 async function homeFollowsBrowser(locale, expect, tag) {
   phase(`A language follow: ${locale}`);
   const browser = await launch(locale, `a-${tag}`);
@@ -259,6 +302,7 @@ async function homeFollowsBrowser(locale, expect, tag) {
     }
     await shot(target, `home-${tag}-1440.png`);
     await target.setViewport(PHONE);
+    if (expect.lang === 'en') await assertBrandClear(target, `home ${tag} 390`);
     await shot(target, `home-${tag}-390.png`);
   } finally {
     await closeBrowser(browser);
@@ -365,6 +409,7 @@ async function cycle(lang) {
       AI_NICK,
     );
     await screen(target, lang, 'profile', extra);
+    await assertLastSessionColumnReachable(target, `profile ${lang} 1440`);
 
     phase(`C ${lang}: watch card`);
     await ensureAiInside();
@@ -395,6 +440,7 @@ async function cycle(lang) {
         console.log('NOTE: watch-card-en-390 walked the AI toward the entrance before clicking (option A)');
       }
       await sleep(500);
+      if (lang === 'en') await assertBrandClear(target, 'watch-card en 390');
       await screen(target, lang, 'watch-card', extra, PHONE);
       await target.setViewport(DESKTOP);
     }
@@ -416,6 +462,7 @@ async function cycle(lang) {
     if (lang === 'en') {
       await target.setViewport(PHONE);
       await sleep(800);
+      await assertBrandClear(target, 'play en 390');
       await screen(target, lang, 'play', extra, PHONE);
       await target.setViewport(DESKTOP);
     }

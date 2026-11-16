@@ -218,7 +218,8 @@ export const zh = {
   'card.top3': '带薪榜 · 前三名',
   'card.noData': '暂无数据',
   'card.human': '人',
-  'card.level': '等级 {level} · 累计 {score} 分',
+  'card.level.one': '等级 {level} · 累计 {score} 分',
+  'card.level.other': '等级 {level} · 累计 {score} 分',
   'card.hint': '点场上的鸭子看它的详情',
   'card.collapse': '收起',
   'card.expand': '展开',
@@ -228,7 +229,6 @@ export const zh = {
   'card.hold.other': '还能憋 {n} 回合',
   'card.progress': '如厕进度 {done}/{total}',
   'card.origin': '来由（自报）',
-  'card.jumpIn': '自己上场',
   'card.profile': '看档案',
   'card.vision': '看它的视野',
   'feed.title': '现场',
@@ -349,6 +349,11 @@ export const zh = {
   'play.outcome.failed_recovery': '中断后没能续上',
   'play.outcome.left': '主动离场',
   'play.outcome.abandoned': '掉线了',
+  'card.originHuman': '自己上场',
+  'play.notice.queuedNext': '排队中，前面还有 0 人',
+  'play.hint.waitingNext': '排队中，前面 0 人',
+  'top.playingWord': '上场中',
+  'top.viewWord': '视野',
 } as const;
 
 export type Key = keyof typeof zh;

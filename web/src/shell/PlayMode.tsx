@@ -570,7 +570,10 @@ export function PlayMode({ terrain, top3, view, viewReady, override, clickRef, c
       </>
     );
   } else if (state?.placement === 'waiting') {
-    hintNode = t('play.hint.waiting', { n: state.agent?.queue_ahead ?? '—' });
+    hintNode =
+      state.agent?.queue_ahead === 0
+        ? t('play.hint.waitingNext')
+        : t('play.hint.waiting', { n: state.agent?.queue_ahead ?? '—' });
   } else if (!state?.joined) {
     hintNode = (
       <>

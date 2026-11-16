@@ -463,6 +463,8 @@ function enTurns(text: string): string {
 
 export function enEvent(text: string): string {
   return enTurns(text)
+    .replace('needs the toilet (urine) before', 'needs to pee before')
+    .replace('needs the toilet (feces) before', 'needs to poop before')
     .replace(/: failed_deadline$/, ": didn't make it in time")
     .replace(/: failed_recovery$/, ": couldn't recover in time")
     .replace(/: abandoned$/, ': dropped out')

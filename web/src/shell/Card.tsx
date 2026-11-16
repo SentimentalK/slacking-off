@@ -75,7 +75,7 @@ export function Card({ agent, tick, top3, onVision, visionState, vision = true, 
             {agent.kind === 'human' ? <span class="tag h">{t('card.human')}</span> : <span class="tag">AI</span>}
           </div>
           <div class="sub card-level">
-            {t('card.level', { level: agent.level, score: formatNumber(agent.score_total) })}
+            {tn('card.level', agent.score_total, { level: agent.level, score: formatNumber(agent.score_total) })}
           </div>
         </div>
         <button
@@ -111,9 +111,9 @@ export function Card({ agent, tick, top3, onVision, visionState, vision = true, 
           )}
         </div>
 
-        <div class="kv">
+        <div class="kv card-origin">
           <span class="sub">{t('card.origin')}</span>
-          <span>{agent.kind === 'human' ? t('card.jumpIn') : agent.sent_by ? sentByLabel(agent.sent_by) : '—'}</span>
+          <span>{agent.kind === 'human' ? t('card.originHuman') : agent.sent_by ? sentByLabel(agent.sent_by) : '—'}</span>
         </div>
 
         <div class="kv">

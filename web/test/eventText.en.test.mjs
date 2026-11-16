@@ -7,7 +7,11 @@ const TICK_WORD = /\btick\b/;
 const SAMPLES = [
   [
     'dev-12 needs the toilet (urine) before tick 40',
-    'dev-12 needs the toilet (urine) before turn 40',
+    'dev-12 needs to pee before turn 40',
+  ],
+  [
+    'dev-12 needs the toilet (feces) before tick 40',
+    'dev-12 needs to poop before turn 40',
   ],
   [
     "dev-12's use at (4,4) was interrupted: the toilet is not usable; recovery by tick 30",
