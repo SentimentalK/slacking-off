@@ -2,7 +2,7 @@
 // (docs/art/README.md §7). Text itself stays plain: the server never sends
 // HTML and nothing here parses it.
 
-import { agentColor } from '../render';
+import { agentColor } from '../palette';
 import type { Projection } from '../types';
 
 /** Nickname -> body colour, for agents on the field and in the queue. */

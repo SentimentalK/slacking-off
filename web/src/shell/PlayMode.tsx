@@ -22,7 +22,7 @@ import { playProjection, visionGrid } from '../play/frame';
 import { findPath } from '../play/path';
 import { NEED_LABEL } from '../labels';
 import { zhAction, zhEvent } from '../eventText';
-import { agentColor } from '../render';
+import { agentColor } from '../palette';
 import type { ClickHit, WorldView } from '../world3d';
 import type {
   Dir,

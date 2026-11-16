@@ -163,16 +163,18 @@ bash scripts/e2e-full.sh
 
 ## 回放高光带
 
-`/replay` 的时间轴只排列**有事件**的 tick（成功 / 打人 / 拆除 / 防住），中间的空 tick
-直接裁掉，用虚线表示并统计「跳过 N tick」；播放、方向键和拖动都按高光前进，不会再逐 tick
-空转。手动在 TICK 框输入仍可看任意一帧，标签会注明「非高光」；录像里高光少于两个时退回
-全量 tick，避免只剩一帧。
+回放是首页外壳里的「回放」模式（深链 `/replay`，画面是同一个 3D 渲染器）。
+
+- 时间轴只覆盖「场内或门外至少有一个会话」的非空段；段与段之间的空档裁掉，标「跳过 N 回合」。
+- 段内逐回合播放，支持播放、变速、拖动、上一段、下一段，以及下一个高光（成功、打人、拆除、防住）。
+- 回合输入框可以看任意一帧；不在段内的回合标「非高光」。
+- 场上没人时，首页自动循环最后一段。
 
 ## 字体许可
 
-网页只使用 `@fontsource/*` npm 包自托管的 Silkscreen、Noto Sans SC 和
-ZCOOL QingKe HuangYou，运行时不请求 Google Fonts 或任何 CDN。三者均为 OFL-1.1，
-许可原文在 `web/licenses/`，说明见 [`web/README.md`](web/README.md#字体)。
+网页只使用 `@fontsource/noto-sans-sc` npm 包自托管的 Noto Sans SC，运行时不请求 Google Fonts
+或任何 CDN。它是 OFL-1.1，许可原文在 `web/licenses/OFL-NotoSansSC.txt`，说明见
+[`web/README.md`](web/README.md#字体)。等宽数字与命令用系统字体（`ui-monospace, Menlo, Consolas, monospace`）。
 
 ## 能力边界
 

@@ -1,3 +1,4 @@
+@import '@fontsource/noto-sans-sc/400.css';
 @import '@fontsource/noto-sans-sc/700.css';
 @import '@fontsource/noto-sans-sc/900.css';
 
@@ -5,12 +6,20 @@
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
   --gold: #ffcf40;
+  --gold-light: #fff3b0;
   --ink: rgba(16, 20, 18, 0.74);
   --line: rgba(255, 255, 255, 0.14);
   --dim: #b9c2b4;
   --ok: #4cc964;
   --bad: #f0554d;
   --blue: #58b7ff;
+  --success: #3fb950;
+  --danger: #e5484d;
+  --defend: #42a5f5;
+  --fg: #f4f1e8;
+  --chip: #2b3550;
+  --border: 2px solid #3b4a6b;
+  --shadow: 0 4px 0 #141926;
   --bottom-h: 96px;
   position: fixed;
   inset: 0;

@@ -163,3 +163,18 @@
 .shell .win.panel {
   box-shadow: none;
 }
+:where(.shell) button {
+  font: inherit;
+  color: inherit;
+  border-radius: 0;
+}
+:where(.shell) a {
+  color: var(--gold);
+}
+:where(.shell) a:hover {
+  color: var(--gold-light);
+}
+:where(.shell),
+:where(.shell) * {
+  box-sizing: border-box;
+}

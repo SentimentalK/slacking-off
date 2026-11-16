@@ -6,7 +6,7 @@ import { AuthError, account, createToken, logout, revokeToken } from '../auth';
 import { Link } from '../components/Link';
 import { commandMessage, loadMe } from '../play/client';
 import { navigate } from '../router';
-import { agentColor } from '../render';
+import { agentColor } from '../palette';
 import type {
   AccountResponse,
   DownloadEntry,
