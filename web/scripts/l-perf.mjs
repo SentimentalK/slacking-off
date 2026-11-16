@@ -4,7 +4,7 @@ import path from 'node:path';
 import puppeteer from 'puppeteer-core';
 
 function parseArgs(argv) {
-  const args = { headed: false, gpu: false, matrix: false, ladder: false, auto: false };
+  const args = { headed: false, gpu: false, matrix: false, ladder: false, auto: false, 'no-chrome-wait': false };
   for (let i = 0; i < argv.length; i += 1) {
     const key = argv[i];
     if (key === '--headed') args.headed = true;
@@ -12,6 +12,8 @@ function parseArgs(argv) {
     else if (key === '--matrix') args.matrix = true;
     else if (key === '--ladder') args.ladder = true;
     else if (key === '--auto') args.auto = true;
+    else if (key === '--auto-shell') args['auto-shell'] = true;
+    else if (key === '--no-chrome-wait') args['no-chrome-wait'] = true;
     else args[key.replace(/^--/, '')] = argv[++i];
   }
   return args;
@@ -240,14 +242,17 @@ const CHROME_WAIT_MS = 30 * 60 * 1000;
 
 const countOtherHeadless = () => Number(execSync("ps -eo cmd | grep -c '[c]hrome.*headless'", { encoding: 'utf8' }).trim());
 
+const LOAD_DEADLINE = args.deadline ? Date.parse(args.deadline) : Infinity;
+
 async function waitForLoadAtMost(limit) {
-  while (load1() > limit) {
+  while (load1() > limit && Date.now() < LOAD_DEADLINE) {
     console.error(`load ${load1()} > ${limit}; pausing ${MATRIX_LOAD_CHECK_MS / 1000}s`);
     await sleep(MATRIX_LOAD_CHECK_MS);
   }
 }
 
 async function waitForOtherChrome() {
+  if (args['no-chrome-wait']) return countOtherHeadless();
   const started = Date.now();
   let count = countOtherHeadless();
   while (count > 0 && Date.now() - started < CHROME_WAIT_MS) {
@@ -347,15 +352,15 @@ async function sampleFps(page, ms) {
   };
 }
 
-async function waitForSettle(page) {
+async function waitForSettle(page, timeout) {
   await page.waitForFunction(
     () => (window.__looQualityLog ?? []).some((e) => e.event === 'settle'),
-    { timeout: 40000, polling: 250 },
+    { timeout, polling: 250 },
   );
   return page.evaluate(() => window.__looQualityLog ?? []);
 }
 
-async function runAuto() {
+async function runAuto(mode) {
   if (!args.gpu) {
     console.error('--auto needs --gpu (real GPU only)');
     process.exit(2);
@@ -373,14 +378,22 @@ async function runAuto() {
     for (const run of [1, 2]) {
       await waitForLoadAtMost(LADDER_LOAD_LIMIT);
       const loadBefore = load1();
+      const otherBefore = countOtherHeadless();
       const page = await context.newPage();
       await page.setViewport({ width: 1440, height: 900, deviceScaleFactor: 1 });
-      await page.goto(`${args.base}/`, { waitUntil: 'load' });
-      const log = await waitForSettle(page);
-      const settle = log.filter((e) => e.event === 'settle').at(-1);
-      const settledIndex = settle.to;
-      const fps = await sampleFps(page, 20000);
-      const shot = path.join(path.dirname(args.out), `auto-run${run}.png`);
+      const url =
+        mode === 'scene'
+          ? `${args.base}/scene.html?animate=1&fixture=${fixtureParam}`
+          : `${args.base}/`;
+      await page.goto(url, { waitUntil: 'load' });
+      if (mode === 'scene') await page.waitForFunction('window.__looReady === true', { timeout: 120000 });
+      const log = await waitForSettle(page, mode === 'scene' ? 60000 : 40000);
+      const settled = log.filter((e) => e.event === 'settle').at(-1);
+      const fps =
+        mode === 'scene'
+          ? await measureScene(page)
+          : await sampleFps(page, 20000);
+      const shot = path.join(path.dirname(args.out), `auto-${mode}-run${run}.png`);
       await page.screenshot({ path: shot });
       const gpuName = await page.evaluate(() => {
         const gl = document.createElement('canvas').getContext('webgl2');
@@ -392,17 +405,47 @@ async function runAuto() {
         console.error(`asked for a real GPU but Chrome rendered with: ${gpuName}`);
         process.exit(1);
       }
-      runs.push({ run, load1_before: loadBefore, load1_after: load1(), settled_index: settledIndex, settled_settings: LADDER_KNOBS[settledIndex], log, fps_after_settle: fps, gpu: gpuName, shot: path.basename(shot) });
-      console.log(JSON.stringify({ run, settled_index: settledIndex, fps, load1_before: loadBefore, load1_after: load1() }));
+      runs.push({
+        run,
+        other_headless_chrome_before: otherBefore,
+        load1_before: loadBefore,
+        load1_after: load1(),
+        log,
+        settled_index: settled.to,
+        settled_settings: LADDER_KNOBS[settled.to],
+        fps_after_settle: fps,
+        gpu: gpuName,
+        shot: path.basename(shot),
+      });
+      console.log(JSON.stringify({ run, settled_index: settled.to, fps, other_headless_chrome_before: otherBefore, load1_before: loadBefore, load1_after: load1() }));
       await page.close();
     }
     await context.close();
   } finally {
     await browser.close();
   }
-  const report = { base: args.base, other_headless_chrome_before_start: otherChrome, load_limit: LADDER_LOAD_LIMIT, runs };
+  const report = { mode, base: args.base, fixture: mode === 'scene' ? args.fixture : null, other_headless_chrome_at_mode_start: otherChrome, load_limit: LADDER_LOAD_LIMIT, runs };
   writeFileSync(args.out, `${JSON.stringify(report, null, 2)}\n`);
   console.log(JSON.stringify(runs.map((r) => ({ run: r.run, settled: r.settled_index, fps: r.fps_after_settle.median_fps }))));
+}
+
+async function measureScene(page) {
+  await page.evaluate(() => {
+    window.__looFrames = [];
+  });
+  await sleep(20000);
+  const stamps = await page.evaluate(() => window.__looFrames ?? []);
+  const intervals = [];
+  for (let i = 1; i < stamps.length; i += 1) intervals.push(stamps[i] - stamps[i - 1]);
+  const sorted = intervals.slice().sort((a, b) => a - b);
+  const med = sorted.length > 0 ? percentile(sorted, 0.5) : 0;
+  const p90 = sorted.length > 0 ? percentile(sorted, 0.9) : 0;
+  return {
+    frames: stamps.length,
+    median_frame_ms: Math.round(med * 100) / 100,
+    median_fps: med > 0 ? Math.round((1000 / med) * 10) / 10 : 0,
+    p10_fps: p90 > 0 ? Math.round((1000 / p90) * 10) / 10 : 0,
+  };
 }
 
 if (args.matrix) {
@@ -413,8 +456,8 @@ if (args.ladder) {
   await runLadder();
   process.exit(0);
 }
-if (args.auto) {
-  await runAuto();
+if (args.auto || args['auto-shell']) {
+  await runAuto(args['auto-shell'] ? 'shell' : 'scene');
   process.exit(0);
 }
 

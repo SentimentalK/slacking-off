@@ -1,6 +1,20 @@
 import { getJSON } from './api';
 import type { Projection, Terrain } from './types';
-import { AutoQuality, chooseQuality, createWorldView, rendererName, type Quality, type UiState, type VisionGrid, type WorldView } from './world3d';
+import {
+  AUTO_LADDER,
+  LadderQuality,
+  chooseQuality,
+  createWorldView,
+  ladderAllowed,
+  rendererName,
+  saveAutoRecord,
+  startIndexFor,
+  type LadderEvent,
+  type Quality,
+  type UiState,
+  type VisionGrid,
+  type WorldView,
+} from './world3d';
 
 interface Fixture {
   terrain: Terrain;
@@ -26,6 +40,7 @@ declare global {
     __looReady?: boolean;
     __looCapture?: () => ReturnType<WorldView['capture']>;
     __looFrames?: number[];
+    __looQualityLog?: LadderEvent[];
   }
 }
 
@@ -53,7 +68,10 @@ const playParam = q.get('play');
 const playId = playParam !== null && /^\d+$/.test(playParam) ? Number(playParam) : null;
 const ui: UiState = { selected: null, hoverToilet, dusk: q.get('dusk') === '1', duskT: 0, visionOf };
 const paramQuality = q.get('quality');
-const quality: Quality = chooseQuality(paramQuality, readStored(), innerWidth, navigator.hardwareConcurrency || 8, rendererName());
+const renderer = rendererName();
+const manualTier = still || paramQuality !== null || readStored() !== null;
+const ladder = !manualTier && ladderAllowed(innerWidth, renderer);
+const quality: Quality = chooseQuality(paramQuality, readStored(), innerWidth, navigator.hardwareConcurrency || 8, renderer);
 const focusParts = (q.get('focus') ?? '').split(',').map(Number);
 const focus = focusParts.length === 2 && focusParts.every(Number.isFinite) ? { x: focusParts[0], y: focusParts[1] } : undefined;
 const zoomParam = Number(q.get('zoom'));
@@ -87,10 +105,17 @@ async function loadApi(): Promise<Fixture> {
 
 const data = api ? await loadApi() : await loadFixture();
 if (playId !== null) ui.vision = playVision(data.cur, data.terrain.width, data.terrain.height, playId);
-const view = createWorldView(canvas, { quality, still });
+const startLevel = ladder ? startIndexFor(renderer) : 0;
+const view = createWorldView(canvas, { quality: ladder ? 'high' : quality, still });
+if (ladder) view.setSettings(AUTO_LADDER[startLevel]);
 if (focus || zoom !== undefined) view.setView({ focus, zoom });
-const auto = new AutoQuality(!still && paramQuality === null && readStored() === null);
-let current: Quality = quality;
+window.__looQualityLog = [];
+const auto = ladder
+  ? new LadderQuality(true, startLevel, (event) => {
+      window.__looQualityLog?.push(event);
+      if (event.event === 'settle') saveAutoRecord(renderer, event.to);
+    })
+  : null;
 const t0 = performance.now();
 const span = data.cur.tick_seconds * 1000;
 if (animate) window.__looFrames = [];
@@ -110,11 +135,8 @@ function frame(now: number): void {
     ui,
   });
   window.__looReady = true;
-  const next = auto.frame(now, current);
-  if (next) {
-    view.setQuality(next);
-    current = next;
-  }
+  const next = auto?.frame(now) ?? null;
+  if (next !== null) view.setSettings(AUTO_LADDER[next]);
   requestAnimationFrame(frame);
 }
 

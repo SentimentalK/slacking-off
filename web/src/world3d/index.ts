@@ -15,7 +15,18 @@ import type { FrameInput, Layer, Quality, RenderSettings, SceneCtx } from './typ
 import { overrideSettings, settingsFor } from './quality';
 
 export type { FrameInput, Layer, Quality, RenderSettings, SceneCtx, UiState, VisionGrid } from './types';
-export { chooseQuality, rendererName, AutoQuality, settingsFor } from './quality';
+export {
+  AUTO_LADDER,
+  LadderQuality,
+  chooseQuality,
+  describeSettings,
+  ladderAllowed,
+  rendererName,
+  saveAutoRecord,
+  settingsFor,
+  startIndexFor,
+} from './quality';
+export type { LadderEvent } from './quality';
 
 export interface ClickHit {
   clientX: number;

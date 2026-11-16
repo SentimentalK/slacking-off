@@ -58,3 +58,33 @@ test('the stored record only applies to the same renderer and a valid index', ()
   store.set('loo.autoQuality', '{not json');
   assert.equal(startIndexFor('gpu-a', storage), 0);
 });
+
+function feedPattern(auto, pattern, untilMs) {
+  let t = 0;
+  let i = 0;
+  auto.frame(t);
+  while (t < untilMs) {
+    t += pattern[i % pattern.length];
+    i += 1;
+    auto.frame(t);
+  }
+}
+
+test('a window with median 33.4 ms but a 75th percentile of 50 ms steps down', () => {
+  const { events, onEvent } = recorder();
+  const auto = new LadderQuality(true, 0, onEvent);
+  feedPattern(auto, [16.7, 16.7, 33.4, 33.4, 33.4, 33.4, 33.4, 50, 50, 50], 6100);
+  assert.equal(auto.level, 1);
+  const step = events.find((e) => e.event === 'step');
+  assert.equal(step.p75Ms, 50);
+  assert.ok(Math.abs(step.medianMs - 33.4) < 0.5);
+});
+
+test('a window whose 75th percentile is 33.4 ms settles at the current level', () => {
+  const { events, onEvent } = recorder();
+  const auto = new LadderQuality(true, 0, onEvent);
+  feedPattern(auto, [33.4], 6100);
+  assert.equal(auto.level, 0);
+  assert.equal(events.at(-1).event, 'settle');
+  assert.ok(Math.abs(events.at(-1).p75Ms - 33.4) < 0.5);
+});
