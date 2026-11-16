@@ -7,7 +7,7 @@ import {
   formatNumber,
   formatPercent,
 } from '../labels';
-import { agentColor } from '../render';
+import { agentColor } from '../palette';
 import type { ProfileResponse } from '../types';
 
 type Status = 'loading' | 'ready' | 'missing' | 'error';

@@ -2,7 +2,7 @@ import { useState } from 'preact/hooks';
 import type { ComponentChildren } from 'preact';
 import { navigate } from '../router';
 import { NEED_LABEL, SENT_BY_LABEL, formatNumber } from '../labels';
-import { agentColor } from '../render';
+import { agentColor } from '../palette';
 import type { LeaderRow, ProjectionAgent } from '../types';
 
 export const DEADLINE_MAX_TICKS = 240;

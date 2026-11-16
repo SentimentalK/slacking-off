@@ -9,7 +9,6 @@
 | `prototype/forest.png`、`forest-dusk.png`、`forest-zoom.png` | 原型画面：白天、黄昏、近景 |
 | `prototype/ui-watch.png`、`ui-play.png`、`ui-board.png`、`ui-account.png` | 原型界面：观战、上场、排行榜窗口、账号窗口 |
 | `legacy/` | 作废的像素规格与 `mock-*.html`，只作历史参考 |
-| `sprites.svg` | 旧像素图块；只剩 `/replay` 旧页面在用，随它删除 |
 
 原型是基准，不是要照搬的代码。正式实现在 `web/src/world3d/`（场景）与 `web/src/shell/`（界面）。
 

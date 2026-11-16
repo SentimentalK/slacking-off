@@ -32,3 +32,146 @@
 - `home-empty-1440.png`、`replay-empty-1440.png`、`replay-back-live-1440.png`、`replay-spans-1440.png` 来自 `scripts/e2e-k.sh`（`web/e2e/onboarding.mjs`，端口 18143、0.5 秒/tick、空数据目录）：账号 `k2-e2e`，CLI Agent `k2-ai` 建墙再拆墙后离场，第二个 Agent `k2-ai-2` 再入场；`replay-1440.png` 来自 `scripts/e2e-full.sh`（端口 18086、1 秒/tick）。
 - `/replay` 的时间轴只铺可回放的 tick：`/api/timeline` 的 `spans` 决定轨道，每个可回放 tick 占一个位置，区间之间是 3px 缝隙；指针位置是当前 tick 的累计偏移，点击/拖动按偏移 seek，左右键移到相邻可回放 tick（跨段直接到下一段开头或上一段末尾），播放每次前进一个可回放 tick 并在最后一段播完时停下。
 - `stats-prompt-1440.png` 来自 Master 的验收（端口 18147，数据目录由 `scripts/e2e-k.sh` 那一局拷来，再加一个装了摸鱼提示的账号 `k-stats-b`）：`/stats` 上「摸鱼提示」这一组切到「装了提示」，总会话 `1`；另两组标签「全部 / 装了提示 / 没装提示」与上面的「全部会话 / 有另一类在场」是各自独立的选择器。
+
+## 波次 5 清点
+
+W5f（删除像素界面）对 `docs/screenshots/` 下全部 131 张 PNG 做了清点。
+
+- 生成脚本：对每个文件名做 `grep -rn "<文件名>" web/e2e web/scripts scripts`；脚本用模板拼名的（`${w}`、`perf-${tag}-*`、`l-shots` 的命名表）按模板对应。
+- 没有任何脚本写入其路径的，逐张看图（缩略图与原图抽查）。
+- 结论：没有"无脚本生成且为 2D 像素棋盘"的图，因此本次没有删除截图。2D 旧画面只有两类，二者都仍由脚本生成，按"仍被生成的保留"处理：`perf-{before,after}-{spectator,replay-213}.png`（4 张，`scripts/perf.sh` 的 tag 命名）与根目录 `replay-1440.png`（`flow.mjs` 全量验证会重拍，重拍后为 3D）。前 4 张的 2D 内容已无法由当前代码重现，是否删除待定。
+- `l3/`、`l4/`、`l5/play-*`、`l5/icons.png`、`l5/roof.png`、`l5/dusk/round-*/ref-dusk.png` 是旧波次的副本；当前没有脚本写入这些路径，但看图都是 3D 林地或窗口，按规则保留。
+
+| 文件 | 生成脚本 | 2D/3D | 处置 |
+| --- | --- | --- | --- |
+| `account-1440.png` | web/e2e/flow.mjs | 3D（林地） | 保留：脚本仍生成 |
+| `account-390.png` | web/e2e/flow.mjs | 3D（林地） | 保留：脚本仍生成 |
+| `home-empty-1440.png` | web/e2e/onboarding.mjs | 3D（林地） | 保留：脚本仍生成 |
+| `l3/account-1440.png` | web/scripts/ui-shots.mjs（--windows） | 3D（林地） | 保留：脚本仍生成 |
+| `l3/account-390.png` | web/scripts/ui-shots.mjs（--windows） | 3D（林地） | 保留：脚本仍生成 |
+| `l3/board-1440.png` | web/scripts/ui-shots.mjs（--windows） | 3D（林地） | 保留：脚本仍生成 |
+| `l3/board-390.png` | web/scripts/ui-shots.mjs（--windows） | 3D（林地） | 保留：脚本仍生成 |
+| `l3/login-1440.png` | web/scripts/ui-shots.mjs（--windows） | 3D 背景上的窗口（或纯色背景窗口） | 保留：脚本仍生成 |
+| `l3/login-390.png` | web/scripts/ui-shots.mjs（--windows） | 3D 背景上的窗口（或纯色背景窗口） | 保留：脚本仍生成 |
+| `l3/look/1-day.png` | web/scripts/l3-compare.mjs（look） | 对比图（左右并排） | 保留：脚本仍生成 |
+| `l3/look/2-dusk.png` | web/scripts/l3-compare.mjs（look） | 对比图（左右并排） | 保留：脚本仍生成 |
+| `l3/look/3-forest-edge.png` | web/scripts/l3-compare.mjs（look） | 对比图（左右并排） | 保留：脚本仍生成 |
+| `l3/look/4-icons.png` | web/scripts/l3-compare.mjs（look） | 对比图（左右并排） | 保留：脚本仍生成 |
+| `l3/look/5b-roof-north.png` | web/scripts/l3-compare.mjs（look） | 对比图（左右并排） | 保留：脚本仍生成 |
+| `l3/look/5-roof.png` | web/scripts/l3-compare.mjs（look） | 对比图（左右并排） | 保留：脚本仍生成 |
+| `l3/look/6-portrait.png` | web/scripts/l3-compare.mjs（look） | 对比图（左右并排） | 保留：脚本仍生成 |
+| `l3/look/7-medium.png` | web/scripts/l3-compare.mjs（look） | 对比图（左右并排） | 保留：脚本仍生成 |
+| `l3/look/after/closeup-day.png` | web/scripts/l-shots.mjs | 3D（林地） | 保留：脚本仍生成 |
+| `l3/look/after/closeup-dusk.png` | web/scripts/l-shots.mjs | 3D（林地） | 保留：脚本仍生成 |
+| `l3/look/after/levels.png` | web/scripts/l-shots.mjs | 3D（林地） | 保留：脚本仍生成 |
+| `l3/look/after/low-390.png` | web/scripts/l-shots.mjs | 3D（林地） | 保留：脚本仍生成 |
+| `l3/look/after/missing-wall.png` | web/scripts/l-shots.mjs | 3D（林地） | 保留：脚本仍生成 |
+| `l3/look/after/overview-day-medium.png` | web/scripts/l-shots.mjs | 3D（林地） | 保留：脚本仍生成 |
+| `l3/look/after/overview-day.png` | web/scripts/l-shots.mjs | 3D（林地） | 保留：脚本仍生成 |
+| `l3/look/after/overview-dusk.png` | web/scripts/l-shots.mjs | 3D（林地） | 保留：脚本仍生成 |
+| `l3/look/after/play-vision.png` | web/scripts/l-shots.mjs | 3D（林地） | 保留：脚本仍生成 |
+| `l3/look/after/portrait-390.png` | web/scripts/l-shots.mjs | 3D（林地） | 保留：脚本仍生成 |
+| `l3/look/after/queue.png` | web/scripts/l-shots.mjs | 3D（林地） | 保留：脚本仍生成 |
+| `l3/look/after/shack-door-north.png` | web/scripts/l-shots.mjs | 3D（林地） | 保留：脚本仍生成 |
+| `l3/look/after/shack-door-south.png` | web/scripts/l-shots.mjs | 3D（林地） | 保留：脚本仍生成 |
+| `l3/look/after/states-overview.png` | web/scripts/l-shots.mjs | 3D（林地） | 保留：脚本仍生成 |
+| `l3/look/after/states.png` | web/scripts/l-shots.mjs | 3D（林地） | 保留：脚本仍生成 |
+| `l3/look/after/upgrading.png` | web/scripts/l-shots.mjs | 3D（林地） | 保留：脚本仍生成 |
+| `l3/look/after/using.png` | web/scripts/l-shots.mjs | 3D（林地） | 保留：脚本仍生成 |
+| `l3/look/after/vision.png` | web/scripts/l-shots.mjs | 3D（林地） | 保留：脚本仍生成 |
+| `l3/look/after/wall-half.png` | web/scripts/l-shots.mjs | 3D（林地） | 保留：脚本仍生成 |
+| `l3/look/after/windup.png` | web/scripts/l-shots.mjs | 3D（林地） | 保留：脚本仍生成 |
+| `l3/look/compare-day.png` | web/scripts/l3-compare.mjs（look） | 对比图（左右并排） | 保留：脚本仍生成 |
+| `l3/look/compare-dusk.png` | web/scripts/l3-compare.mjs（look） | 对比图（左右并排） | 保留：脚本仍生成 |
+| `l3/profile-1440.png` | web/scripts/ui-shots.mjs（--windows） | 3D（林地） | 保留：脚本仍生成 |
+| `l3/profile-390.png` | web/scripts/ui-shots.mjs（--windows） | 3D（林地） | 保留：脚本仍生成 |
+| `l3/register-1440.png` | web/scripts/ui-shots.mjs（--final） | 3D 背景上的窗口（或纯色背景窗口） | 保留：脚本仍生成 |
+| `l3/register-390.png` | web/scripts/ui-shots.mjs（--final） | 3D 背景上的窗口（或纯色背景窗口） | 保留：脚本仍生成 |
+| `l3/replay-auto-1440.png` | web/scripts/ui-shots.mjs（--replay-auto） | 3D（林地） | 保留：脚本仍生成 |
+| `l3/settings-1440.png` | web/scripts/ui-shots.mjs（--final） | 3D（林地） | 保留：脚本仍生成 |
+| `l3/settings-390.png` | web/scripts/ui-shots.mjs（--final） | 3D（林地） | 保留：脚本仍生成 |
+| `l3/stats-1440.png` | web/scripts/ui-shots.mjs（--windows） | 3D（林地） | 保留：脚本仍生成 |
+| `l3/stats-390.png` | web/scripts/ui-shots.mjs（--windows） | 3D（林地） | 保留：脚本仍生成 |
+| `l3/ui-compare-account.png` | web/scripts/l3-compare.mjs（ui） | 对比图（左右并排） | 保留：脚本仍生成 |
+| `l3/ui-compare-board.png` | web/scripts/l3-compare.mjs（ui） | 对比图（左右并排） | 保留：脚本仍生成 |
+| `l3/ui-compare-play.png` | web/scripts/l3-compare.mjs（ui） | 对比图（左右并排） | 保留：脚本仍生成 |
+| `l3/ui-compare-watch.png` | web/scripts/l3-compare.mjs（ui） | 对比图（左右并排） | 保留：脚本仍生成 |
+| `l3/watch-1440.png` | web/scripts/ui-shots.mjs（--final） | 3D（林地） | 保留：脚本仍生成 |
+| `l3/watch-390.png` | web/scripts/ui-shots.mjs（--final） | 3D（林地） | 保留：脚本仍生成 |
+| `l3/watch-selected-1440.png` | web/scripts/ui-shots.mjs（--final） | 3D（林地） | 保留：脚本仍生成 |
+| `l4/play-1440.png` | 无（未写入其路径） | 3D（林地） | 保留：无脚本，看图为 3D/窗口，不属 2D 棋盘 |
+| `l4/play-390.png` | 无（未写入其路径） | 3D（林地） | 保留：无脚本，看图为 3D/窗口，不属 2D 棋盘 |
+| `l4/play-memory-1440.png` | 无（未写入其路径） | 3D（林地） | 保留：无脚本，看图为 3D/窗口，不属 2D 棋盘 |
+| `l4/play-menu-1440.png` | 无（未写入其路径） | 3D（林地） | 保留：无脚本，看图为 3D/窗口，不属 2D 棋盘 |
+| `l4/play-menu-390.png` | 无（未写入其路径） | 3D（林地） | 保留：无脚本，看图为 3D/窗口，不属 2D 棋盘 |
+| `l4/play-success-1440.png` | 无（未写入其路径） | 3D（林地） | 保留：无脚本，看图为 3D/窗口，不属 2D 棋盘 |
+| `l4/play-success-390.png` | 无（未写入其路径） | 3D（林地） | 保留：无脚本，看图为 3D/窗口，不属 2D 棋盘 |
+| `l4/play-using-1440.png` | 无（未写入其路径） | 3D（林地） | 保留：无脚本，看图为 3D/窗口，不属 2D 棋盘 |
+| `l4/ui-compare-play.png` | web/scripts/l3-compare.mjs（ui） | 对比图（左右并排） | 保留：脚本仍生成 |
+| `l5/dusk/round-1/compare-day.png` | web/scripts/l-compare.mjs | 对比图（左右并排） | 保留：脚本仍生成 |
+| `l5/dusk/round-1/compare-dusk.png` | web/scripts/l-compare.mjs | 对比图（左右并排） | 保留：脚本仍生成 |
+| `l5/dusk/round-1/ref-dusk.png` | 无（未写入其路径） | 3D（林地） | 保留：无脚本，看图为 3D/窗口，不属 2D 棋盘 |
+| `l5/dusk/round-2/compare-day.png` | web/scripts/l-compare.mjs | 对比图（左右并排） | 保留：脚本仍生成 |
+| `l5/dusk/round-2/compare-dusk.png` | web/scripts/l-compare.mjs | 对比图（左右并排） | 保留：脚本仍生成 |
+| `l5/dusk/round-2/ref-dusk.png` | 无（未写入其路径） | 3D（林地） | 保留：无脚本，看图为 3D/窗口，不属 2D 棋盘 |
+| `l5/dusk/round-3/compare-day.png` | web/scripts/l-compare.mjs | 对比图（左右并排） | 保留：脚本仍生成 |
+| `l5/dusk/round-3/compare-dusk.png` | web/scripts/l-compare.mjs | 对比图（左右并排） | 保留：脚本仍生成 |
+| `l5/dusk/round-3/near-day.png` | web/scripts/l-shots.mjs | 3D（林地） | 保留：脚本仍生成 |
+| `l5/dusk/round-3/near-dusk.png` | web/scripts/l-shots.mjs | 3D（林地） | 保留：脚本仍生成 |
+| `l5/dusk/round-3/overview-dusk.png` | web/scripts/l-shots.mjs | 3D（林地） | 保留：脚本仍生成 |
+| `l5/icons.png` | 无（未写入其路径） | 3D（林地） | 保留：无脚本，看图为 3D/窗口，不属 2D 棋盘 |
+| `l5/play-1440.png` | 无（未写入其路径） | 3D（林地） | 保留：无脚本，看图为 3D/窗口，不属 2D 棋盘 |
+| `l5/play-390.png` | 无（未写入其路径） | 3D（林地） | 保留：无脚本，看图为 3D/窗口，不属 2D 棋盘 |
+| `l5/play-memory-1440.png` | 无（未写入其路径） | 3D（林地） | 保留：无脚本，看图为 3D/窗口，不属 2D 棋盘 |
+| `l5/play-menu-1440.png` | 无（未写入其路径） | 3D（林地） | 保留：无脚本，看图为 3D/窗口，不属 2D 棋盘 |
+| `l5/play-menu-390.png` | 无（未写入其路径） | 3D（林地） | 保留：无脚本，看图为 3D/窗口，不属 2D 棋盘 |
+| `l5/play-success-1440.png` | 无（未写入其路径） | 3D（林地） | 保留：无脚本，看图为 3D/窗口，不属 2D 棋盘 |
+| `l5/play-success-390.png` | 无（未写入其路径） | 3D（林地） | 保留：无脚本，看图为 3D/窗口，不属 2D 棋盘 |
+| `l5/play-using-1440.png` | 无（未写入其路径） | 3D（林地） | 保留：无脚本，看图为 3D/窗口，不属 2D 棋盘 |
+| `l5/replay-1440.png` | web/e2e/onboarding.mjs | 3D（林地） | 保留：脚本仍生成 |
+| `l5/replay-390.png` | web/e2e/onboarding.mjs | 3D（林地） | 保留：脚本仍生成 |
+| `l5/roof.png` | 无（未写入其路径） | 3D（林地） | 保留：无脚本，看图为 3D/窗口，不属 2D 棋盘 |
+| `l/closeup-day.png` | web/scripts/l-shots.mjs | 3D（林地） | 保留：脚本仍生成 |
+| `l/closeup-dusk.png` | web/scripts/l-shots.mjs | 3D（林地） | 保留：脚本仍生成 |
+| `l/compare-day.png` | web/scripts/l-compare.mjs | 对比图（左右并排） | 保留：脚本仍生成 |
+| `l/compare-dusk.png` | web/scripts/l-compare.mjs | 对比图（左右并排） | 保留：脚本仍生成 |
+| `leaderboard-1440.png` | web/e2e/flow.mjs | 3D（林地） | 保留：脚本仍生成 |
+| `leaderboard-human-1440.png` | web/e2e/play.mjs | 3D（林地） | 保留：脚本仍生成 |
+| `leaderboard-mixed-1440.png` | web/e2e/play.mjs | 3D（林地） | 保留：脚本仍生成 |
+| `l/levels.png` | web/scripts/l-shots.mjs | 3D（林地） | 保留：脚本仍生成 |
+| `l/low-390.png` | web/scripts/l-shots.mjs | 3D（林地） | 保留：脚本仍生成 |
+| `l/missing-wall.png` | web/scripts/l-shots.mjs | 3D（林地） | 保留：脚本仍生成 |
+| `login-1440.png` | web/scripts/ui-shots.mjs（--windows / --final） | 3D 背景上的窗口（或纯色背景窗口） | 保留：脚本仍生成 |
+| `l/overview-day.png` | web/scripts/l-shots.mjs | 3D（林地） | 保留：脚本仍生成 |
+| `l/overview-dusk.png` | web/scripts/l-shots.mjs | 3D（林地） | 保留：脚本仍生成 |
+| `l/pixel-diff.png` | web/scripts/l-pixel.mjs | 3D（林地） | 保留：脚本仍生成 |
+| `l/pixel-live.png` | web/scripts/l-pixel.mjs | 3D（林地） | 保留：脚本仍生成 |
+| `l/pixel-replay.png` | web/scripts/l-pixel.mjs | 3D（林地） | 保留：脚本仍生成 |
+| `l/queue.png` | web/scripts/l-shots.mjs | 3D（林地） | 保留：脚本仍生成 |
+| `l/shack-door-north.png` | web/scripts/l-shots.mjs | 3D（林地） | 保留：脚本仍生成 |
+| `l/shack-door-south.png` | web/scripts/l-shots.mjs | 3D（林地） | 保留：脚本仍生成 |
+| `l/states.png` | web/scripts/l-shots.mjs | 3D（林地） | 保留：脚本仍生成 |
+| `l/upgrading.png` | web/scripts/l-shots.mjs | 3D（林地） | 保留：脚本仍生成 |
+| `l/using.png` | web/scripts/l-shots.mjs | 3D（林地） | 保留：脚本仍生成 |
+| `l/wall-half.png` | web/scripts/l-shots.mjs | 3D（林地） | 保留：脚本仍生成 |
+| `l/windup.png` | web/scripts/l-shots.mjs | 3D（林地） | 保留：脚本仍生成 |
+| `perf-after-replay-213.png` | scripts/perf.sh（visual-screenshots） | 2D（旧像素棋盘） | 保留：脚本仍生成；内容为 2D 旧画面，待决（不在本次删除） |
+| `perf-after-spectator.png` | scripts/perf.sh（visual-screenshots） | 2D（旧像素棋盘） | 保留：脚本仍生成；内容为 2D 旧画面，待决（不在本次删除） |
+| `perf-before-replay-213.png` | scripts/perf.sh（visual-screenshots） | 2D（旧像素棋盘） | 保留：脚本仍生成；内容为 2D 旧画面，待决（不在本次删除） |
+| `perf-before-spectator.png` | scripts/perf.sh（visual-screenshots） | 2D（旧像素棋盘） | 保留：脚本仍生成；内容为 2D 旧画面，待决（不在本次删除） |
+| `play-1440.png` | web/e2e/play.mjs | 3D（林地） | 保留：脚本仍生成 |
+| `play-390.png` | web/e2e/play.mjs | 3D（林地） | 保留：脚本仍生成 |
+| `play-pending-390.png` | web/e2e/play.mjs | 3D（林地） | 保留：脚本仍生成 |
+| `play-success-390.png` | web/e2e/play.mjs | 3D（林地） | 保留：脚本仍生成 |
+| `profile-1440.png` | web/e2e/flow.mjs | 3D（林地） | 保留：脚本仍生成 |
+| `register-1440.png` | web/scripts/ui-shots.mjs（--windows / --final） | 3D 背景上的窗口（或纯色背景窗口） | 保留：脚本仍生成 |
+| `replay-1440.png` | web/e2e/flow.mjs；web/e2e/onboarding.mjs | 2D（旧像素棋盘） | 保留：flow.mjs 全量验证会重拍（当前内容为 2D 旧画面，重拍后为 3D） |
+| `replay-back-live-1440.png` | web/e2e/onboarding.mjs | 3D（林地） | 保留：脚本仍生成 |
+| `replay-empty-1440.png` | web/e2e/onboarding.mjs | 3D（林地） | 保留：脚本仍生成 |
+| `replay-spans-1440.png` | web/e2e/onboarding.mjs | 3D（林地） | 保留：脚本仍生成 |
+| `spectator-1440.png` | web/e2e/flow.mjs | 3D（林地） | 保留：脚本仍生成 |
+| `spectator-390.png` | web/e2e/flow.mjs | 3D（林地） | 保留：脚本仍生成 |
+| `spectator-human-badge-1440.png` | web/e2e/play.mjs | 3D（林地） | 保留：脚本仍生成 |
+| `stats-1440.png` | web/e2e/flow.mjs | 3D（林地） | 保留：脚本仍生成 |
+| `stats-kinds-1440.png` | web/e2e/play.mjs | 3D（林地） | 保留：脚本仍生成 |
+| `stats-prompt-1440.png` | 无（Master 验收时手工拷入） | 窗口（纯色背景，无场景） | 保留：无脚本；内容是统计窗口，不是 2D 棋盘 |

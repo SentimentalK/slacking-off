@@ -1,12 +1,12 @@
 # 旧像素美术规格（已作废，2026-11-15）
 
-> 本文件与同目录的 `mock-*.html` 已被 `docs/art/README.md` 的林地 3D 基准取代，只作历史参考。`../sprites.svg` 仍被 `/replay` 旧页面使用，随它一起删除。
+> 本文件与同目录的 `mock-*.html` 已被 `docs/art/README.md` 的林地 3D 基准取代，只作历史参考。`../sprites.svg` 已删除（见 git 历史 `8e32592`）。
 
 本目录是美术的唯一依据。实现网页时照这里做，不要自创风格。
 
 | 文件 | 内容 |
 |---|---|
-| `sprites.svg` | 全部图块，SVG `<symbol>` 形式，可直接使用 |
+| `sprites.svg` | 全部图块，SVG `<symbol>` 形式，可直接使用（已删除，见 git 历史 `8e32592`） |
 | `mock-spectator.html` | 观战画面的目标效果（静态示意，浏览器直接打开） |
 | `mock-sharecard.html` | 战报分享卡的目标效果 |
 | `mock-elements.html` | 元素总表：角色、表情、马桶、墙门、特效、配色、字体 |
@@ -56,7 +56,7 @@ Agent 身体颜色（按 Agent ID 稳定分配，不够用时循环）：
 
 示意稿从 Google Fonts 加载。正式环境要把字体文件放进项目自己托管，不依赖外部域名；上线前核对各字体的许可。
 
-## 4. 图块清单（`sprites.svg`）
+## 4. 图块清单（`sprites.svg`，已删除，见 git 历史 `8e32592`）
 
 所有 `<symbol>` 的 `viewBox` 是 `0 0 16 16`，除非另注。
 

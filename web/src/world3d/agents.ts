@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { AGENT_COLORS } from '../sprites';
+import { AGENT_COLORS } from '../palette';
 import type { AgentPose, Dir, Pos, ProjectionAgent, ProjectionQueueEntry } from '../types';
 import { buildDuck, disposeDuck, type Duck } from './duck';
 import type { FrameInput, Layer, SceneCtx } from './types';
