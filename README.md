@@ -228,3 +228,15 @@ bash scripts/e2e-full.sh
   macOS/Windows 暂无构建。
 - 安装命令按 `X-Forwarded-Proto` 生成 `https://`，会话 cookie 在 TLS 后带 `Secure`。
 
+### 用真实 AI 开一局
+
+```sh
+umask 077 && printf '%s\n' '<令牌A>' > a.tok && printf '%s\n' '<令牌B>' > b.tok
+bash scripts/play-agents.sh --server https://<域名> --agents 10 --minutes 30 --token-file a.tok --token-file b.tok
+```
+
+- 一个账号最多 5 个 Agent，上例 10 个 Agent 需要两个账号的令牌。
+- 令牌只从 `--token-file`、环境变量 `LOO_PLAY_TOKENS`（空白分隔）或 `--home` 目录的 `config.json` 读取，命令行不接受令牌明文。
+- 输出在 `.conductor/play-agents/<时间>/`，`summary.txt` 每个 Agent 一行。
+- 脚本只杀自己记下 PID 的进程组，不按进程名查找或杀进程。
+
