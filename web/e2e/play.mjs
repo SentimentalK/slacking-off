@@ -16,6 +16,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import puppeteer from 'puppeteer-core';
 import { findPath } from '../src/play/path.ts';
+import { assertChinese } from './lib-zh.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = process.env.LOO_PLAY_ROOT || path.resolve(HERE, '../..');
@@ -1102,6 +1103,7 @@ async function clickOnlyRound({ label, shots = {}, memory = false, checkWidth = 
     pass(
       `${label}: one-click far walk (${pathSteps} steps), ${clicks} clicks into the shack, closed the door, used, success at tick ${successTick}`,
     );
+    await assertChinese(page, ['.play-feed', '.ui-card', '.ui-bottom'], `${label}: my events, card and bottom bar`);
 
     if (memory) {
       const walked = await centreOffset(me);

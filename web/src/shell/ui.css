@@ -196,11 +196,33 @@
   gap: 6px;
   min-width: 0;
 }
-.shell .feed-row .chip {
+.shell .feed-dot {
   flex: none;
-  padding: 0 6px;
-  font-size: 11px;
-  line-height: 1.6;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--dim);
+}
+.shell .feed-dot[data-kind='success'] {
+  background: var(--gold);
+}
+.shell .feed-dot[data-kind='attack'] {
+  background: var(--bad);
+}
+.shell .feed-dot[data-kind='demolish'] {
+  background: #ff9e42;
+}
+.shell .feed-dot[data-kind='defend'] {
+  background: var(--blue);
+}
+.shell .feed-dot[data-kind='join'] {
+  background: var(--ok);
+}
+.shell .feed-dot[data-kind='build'] {
+  background: #d9b26a;
+}
+.shell .feed-dot[data-kind='use'] {
+  background: #b388ff;
 }
 .shell .feed-text {
   flex: 1 1 auto;
@@ -326,10 +348,21 @@
   transform: translateX(-50%);
   padding: 10px 14px;
   display: flex;
+  flex-wrap: wrap;
   gap: 14px;
   align-items: center;
   max-width: calc(100vw - 32px);
   white-space: nowrap;
+}
+.shell .bottom-replay {
+  flex: 0 0 100%;
+  min-width: 0;
+  white-space: normal;
+  text-align: center;
+}
+.shell .bottom-replay .chip {
+  display: inline-block;
+  max-width: 100%;
 }
 .shell .bottom-queue,
 .shell .bottom-actions {
@@ -615,44 +648,45 @@
     right: 8px;
     transform: none;
     display: flex;
-    flex-wrap: wrap;
-    gap: 4px 8px;
-    padding: 6px 10px;
-    white-space: normal;
+    flex-wrap: nowrap;
+    gap: 6px;
+    padding: 6px 8px;
+    white-space: nowrap;
     bottom: 8px;
   }
   .shell .ui-bottom .sep,
-  .shell .ui-bottom .hint {
+  .shell .ui-bottom .hint,
+  .shell .ui-bottom [data-intro] {
     display: none;
   }
   .shell .ui-bottom .bottom-queue {
     display: flex;
     align-items: center;
-    gap: 6px;
-    flex: 0 0 100%;
+    flex: 0 1 auto;
     min-width: 0;
+  }
+  .shell .ui-bottom .bottom-queue h3 {
+    padding: 4px 9px;
+    border: var(--border);
+    border-radius: 9px;
+    background: rgba(255, 255, 255, 0.1);
+    font-size: 12px;
+    letter-spacing: 0;
+    color: #f6f3ea;
     white-space: nowrap;
   }
-  .shell .ui-bottom .bottom-queue .chip {
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    line-height: 1.3;
-    padding: 3px 8px;
+  .shell .ui-bottom .bottom-replay {
+    white-space: normal;
   }
   .shell .ui-bottom .bottom-actions {
     display: flex;
-    gap: 8px;
-    flex: 0 0 100%;
-  }
-  .shell .ui-bottom [data-intro] {
-    flex: 0 0 100%;
-    font-size: 11px;
-    line-height: 1.4;
+    gap: 6px;
+    flex: 1 1 auto;
+    justify-content: flex-end;
+    min-width: 0;
   }
   .shell .ui-bottom .bottom-actions button {
-    flex: 1;
+    flex: 0 0 auto;
     padding: 4px 8px;
     line-height: 1.3;
   }
@@ -751,6 +785,7 @@
 .shell .pm-event-tick {
   color: var(--dim);
   flex: none;
+  font-size: 11px;
 }
 .shell .pm-stats {
   margin-top: 8px;

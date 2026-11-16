@@ -89,7 +89,7 @@ export function TopBar({
       {hideClock ? null : (
         <div class="ui-clock">
           <span class={statusClass}>{statusLabel}</span>
-          <div class="big">TICK {projection?.tick ?? '–'}</div>
+          <div class="big">回合 {projection?.tick ?? '–'}</div>
           {replaying ? null : (
             <>
               <div class="countdown">下次结算 {projection ? remaining : '–'}s</div>

@@ -133,3 +133,33 @@
     grid-template-columns: minmax(0, 1fr);
   }
 }
+.shell .win .bctl .model-field {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+}
+.shell .win .bctl select.model-select {
+  appearance: none;
+  -webkit-appearance: none;
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.5;
+  color: inherit;
+  background: rgba(255, 255, 255, 0.08)
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0h10L5 6z' fill='%23b9c2b4'/%3E%3C/svg%3E")
+    no-repeat right 10px center / 10px 6px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 6px 30px 6px 11px;
+  cursor: pointer;
+}
+.shell .win .bctl select.model-select:hover {
+  background-color: rgba(255, 255, 255, 0.16);
+}
+.shell .win .bctl select.model-select option {
+  background: #1b2230;
+  color: #f6f3ea;
+}
+.shell .win.panel {
+  box-shadow: none;
+}

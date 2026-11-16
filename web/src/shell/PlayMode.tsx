@@ -21,6 +21,7 @@ import type { PlayAction, UseOffer } from '../play/actions';
 import { playProjection, visionGrid } from '../play/frame';
 import { findPath } from '../play/path';
 import { NEED_LABEL } from '../labels';
+import { zhAction, zhEvent } from '../eventText';
 import { agentColor } from '../render';
 import type { ClickHit, WorldView } from '../world3d';
 import type {
@@ -547,7 +548,7 @@ export function PlayMode({ terrain, top3, view, override, clickRef, cameraRef, b
         <div class="kv">
           <span class="sub">当前动作</span>
           <span class="mono">
-            {agent.action ? `${agent.action.description} · 剩 ${agent.action.remaining}` : '无'}
+            {agent.action ? `${zhAction(agent.action.description)} · 剩 ${agent.action.remaining}` : '无'}
           </span>
         </div>
         <div class="kv">
@@ -585,9 +586,9 @@ export function PlayMode({ terrain, top3, view, override, clickRef, cameraRef, b
           <div class="sub">还没有事件。</div>
         ) : (
           <ol class="pm-events" data-testid="play-events">
-            {play.events.slice(0, 6).map((event) => (
+            {play.events.slice(0, 3).map((event) => (
               <li key={`${event.tick}:${event.seq}`} class="pm-event">
-                <span class="pm-event-tick mono">T{event.tick}</span> <span>{event.text}</span>
+                <span class="pm-event-tick">回合 {event.tick}</span> <span>{zhEvent(event.text)}</span>
               </li>
             ))}
           </ol>

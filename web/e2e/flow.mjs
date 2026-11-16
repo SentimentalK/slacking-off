@@ -12,6 +12,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import puppeteer from 'puppeteer-core';
+import { assertChinese } from './lib-zh.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = process.env.LOO_E2E_ROOT || path.resolve(HERE, '../..');
@@ -521,6 +522,11 @@ async function main() {
       { timeout: 5_000 },
     );
     pass('clicking the agent on the field selects it into the card');
+    await page.waitForSelector('.ui-feed .feed-row', { timeout: 10_000 });
+    await assertChinese(page, ['.ui-feed'], 'watch: event feed');
+    await assertChinese(page, ['.ui-card'], 'watch: selected card');
+    await assertChinese(page, ['.ui-bottom'], 'watch: bottom bar');
+    await assertChinese(page, ['.ui-brand', '.ui-clock'], 'watch: top bar');
 
     // --- replay / profile / leaderboard / stats ---------------------------
     const tick = await currentTick();
