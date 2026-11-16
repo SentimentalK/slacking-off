@@ -11,8 +11,12 @@ function parseArgs(argv) {
 }
 
 const args = parseArgs(process.argv.slice(2));
-if (!args.out || !['ui', 'look'].includes(args.set)) {
-  console.error('usage: l3-compare.mjs --set ui|look --out <dir>');
+const custom =
+  args.name && args.left && args.right
+    ? [{ name: args.name, left: path.resolve(args.left), right: path.resolve(args.right), labels: (args.labels ?? '原型,实现').split(',') }]
+    : null;
+if (!args.out || (!custom && !['ui', 'look'].includes(args.set))) {
+  console.error('usage: l3-compare.mjs --set ui|look --out <dir>  or  --out <dir> --name <file> --left <png> --right <png> [--labels a,b]');
   process.exit(2);
 }
 
@@ -97,7 +101,7 @@ const browser = await puppeteer.launch({
 });
 
 try {
-  for (const job of SETS[args.set]) {
+  for (const job of custom ?? SETS[args.set]) {
     const leftSize = pngSize(job.left);
     const rightSize = pngSize(job.right);
     const { html, totalW, rowH } = pageHtml(job, leftSize, rightSize);
