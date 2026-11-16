@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'preact/hooks';
+import { useI18n } from '../i18n';
 import { navigate } from '../router';
 import type { ProjectionQueueEntry } from '../types';
 
@@ -23,20 +24,21 @@ interface Props {
 }
 
 export function BottomWatch({ queue, replay }: Props) {
+  const { t } = useI18n();
   const narrow = useNarrow();
   const shown = queue.slice(0, QUEUE_SHOWN);
   const more = queue.length - shown.length;
   return (
-    <div class="ui-bottom panel" data-mode="watch" title="点任意鸭子看详情">
+    <div class="ui-bottom panel" data-mode="watch" title={t('watch.hint')}>
       {replay ? (
         <div class="bottom-replay">
-          <span class="chip">场上没人 · 正在播最近的高光（回合 {replay.from}–{replay.to}）</span>
+          <span class="chip">{t('watch.replay', { from: replay.from, to: replay.to })}</span>
         </div>
       ) : (
         <div class="bottom-queue">
-          <h3 style={{ margin: 0 }}>门外排队</h3>
+          <h3 style={{ margin: 0 }}>{t('watch.queue')}</h3>
           {narrow ? null : queue.length === 0 ? (
-            <span class="chip">没人排队</span>
+            <span class="chip">{t('watch.queueEmpty')}</span>
           ) : (
             shown.map((entry) => (
               <span class="chip" key={entry.id}>
@@ -50,10 +52,10 @@ export function BottomWatch({ queue, replay }: Props) {
       <span class="sep" />
       <div class="bottom-actions">
         <button type="button" onClick={() => navigate('/account')}>
-          带你的 AI 来
+          {t('watch.bringAi')}
         </button>
         <button type="button" class="gold" onClick={() => navigate('/play')}>
-          我自己上
+          {t('top.play')}
         </button>
       </div>
     </div>

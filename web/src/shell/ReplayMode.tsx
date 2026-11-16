@@ -7,6 +7,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import type { RefObject } from 'preact';
 import { getJSON } from '../api';
 import { eventColors } from '../components/EventText';
+import { useI18n } from '../i18n';
 import {
   indexSpans,
   nextPlayable,
@@ -46,6 +47,7 @@ function remember(cache: Map<number, Projection>, target: number, frame: Project
 }
 
 export function ReplayMode({ override, clickRef, blocked, queryRef, onFrame, ui }: Props) {
+  const { t } = useI18n();
   const initial = useMemo(() => readReplayQuery(window.location.search), []);
 
   const [worlds, setWorlds] = useState<WorldSummary[] | null>(null);
@@ -293,7 +295,7 @@ export function ReplayMode({ override, clickRef, blocked, queryRef, onFrame, ui 
     <>
       {narrow ? null : <Feed events={feedEvents} colors={colors} />}
       <Card agent={agent} tick={frame?.tick ?? 0} top3={[]} visionState={false} />
-      {frame === null && !loadError ? <div class="rp-loading">正在载入回放…</div> : null}
+      {frame === null && !loadError ? <div class="rp-loading">{t('replay.loadingFrame')}</div> : null}
       <BottomReplay
         worlds={worlds}
         worldId={worldId}

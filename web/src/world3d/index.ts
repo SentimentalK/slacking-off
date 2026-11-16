@@ -19,7 +19,6 @@ export {
   AUTO_LADDER,
   LadderQuality,
   chooseQuality,
-  describeSettings,
   ladderAllowed,
   rendererName,
   saveAutoRecord,

@@ -3,6 +3,8 @@
 
 import { ApiError, getEnvelope, postEnvelope } from '../api';
 import type { EnvelopeResult } from '../api';
+import { t } from '../i18n';
+import type { Key } from '../i18n';
 import type {
   ActionQueued,
   JoinResponse,
@@ -11,6 +13,12 @@ import type {
   PlayState,
 } from '../types';
 import type { PlayAction } from './actions';
+
+export type Msg = { key: Key; vars?: Record<string, string | number> } | { text: string };
+
+export function msgText(message: Msg): string {
+  return 'key' in message ? t(message.key, message.vars) : message.text;
+}
 
 /** Poll cadence: the page is visible. */
 export const VISIBLE_POLL_MS = 1000;
@@ -88,13 +96,16 @@ export function leaveWorld(): Promise<EnvelopeResult<LeaveResponse>> {
  * What the player should read for a failed command. Rate limiting is the one
  * code with a machine-readable hint, so it gets a specific sentence.
  */
-export function commandMessage(error: unknown): string {
+export function commandNotice(error: unknown): Msg {
   if (error instanceof ApiError) {
     if (error.code === 'rate_limited') {
-      const seconds = error.retryAfterSeconds ?? 1;
-      return `请求过快，${seconds} 秒后再试`;
+      return { key: 'play.rateLimited', vars: { seconds: error.retryAfterSeconds ?? 1 } };
     }
-    return error.message;
+    return { text: error.message };
   }
-  return error instanceof Error ? error.message : '请求失败';
+  return error instanceof Error ? { text: error.message } : { key: 'play.requestFailed' };
+}
+
+export function commandMessage(error: unknown): string {
+  return msgText(commandNotice(error));
 }

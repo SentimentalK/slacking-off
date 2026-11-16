@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
+import { useI18n } from '../i18n';
 import { navigate } from '../router';
 import type { Route } from '../router';
 import type { ClickHit } from '../world3d';
@@ -27,6 +28,7 @@ function modeOfRoute(route: Route): Mode {
 }
 
 export function Shell({ route }: { route: Route }) {
+  const { t } = useI18n();
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const override = useRef<WorldOverride | null>(null);
   const clickRef = useRef<((hit: ClickHit) => void) | null>(null);
@@ -120,18 +122,18 @@ export function Shell({ route }: { route: Route }) {
           <WindowBody w={w} />
         </Window>
       ) : settingsOpen ? (
-        <Window title="设置" windowKey="settings" onClose={() => setSettingsOpen(false)}>
+        <Window title={t('settings.title')} windowKey="settings" onClose={() => setSettingsOpen(false)}>
           <Settings
             dusk={world.dusk}
             onDusk={world.toggleDusk}
             quality={world.quality}
-            autoLabel={world.autoLabel}
+            autoSettings={world.autoSettings}
             onQuality={world.setQuality}
           />
         </Window>
       ) : null}
-      {toast !== null ? <div class="ui-toast panel">没有这个页面：{toast}</div> : null}
-      {world.sceneFailed ? <div class="ui-toast panel">画面载入失败，请刷新页面</div> : null}
+      {toast !== null ? <div class="ui-toast panel">{t('shell.unknownPage', { path: toast })}</div> : null}
+      {world.sceneFailed ? <div class="ui-toast panel">{t('shell.sceneFailed')}</div> : null}
     </div>
   );
 }

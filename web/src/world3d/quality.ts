@@ -87,11 +87,6 @@ const LADDER_SLOW_MEAN_MS = 32.5;
 const LADDER_MIN_SAMPLES = 30;
 const RETRY_BETTER_AFTER_MS = 7 * 24 * 3600 * 1000;
 
-export function describeSettings(s: RenderSettings): string {
-  const shadow = s.shadow === 0 ? '阴影 关' : `阴影 ${s.shadow}`;
-  return `渲染 ${Math.round(s.scale * 100)}% · 草 ${Math.round(s.grass * 100)}% · ${shadow}`;
-}
-
 export function ladderAllowed(width: number, renderer: string): boolean {
   return !(width < 700 || SOFTWARE_RENDERER.test(renderer));
 }

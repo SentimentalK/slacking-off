@@ -1,4 +1,6 @@
 import './windows.css';
+import { t } from '../i18n';
+import type { Key } from '../i18n';
 import { Account } from '../pages/Account';
 import { Leaderboard } from '../pages/Leaderboard';
 import { Login } from '../pages/Login';
@@ -7,17 +9,17 @@ import { Register } from '../pages/Register';
 import { Stats } from '../pages/Stats';
 import type { WindowKey } from './route';
 
-const TITLES: Record<WindowKey, string> = {
-  leaderboard: '排行榜',
-  stats: '统计',
-  account: '账号',
-  agent: '档案',
-  login: '登录',
-  register: '注册',
+const TITLES: Record<WindowKey, Key> = {
+  leaderboard: 'window.leaderboard',
+  stats: 'window.stats',
+  account: 'window.account',
+  agent: 'window.agent',
+  login: 'window.login',
+  register: 'window.register',
 };
 
 export function windowTitle(w: { key: WindowKey; id?: number }): string {
-  return TITLES[w.key];
+  return t(TITLES[w.key]);
 }
 
 export function WindowBody({ w }: { w: { key: WindowKey; id?: number } }) {

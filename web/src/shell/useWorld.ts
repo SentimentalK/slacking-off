@@ -3,19 +3,19 @@ import type { RefObject } from 'preact';
 import { getJSON, watch } from '../api';
 import type { WatchStatus } from '../api';
 import { eventColors } from '../components/EventText';
+import { useI18n } from '../i18n';
 import { pickReplaySpan, REPLAY_TICKS_PER_SECOND } from '../replay-source';
 import {
   AUTO_LADDER,
   LadderQuality,
   chooseQuality,
-  describeSettings,
   ladderAllowed,
   rendererName,
   saveAutoRecord,
   startIndexFor,
 } from '../world3d/quality';
 import type { LadderEvent } from '../world3d/quality';
-import type { ClickHit, Quality, UiState, VisionGrid, WorldView } from '../world3d';
+import type { ClickHit, Quality, RenderSettings, UiState, VisionGrid, WorldView } from '../world3d';
 import { loadScene } from '../sceneLoader';
 import type { LeaderRow, Pos, Projection, ProjectionEvent, Terrain, Timeline } from '../types';
 
@@ -116,6 +116,7 @@ export function useWorld(
   onUserCamera: RefObject<(() => void) | null>,
   active: boolean,
 ) {
+  const { t, lang } = useI18n();
   const [projection, setProjection] = useState<Projection | null>(null);
   const [terrain, setTerrain] = useState<Terrain | null>(null);
   const [status, setStatus] = useState<WatchStatus>('reconnecting');
@@ -133,7 +134,7 @@ export function useWorld(
   const startingReplay = useRef(false);
   const [dusk, setDusk] = useState(false);
   const [choice, setChoice] = useState<QualityChoice>('high');
-  const [autoLabel, setAutoLabel] = useState('');
+  const [autoSettings, setAutoSettings] = useState<RenderSettings | null>(null);
   const [visionState, setVisionState] = useState(true);
   const [arrivedAt, setArrivedAt] = useState(0);
   const [viewReady, setViewReady] = useState(false);
@@ -313,7 +314,7 @@ export function useWorld(
     const start = startIndexFor(renderer);
     qualityRef.current = ladder ? 'high' : autoPick ? 'low' : initial;
     autoRef.current = ladder ? new LadderQuality(true, start, onLadderEvent) : null;
-    setAutoLabel(ladder ? describeSettings(AUTO_LADDER[autoRef.current?.level ?? start]) : '');
+    setAutoSettings(ladder ? AUTO_LADDER[autoRef.current?.level ?? start] : null);
     setChoice(autoPick ? 'auto' : initial);
     const initialDusk = params.get('dusk') === '1';
     live.current.dusk = initialDusk;
@@ -467,7 +468,7 @@ export function useWorld(
 
   const onLadderEvent = (event: LadderEvent) => {
     window.__looQualityLog = [...(window.__looQualityLog ?? []), event];
-    setAutoLabel(describeSettings(AUTO_LADDER[event.to]));
+    setAutoSettings(AUTO_LADDER[event.to]);
     if (event.event === 'settle') saveAutoRecord(rendererRef.current, event.to);
   };
 
@@ -481,12 +482,12 @@ export function useWorld(
         qualityRef.current = 'high';
         viewRef.current?.setQuality('high');
         viewRef.current?.setSettings(AUTO_LADDER[start]);
-        setAutoLabel(describeSettings(AUTO_LADDER[start]));
+        setAutoSettings(AUTO_LADDER[start]);
       } else {
         autoRef.current = null;
         qualityRef.current = 'low';
         viewRef.current?.setQuality('low');
-        setAutoLabel('');
+        setAutoSettings(null);
       }
       setChoice('auto');
       return;
@@ -495,24 +496,24 @@ export function useWorld(
     qualityRef.current = next;
     viewRef.current?.setQuality(next);
     writeStoredQuality(next);
-    setAutoLabel('');
+    setAutoSettings(null);
     setChoice(next);
   };
 
   const colors = useMemo(() => eventColors(projection), [projection]);
 
   const boardLabel = useMemo(() => {
-    if (!projection) return '厕所世界俯视图，正在载入';
+    if (!projection) return t('board.loading');
     const parts = [
-      `厕所世界俯视图：${projection.width}×${projection.height} 格`,
-      `在场 ${projection.counts.inside}/${projection.counts.capacity} 人`,
-      `门外排队 ${projection.counts.queued} 人`,
+      t('board.size', { width: projection.width, height: projection.height }),
+      t('board.inside', { inside: projection.counts.inside, capacity: projection.counts.capacity }),
+      t('board.queued', { n: projection.counts.queued }),
     ];
-    if (projection.agents.length === 0) parts.push('暂无 Agent');
+    if (projection.agents.length === 0) parts.push(t('board.noAgents'));
     const focus = projection.agents.find((entry) => entry.id === selected) ?? projection.agents[0];
-    if (focus) parts.push(`${focus.nick} 位于 (${focus.pos.x}, ${focus.pos.y})`);
-    return parts.join('，');
-  }, [projection, selected]);
+    if (focus) parts.push(t('board.focus', { nick: focus.nick, x: focus.pos.x, y: focus.pos.y }));
+    return parts.join(t('board.sep'));
+  }, [projection, selected, lang]);
 
   const tick = projection?.tick ?? 0;
   const timeline = useMemo(() => {
@@ -550,7 +551,7 @@ export function useWorld(
     dusk,
     toggleDusk,
     quality: choice,
-    autoLabel,
+    autoSettings,
     setQuality,
     arrivedAt,
     colors,
