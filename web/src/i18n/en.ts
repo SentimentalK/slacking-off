@@ -175,7 +175,7 @@ export const en: Record<Key, string> = {
   'label.outcome.failed_deadline': "Couldn't hold it",
   'label.outcome.failed_recovery': "Couldn't resume",
   'label.outcome.left': 'Left early',
-  'label.outcome.abandoned': 'Dropped offline',
+  'label.outcome.abandoned': 'Disconnected',
 
   // == shell ==
   'settings.title': 'Settings',
