@@ -1,0 +1,268 @@
+{
+  "load_limit": 4,
+  "other_headless_chrome_before_start": 14,
+  "gpu": "ANGLE (Intel, Mesa Intel(R) UHD Graphics (CML GT2), OpenGL ES 3.2)",
+  "fixture": "/api/crowd.json",
+  "groups": [
+    {
+      "name": "ladder-0",
+      "viewport": "1440x900",
+      "quality": "high",
+      "scale": 1,
+      "grass": 1,
+      "shadow": 2048,
+      "median_frame_ms": 43.7,
+      "median_fps": 22.9,
+      "p10_fps": 21.7,
+      "load1_before": 3.33,
+      "load1_after": 3.34,
+      "load_ok": true,
+      "attempts": [
+        {
+          "attempt": 1,
+          "median_fps": 22.9,
+          "load1_before": 3.33,
+          "load1_after": 3.34
+        }
+      ]
+    },
+    {
+      "name": "ladder-1",
+      "viewport": "1440x900",
+      "quality": "high",
+      "scale": 0.75,
+      "grass": 1,
+      "shadow": 2048,
+      "median_frame_ms": 33.8,
+      "median_fps": 29.6,
+      "p10_fps": 28.1,
+      "load1_before": 3.23,
+      "load1_after": 3.07,
+      "load_ok": true,
+      "attempts": [
+        {
+          "attempt": 1,
+          "median_fps": 29.6,
+          "load1_before": 3.23,
+          "load1_after": 3.07
+        }
+      ]
+    },
+    {
+      "name": "ladder-2",
+      "viewport": "1440x900",
+      "quality": "high",
+      "scale": 0.75,
+      "grass": 0.5,
+      "shadow": 1024,
+      "median_frame_ms": 30.9,
+      "median_fps": 32.4,
+      "p10_fps": 30.9,
+      "load1_before": 3.06,
+      "load1_after": 2.82,
+      "load_ok": true,
+      "attempts": [
+        {
+          "attempt": 1,
+          "median_fps": 32.4,
+          "load1_before": 3.06,
+          "load1_after": 2.82
+        }
+      ]
+    },
+    {
+      "name": "ladder-3",
+      "viewport": "1440x900",
+      "quality": "high",
+      "scale": 0.6,
+      "grass": 0.5,
+      "shadow": 1024,
+      "median_frame_ms": 27,
+      "median_fps": 37,
+      "p10_fps": 34.1,
+      "load1_before": 3.13,
+      "load1_after": 2.81,
+      "load_ok": true,
+      "attempts": [
+        {
+          "attempt": 1,
+          "median_fps": 37,
+          "load1_before": 3.13,
+          "load1_after": 2.81
+        }
+      ]
+    },
+    {
+      "name": "ladder-4",
+      "viewport": "1440x900",
+      "quality": "high",
+      "scale": 0.6,
+      "grass": 0.25,
+      "shadow": 512,
+      "median_frame_ms": 26.7,
+      "median_fps": 37.5,
+      "p10_fps": 35.1,
+      "load1_before": 3.56,
+      "load1_after": 3.59,
+      "load_ok": true,
+      "attempts": [
+        {
+          "attempt": 1,
+          "median_fps": 36.8,
+          "load1_before": 4.67,
+          "load1_after": 4.87
+        },
+        {
+          "attempt": 2,
+          "median_fps": 37.5,
+          "load1_before": 3.56,
+          "load1_after": 3.59
+        }
+      ]
+    },
+    {
+      "name": "ladder-5",
+      "viewport": "1440x900",
+      "quality": "high",
+      "scale": 0.75,
+      "grass": 0,
+      "shadow": 0,
+      "median_frame_ms": 24.2,
+      "median_fps": 41.3,
+      "p10_fps": 39.5,
+      "load1_before": 3.38,
+      "load1_after": 3.34,
+      "load_ok": true,
+      "attempts": [
+        {
+          "attempt": 1,
+          "median_fps": 39.1,
+          "load1_before": 3.87,
+          "load1_after": 5.89
+        },
+        {
+          "attempt": 2,
+          "median_fps": 41.3,
+          "load1_before": 3.38,
+          "load1_after": 3.34
+        }
+      ]
+    },
+    {
+      "name": "manual-high",
+      "viewport": "1440x900",
+      "quality": "high",
+      "scale": "tier",
+      "grass": "tier",
+      "shadow": "tier",
+      "median_frame_ms": 43.5,
+      "median_fps": 23,
+      "p10_fps": 21.6,
+      "load1_before": 3.66,
+      "load1_after": 3.62,
+      "load_ok": true,
+      "attempts": [
+        {
+          "attempt": 1,
+          "median_fps": 23,
+          "load1_before": 3.66,
+          "load1_after": 3.62
+        }
+      ]
+    },
+    {
+      "name": "manual-medium",
+      "viewport": "1440x900",
+      "quality": "medium",
+      "scale": "tier",
+      "grass": "tier",
+      "shadow": "tier",
+      "median_frame_ms": 37.9,
+      "median_fps": 26.4,
+      "p10_fps": 25.2,
+      "load1_before": 3.68,
+      "load1_after": 3.26,
+      "load_ok": true,
+      "attempts": [
+        {
+          "attempt": 1,
+          "median_fps": 26.4,
+          "load1_before": 3.68,
+          "load1_after": 3.26
+        }
+      ]
+    },
+    {
+      "name": "manual-low",
+      "viewport": "1440x900",
+      "quality": "low",
+      "scale": "tier",
+      "grass": "tier",
+      "shadow": "tier",
+      "median_frame_ms": 20.7,
+      "median_fps": 48.3,
+      "p10_fps": 45.7,
+      "load1_before": 3.24,
+      "load1_after": 2.75,
+      "load_ok": true,
+      "attempts": [
+        {
+          "attempt": 1,
+          "median_fps": 48.3,
+          "load1_before": 3.24,
+          "load1_after": 2.75
+        }
+      ]
+    },
+    {
+      "name": "phone-low",
+      "viewport": "390x844",
+      "quality": "low",
+      "scale": "tier",
+      "grass": "tier",
+      "shadow": "tier",
+      "median_frame_ms": 16.7,
+      "median_fps": 59.9,
+      "p10_fps": 59.9,
+      "load1_before": 3.73,
+      "load1_after": 3.12,
+      "load_ok": true,
+      "attempts": [
+        {
+          "attempt": 1,
+          "median_fps": 59.9,
+          "load1_before": 2.77,
+          "load1_after": 4.38
+        },
+        {
+          "attempt": 2,
+          "median_fps": 59.9,
+          "load1_before": 3.73,
+          "load1_after": 3.12
+        }
+      ]
+    },
+    {
+      "name": "phone-0.75-0.5-1024",
+      "viewport": "390x844",
+      "quality": "low",
+      "scale": 0.75,
+      "grass": 0.5,
+      "shadow": 1024,
+      "median_frame_ms": 16.7,
+      "median_fps": 59.9,
+      "p10_fps": 59.5,
+      "load1_before": 2.95,
+      "load1_after": 2.63,
+      "load_ok": true,
+      "attempts": [
+        {
+          "attempt": 1,
+          "median_fps": 59.9,
+          "load1_before": 2.95,
+          "load1_after": 2.63
+        }
+      ]
+    }
+  ]
+}

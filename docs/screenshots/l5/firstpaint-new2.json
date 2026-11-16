@@ -1,0 +1,60 @@
+{
+  "dist": "/home/sentimentalk/orca/workspaces/slacking-off/l5-perf/web/dist",
+  "runs": [
+    {
+      "run": 1,
+      "loadavg1": 2.98,
+      "fcp": 584,
+      "topbar": 513.4,
+      "scene": 3108.3
+    },
+    {
+      "run": 2,
+      "loadavg1": 2.9,
+      "fcp": 520,
+      "topbar": 497.4,
+      "scene": 2266.4
+    },
+    {
+      "run": 3,
+      "loadavg1": 2.9,
+      "fcp": 484,
+      "topbar": 458.3,
+      "scene": 2228
+    },
+    {
+      "run": 4,
+      "loadavg1": 2.75,
+      "fcp": 468,
+      "topbar": 431.7,
+      "scene": 2162.9
+    },
+    {
+      "run": 5,
+      "loadavg1": 2.75,
+      "fcp": 468,
+      "topbar": 435.1,
+      "scene": 2374.3
+    }
+  ],
+  "median": {
+    "fcp": 484,
+    "topbar": 458.3,
+    "scene": 2266.4
+  },
+  "conditions": {
+    "viewport": {
+      "width": 1440,
+      "height": 900
+    },
+    "network": {
+      "offline": false,
+      "latency": 40,
+      "downloadThroughput": 1250000,
+      "uploadThroughput": 625000
+    },
+    "cache": "fresh browser context per run, cache disabled"
+  },
+  "chrome": "Chrome/156.0.8078.79",
+  "gpu": "ANGLE (Intel, Mesa Intel(R) UHD Graphics (CML GT2), OpenGL ES 3.2)"
+}
