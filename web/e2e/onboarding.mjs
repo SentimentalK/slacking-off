@@ -247,7 +247,7 @@ async function objectAt(target) {
 async function phaseEmptyHome() {
   phase('empty home');
   await page.goto(`${BASE}/`, { waitUntil: 'domcontentloaded' });
-  await page.waitForSelector('[data-intro]', { timeout: 15_000 });
+  await page.waitForSelector('.ui-bottom[data-mode="watch"]', { timeout: 15_000 });
   // A fresh database has no markers, so the first settled frame must not replay.
   await until(async () => (await pageTick()) !== null, { timeout: 10_000, label: 'first live frame' });
   await sleep(600);
@@ -279,7 +279,7 @@ async function phaseEmptyHome() {
   pass('/replay without spans shows 没有可回放的区间, no rail, and a disabled transport');
 
   await page.goto(`${BASE}/`, { waitUntil: 'domcontentloaded' });
-  await page.waitForSelector('[data-intro]', { timeout: 15_000 });
+  await page.waitForSelector('.ui-bottom[data-mode="watch"]', { timeout: 15_000 });
 }
 
 async function phaseHistory() {

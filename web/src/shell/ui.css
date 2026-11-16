@@ -387,12 +387,6 @@
   background: rgba(255, 255, 255, 0.1);
   font-weight: 700;
 }
-.shell .ui-bottom [data-intro] {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
 .shell .sep {
   width: 1px;
   height: 30px;
@@ -664,8 +658,7 @@
     bottom: 8px;
   }
   .shell .ui-bottom .sep,
-  .shell .ui-bottom .hint,
-  .shell .ui-bottom [data-intro] {
+  .shell .ui-bottom .hint {
     display: none;
   }
   .shell .ui-bottom .bottom-queue {
