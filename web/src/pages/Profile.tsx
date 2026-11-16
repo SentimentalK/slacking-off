@@ -2,8 +2,8 @@ import { useEffect, useState } from 'preact/hooks';
 import { ApiError, getJSON } from '../api';
 import { Link } from '../components/Link';
 import {
-  NEED_LABEL,
-  OUTCOME_LABEL,
+  needLabel,
+  outcomeLabel,
   formatNumber,
   formatPercent,
 } from '../labels';
@@ -194,9 +194,9 @@ export function Profile({ id }: { id: number }) {
                     <td class="num mono">
                       {session.ended_tick === null ? '—' : formatNumber(session.ended_tick)}
                     </td>
-                    <td>{session.outcome ? OUTCOME_LABEL[session.outcome] : '进行中'}</td>
+                    <td>{session.outcome ? outcomeLabel(session.outcome) : '进行中'}</td>
                     <td class="num mono">{formatNumber(session.score)}</td>
-                    <td>{session.need ? NEED_LABEL[session.need] : '—'}</td>
+                    <td>{session.need ? needLabel(session.need) : '—'}</td>
                     <td>
                       {profile.kind === 'human' ? (
                         <span>网页入场</span>

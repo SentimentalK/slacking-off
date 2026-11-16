@@ -20,7 +20,7 @@ import {
 import type { PlayAction, UseOffer } from '../play/actions';
 import { playProjection, visionGrid } from '../play/frame';
 import { findPath } from '../play/path';
-import { NEED_LABEL } from '../labels';
+import { needLabel } from '../labels';
 import { zhAction, zhEvent } from '../eventText';
 import { agentColor } from '../palette';
 import type { ClickHit, WorldView } from '../world3d';
@@ -604,7 +604,7 @@ export function PlayMode({ terrain, top3, view, viewReady, override, clickRef, c
           </div>
           <div class="kv">
             <span class="sub">需求</span>
-            <span>{agent.need ? NEED_LABEL[agent.need] : '无'}</span>
+            <span>{agent.need ? needLabel(agent.need) : '无'}</span>
           </div>
           <div class="kv">
             <span class="sub">截止</span>
@@ -721,7 +721,7 @@ export function PlayMode({ terrain, top3, view, viewReady, override, clickRef, c
             <div class="col play-need">
               <div class="kv">
                 <b>
-                  {agent.need ? `${NEED_LABEL[agent.need]}${urgent ? ' · 快憋不住了' : ''}` : '没有需求'}
+                  {agent.need ? `${needLabel(agent.need)}${urgent ? ' · 快憋不住了' : ''}` : '没有需求'}
                 </b>
                 <span class="sub">{agent.need ? `还能憋 ${remaining} 回合` : '—'}</span>
               </div>

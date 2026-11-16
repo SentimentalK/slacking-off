@@ -1,7 +1,7 @@
 import { useState } from 'preact/hooks';
 import type { ComponentChildren } from 'preact';
 import { navigate } from '../router';
-import { NEED_LABEL, SENT_BY_LABEL, formatNumber } from '../labels';
+import { formatNumber, needLabel, sentByLabel } from '../labels';
 import { agentColor } from '../palette';
 import type { LeaderRow, ProjectionAgent } from '../types';
 
@@ -88,7 +88,7 @@ export function Card({ agent, tick, top3, onVision, visionState, vision = true, 
       </div>
 
       <div class="kv card-need">
-        <b>{agent.need ? `${NEED_LABEL[agent.need]}${urgent ? ' · 快憋不住了' : ''}` : '没有需求'}</b>
+        <b>{agent.need ? `${needLabel(agent.need)}${urgent ? ' · 快憋不住了' : ''}` : '没有需求'}</b>
         <span class="sub">{agent.need ? `还能憋 ${remaining} 回合` : '—'}</span>
       </div>
       <div class="bar">
@@ -111,7 +111,7 @@ export function Card({ agent, tick, top3, onVision, visionState, vision = true, 
 
         <div class="kv">
           <span class="sub">来由（自报）</span>
-          <span>{agent.kind === 'human' ? '自己上场' : agent.sent_by ? SENT_BY_LABEL[agent.sent_by] : '—'}</span>
+          <span>{agent.kind === 'human' ? '自己上场' : agent.sent_by ? sentByLabel(agent.sent_by) : '—'}</span>
         </div>
 
         <div class="kv">

@@ -1,20 +1,19 @@
 import { useEffect, useState } from 'preact/hooks';
 import { detectLang, fill, type Vars } from './detect';
-import { en } from './en';
-import { zh, type Key } from './zh';
-
-const DICTS = { zh, en } satisfies Record<string, Record<Key, string>>;
+import { DICTS } from './dicts';
+import type { Key } from './zh';
 
 export type Lang = keyof typeof DICTS;
 export type LangPref = 'auto' | Lang;
 export type { Key };
-type PluralBase = Key extends `${infer B}.one` ? B : never;
+type PluralBase<K = Key> = K extends `${infer B}.one` ? B : never;
 
 export const LANGS = Object.keys(DICTS) as Lang[];
 const FALLBACK: Lang = 'en';
 const STORAGE_KEY = 'loo.lang';
 
 let pref: LangPref = 'auto';
+let started = false;
 let lang: Lang = FALLBACK;
 const listeners = new Set<() => void>();
 
@@ -64,6 +63,8 @@ export function getLangPref(): LangPref {
 export function initLang(): void {
   pref = storedPref();
   apply();
+  if (started) return;
+  started = true;
   window.addEventListener('languagechange', () => {
     if (pref !== 'auto') return;
     apply();
@@ -83,6 +84,7 @@ export function setLangPref(next: LangPref): void {
   notify();
 }
 
+// Text computed inside useMemo/useCallback must list `lang` as a dependency: `t` itself never changes.
 export function useI18n(): { t: typeof t; tn: typeof tn; lang: Lang; pref: LangPref } {
   const [, bump] = useState(0);
   useEffect(() => {
@@ -93,4 +95,8 @@ export function useI18n(): { t: typeof t; tn: typeof tn; lang: Lang; pref: LangP
     };
   }, []);
   return { t, tn, lang, pref };
+}
+
+export function langName(of: Lang): string {
+  return DICTS[of]['meta.langName'];
 }

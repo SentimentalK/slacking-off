@@ -1,38 +1,44 @@
-// Wire enums turned into Chinese labels, plus the number/clock formatting the
+// Wire enums turned into labels in the current language, plus the number/clock formatting the
 // panels share. Kept in one place so live, replay, profile and stats never
 // drift apart.
 
+import { t, type Key } from './i18n';
 import type { EventTag, Need, SentBy, SessionOutcome } from './types';
 
-export const EVENT_LABEL: Record<EventTag, string> = {
-  success: '成功',
-  attack: '打人',
-  demolish: '拆除',
-  defend: '防御',
-  join: '入场',
-  leave: '离场',
-  build: '施工',
-  use: '如厕',
-  other: '事件',
+const EVENT_KEY: Record<EventTag, Key> = {
+  success: 'label.event.success',
+  attack: 'label.event.attack',
+  demolish: 'label.event.demolish',
+  defend: 'label.event.defend',
+  join: 'label.event.join',
+  leave: 'label.event.leave',
+  build: 'label.event.build',
+  use: 'label.event.use',
+  other: 'label.event.other',
 };
 
-export const NEED_LABEL: Record<Need, string> = {
-  urine: '想尿尿',
-  feces: '想拉屎',
+const NEED_KEY: Record<Need, Key> = {
+  urine: 'label.need.urine',
+  feces: 'label.need.feces',
 };
 
-export const SENT_BY_LABEL: Record<SentBy, string> = {
-  self: '摸鱼来的',
-  human: '主人叫来的',
+const SENT_BY_KEY: Record<SentBy, Key> = {
+  self: 'label.sentBy.self',
+  human: 'label.sentBy.human',
 };
 
-export const OUTCOME_LABEL: Record<SessionOutcome, string> = {
-  success: '成功',
-  failed_deadline: '憋爆了',
-  failed_recovery: '恢复失败',
-  left: '中途离开',
-  abandoned: '掉线消失',
+const OUTCOME_KEY: Record<SessionOutcome, Key> = {
+  success: 'label.outcome.success',
+  failed_deadline: 'label.outcome.failed_deadline',
+  failed_recovery: 'label.outcome.failed_recovery',
+  left: 'label.outcome.left',
+  abandoned: 'label.outcome.abandoned',
 };
+
+export const eventLabel = (tag: EventTag): string => t(EVENT_KEY[tag]);
+export const needLabel = (need: Need): string => t(NEED_KEY[need]);
+export const sentByLabel = (sentBy: SentBy): string => t(SENT_BY_KEY[sentBy]);
+export const outcomeLabel = (outcome: SessionOutcome): string => t(OUTCOME_KEY[outcome]);
 
 export function formatNumber(value: number): string {
   return value.toLocaleString('en-US');

@@ -1,10 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { detectLang, fill } from '../src/i18n/detect.ts';
-import { en } from '../src/i18n/en.ts';
-import { zh } from '../src/i18n/zh.ts';
+import { DICTS } from '../src/i18n/dicts.ts';
 
-const DICTS = { zh, en };
+const { zh } = DICTS;
 const LANGS = Object.keys(DICTS);
 
 test('every language has exactly the key set of zh and no empty value', () => {
@@ -28,9 +27,14 @@ test('placeholders match across languages', () => {
 });
 
 test('plural keys come in one/other pairs', () => {
-  for (const key of Object.keys(zh)) {
-    if (key.endsWith('.one')) assert.ok(`${key.slice(0, -4)}.other` in zh, `${key} has no .other`);
-  }
+  const ones = Object.keys(zh).filter((key) => key.endsWith('.one'));
+  assert.ok(ones.length > 0);
+  for (const key of ones) assert.ok(`${key.slice(0, -4)}.other` in zh, `${key} has no .other`);
+});
+
+test('every dictionary names its own language', () => {
+  const names = Object.values(DICTS).map((dict) => dict['meta.langName']);
+  assert.equal(new Set(names).size, names.length);
 });
 
 test('the stored choice beats the browser, then the first supported browser language, then English', () => {
