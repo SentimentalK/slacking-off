@@ -453,3 +453,39 @@ export function zhEvent(text: string): string {
   }
   return text;
 }
+
+function enTurns(text: string): string {
+  return text
+    .replace(/\btick (\d+)\b/g, 'turn $1')
+    .replace(/\b1 ticks\b/g, '1 turn')
+    .replace(/\b(\d+) ticks\b/g, '$1 turns');
+}
+
+export function enEvent(text: string): string {
+  return enTurns(text)
+    .replace(/: failed_deadline$/, ": didn't make it in time")
+    .replace(/: failed_recovery$/, ": couldn't recover in time")
+    .replace(/: abandoned$/, ': dropped out')
+    .replace(/: left$/, ': left early')
+    .replace(/ -> /g, ' → ');
+}
+
+export function enAction(description: string): string {
+  return enTurns(description);
+}
+
+export function enReason(text: string): string {
+  return enTurns(text);
+}
+
+export function eventIn(lang: string, text: string): string {
+  return lang === 'zh' ? zhEvent(text) : enEvent(text);
+}
+
+export function actionIn(lang: string, description: string): string {
+  return lang === 'zh' ? zhAction(description) : enAction(description);
+}
+
+export function reasonIn(lang: string, text: string): string {
+  return lang === 'zh' ? zhReason(text) : enReason(text);
+}

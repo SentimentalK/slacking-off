@@ -1,18 +1,21 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
-import type { PlayAction } from '../play/actions';
+import type { ActionLabel, PlayAction } from '../play/actions';
+import { labelText } from '../play/actions';
 import {
   HIDDEN_POLL_MS,
   VISIBLE_POLL_MS,
   cancelAction,
-  commandMessage,
+  commandNotice,
   createHuman,
   isAuthError,
   joinWorld,
   leaveWorld,
   loadMe,
   loadState,
+  msgText,
   submit,
 } from '../play/client';
+import type { Msg } from '../play/client';
 import type {
   ActionState,
   EventView,
@@ -20,7 +23,8 @@ import type {
   PlayState,
   SessionOutcome,
 } from '../types';
-import { zhAction, zhReason } from '../eventText';
+import { actionIn, reasonIn } from '../eventText';
+import { getLang, t, tn } from '../i18n';
 
 const EVENT_LIMIT = 50;
 
@@ -33,7 +37,7 @@ export interface Outcome {
   score: number | null;
 }
 
-export type CommandResult = { ok: true; notice?: string } | { ok: false; message: string };
+export type CommandResult = { ok: true; notice?: Msg } | { ok: false; message: Msg };
 
 /** `EventView` has no `kind`, so the ending is read from its own text. */
 function resultFromEvents(events: EventView[], nick: string): Outcome | null {
@@ -62,7 +66,7 @@ function mergeEvents(previous: EventView[], incoming: EventView[]): EventView[] 
 
 /** An accepted command waiting for the server to settle it. */
 export interface PendingAction {
-  label: string;
+  label: ActionLabel;
   effectiveTick: number;
 }
 
@@ -80,27 +84,30 @@ export interface PendingBar {
  * so the player never reads an older success next to a fresh rejection.
  */
 function pendingBar(
-  error: string | null,
+  error: Msg | null,
   executing: ActionState | null,
   pending: PendingAction | null,
   countdown: string,
 ): PendingBar {
-  if (error) return { tone: 'rejected', title: `被拒绝：${zhReason(error)}`, detail: '' };
+  const lang = getLang();
+  if (error) {
+    return { tone: 'rejected', title: t('play.bar.rejected', { reason: reasonIn(lang, msgText(error)) }), detail: '' };
+  }
   if (executing) {
     return {
       tone: 'executing',
-      title: `正在执行：${zhAction(executing.description)}`,
-      detail: `剩 ${executing.remaining} 回合`,
+      title: t('play.bar.executing', { action: actionIn(lang, executing.description) }),
+      detail: tn('play.bar.left', executing.remaining),
     };
   }
   if (pending) {
     return {
       tone: 'pending',
-      title: `已提交：${pending.label}`,
-      detail: `下一次结算执行 · ${countdown}`,
+      title: t('play.bar.pending', { label: labelText(pending.label) }),
+      detail: t('play.bar.pendingDetail', { countdown }),
     };
   }
-  return { tone: 'idle', title: '没有待执行动作', detail: `下一次结算 · ${countdown}` };
+  return { tone: 'idle', title: t('play.bar.idle'), detail: t('play.bar.idleDetail', { countdown }) };
 }
 
 export function usePlay(active: boolean) {
@@ -111,11 +118,11 @@ export function usePlay(active: boolean) {
   const [arrivedAt, setArrivedAt] = useState(0);
   const [events, setEvents] = useState<EventView[]>([]);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<Msg | null>(null);
   const [msLeft, setMsLeft] = useState(0);
   const [pending, setPending] = useState<PendingAction | null>(null);
   const [outcome, setOutcome] = useState<Outcome | null>(null);
-  const [loadError, setLoadError] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<Msg | null>(null);
 
   const busyRef = useRef(false);
   const stateRef = useRef<PlayState | null>(null);
@@ -130,7 +137,7 @@ export function usePlay(active: boolean) {
     stateRef.current = next;
     setState(next);
     // The server settled the queued command: its tick reached `effective_tick`,
-    // so the bar must stop claiming "已提交".
+    // so the bar must stop claiming it is still queued.
     setPending((current) => (current && next.tick >= current.effectiveTick ? null : current));
     if (incoming.length > 0) setEvents((previous) => mergeEvents(previous, incoming));
     deadlineRef.current = performance.now() + next.ms_to_next_tick;
@@ -160,7 +167,7 @@ export function usePlay(active: boolean) {
         if (isAuthError(caught)) {
           setPhase('signedOut');
         } else {
-          setLoadError(commandMessage(caught));
+          setLoadError(commandNotice(caught));
           setPhase('failed');
         }
       });
@@ -203,7 +210,7 @@ export function usePlay(active: boolean) {
           setPhase('signedOut');
           return;
         }
-        setError(commandMessage(caught));
+        setError(commandNotice(caught));
       } finally {
         pollInFlight = false;
         if (!stopped) schedule(delay());
@@ -237,7 +244,7 @@ export function usePlay(active: boolean) {
   }, []);
 
   const withBusy = async (task: () => Promise<CommandResult>): Promise<CommandResult> => {
-    if (busyRef.current) return { ok: false, message: '动作在途，稍等' };
+    if (busyRef.current) return { ok: false, message: { key: 'play.busy' } };
     busyRef.current = true;
     setBusy(true);
     setError(null);
@@ -247,9 +254,9 @@ export function usePlay(active: boolean) {
       if (isAuthError(caught)) {
         setMe(null);
         setPhase('signedOut');
-        return { ok: false, message: '登录已失效' };
+        return { ok: false, message: { key: 'play.signedOutNow' } };
       }
-      const message = commandMessage(caught);
+      const message = commandNotice(caught);
       setError(message);
       return { ok: false, message };
     } finally {
@@ -278,10 +285,10 @@ export function usePlay(active: boolean) {
     withBusy(async () => {
       const envelope = await joinWorld();
       const placement = envelope.result.placement;
-      const notice =
+      const notice: Msg =
         'Waiting' in placement
-          ? `排队中，前面还有 ${placement.Waiting.ahead} 人`
-          : '已入场，开始找马桶吧';
+          ? { key: 'play.notice.queued', vars: { ahead: placement.Waiting.ahead } }
+          : { key: 'play.notice.joined' };
       setOutcome(null);
       await refresh();
       return { ok: true, notice };
@@ -291,7 +298,7 @@ export function usePlay(active: boolean) {
     withBusy(async () => {
       await cancelAction();
       await refresh();
-      return { ok: true, notice: '已取消当前动作' };
+      return { ok: true, notice: { key: 'play.notice.cancelled' } };
     });
 
   const doLeave = () =>
@@ -299,19 +306,23 @@ export function usePlay(active: boolean) {
       const envelope = await leaveWorld();
       setOutcome({ outcome: envelope.result.outcome, score: envelope.result.score });
       await refresh();
-      return { ok: true, notice: '已离场' };
+      return { ok: true, notice: { key: 'play.notice.left' } };
     });
 
   const doCreate = (nick: string, color: number) =>
     withBusy(async () => {
       const response = await createHuman(nick, color);
-      if (!response.agent) throw new Error('服务端没有返回角色');
+      if (!response.agent) {
+        const message: Msg = { key: 'play.noAgent' };
+        setError(message);
+        return { ok: false, message };
+      }
       setMe(response.agent);
       setPhase('ready');
-      return { ok: true, notice: '角色已创建，准备入场' };
+      return { ok: true, notice: { key: 'play.notice.created' } };
     });
 
-  const countdown = msLeft <= 0 ? '结算中' : `${(msLeft / 1000).toFixed(1)}s`;
+  const countdown = msLeft <= 0 ? t('play.settling') : `${(msLeft / 1000).toFixed(1)}s`;
   const executing = state?.joined ? (state.agent?.action ?? null) : null;
 
   return {

@@ -2,6 +2,8 @@
 // key means which direction. The server is still the final judge; this module
 // only hides actions the cell obviously cannot take (coordinator addendum 1).
 
+import { t } from '../i18n';
+import type { Key } from '../i18n';
 import type {
   AgentView,
   BuildKind,
@@ -39,30 +41,39 @@ export const KEY_DIR: Record<string, Dir> = {
   d: 'E',
 };
 
+export interface ActionLabel {
+  key: Key;
+  vars?: Record<string, string | number>;
+}
+
+export function labelText(label: ActionLabel): string {
+  return t(label.key, label.vars);
+}
+
 export type PlayAction =
-  | { id: 'move'; label: string; kind: 'move'; dir: Dir }
-  | { id: 'path'; label: string; kind: 'path'; path: string }
-  | { id: string; label: string; kind: 'build'; build: BuildKind; target: TargetSpec }
-  | { id: string; label: string; kind: 'demolish'; target: TargetSpec }
-  | { id: string; label: string; kind: 'door'; target: Dir; open: boolean }
-  | { id: string; label: string; kind: 'attack'; dir: Dir }
-  | { id: string; label: string; kind: 'defend'; dir: Dir }
-  | { id: string; label: string; kind: 'upgrade'; target: TargetSpec }
-  | { id: string; label: string; kind: 'downgrade'; target: TargetSpec }
-  | { id: string; label: string; kind: 'use' };
+  | { id: 'move'; label: ActionLabel; kind: 'move'; dir: Dir }
+  | { id: 'path'; label: ActionLabel; kind: 'path'; path: string }
+  | { id: string; label: ActionLabel; kind: 'build'; build: BuildKind; target: TargetSpec }
+  | { id: string; label: ActionLabel; kind: 'demolish'; target: TargetSpec }
+  | { id: string; label: ActionLabel; kind: 'door'; target: Dir; open: boolean }
+  | { id: string; label: ActionLabel; kind: 'attack'; dir: Dir }
+  | { id: string; label: ActionLabel; kind: 'defend'; dir: Dir }
+  | { id: string; label: ActionLabel; kind: 'upgrade'; target: TargetSpec }
+  | { id: string; label: ActionLabel; kind: 'downgrade'; target: TargetSpec }
+  | { id: string; label: ActionLabel; kind: 'use' };
 
 /**
  * The keyboard and d-pad step: one cardinal move, submitted through the same
  * `submit` path as a clicked menu entry so both share one pending/error track.
  */
 export function moveAction(dir: Dir): PlayAction {
-  return { id: 'move', label: `移动 ${dir}`, kind: 'move', dir };
+  return { id: 'move', label: { key: 'play.act.move', vars: { dir } }, kind: 'move', dir };
 }
 
-const BUILD_LABEL: Record<BuildKind, string> = {
-  wall: '建墙',
-  door: '建门',
-  toilet: '建马桶',
+const BUILD_LABEL: Record<BuildKind, Key> = {
+  wall: 'play.act.buildWall',
+  door: 'play.act.buildDoor',
+  toilet: 'play.act.buildToilet',
 };
 
 const TOILET_MAX_LEVEL = 5;
@@ -140,24 +151,24 @@ export function menuFor(
         actions.push({
           id: `build-${build}`,
           kind: 'build',
-          label: BUILD_LABEL[build],
+          label: { key: BUILD_LABEL[build] },
           build,
           target,
         });
       }
     }
     if (object?.site) {
-      actions.push({ id: 'demolish', kind: 'demolish', label: '拆', target });
+      actions.push({ id: 'demolish', kind: 'demolish', label: { key: 'play.act.demolish' }, target });
     }
   } else {
     // Every finished object can be demolished, toilets included (design
     // §4.6/§4.7).
-    actions.push({ id: 'demolish', kind: 'demolish', label: '拆', target });
+    actions.push({ id: 'demolish', kind: 'demolish', label: { key: 'play.act.demolish' }, target });
     if (object.kind === 'door') {
       actions.push({
         id: object.open ? 'door-close' : 'door-open',
         kind: 'door',
-        label: object.open ? '关门' : '开门',
+        label: { key: object.open ? 'play.act.closeDoor' : 'play.act.openDoor' },
         target: dir,
         open: !object.open,
       });
@@ -165,19 +176,19 @@ export function menuFor(
     if (object.kind === 'toilet') {
       // Working a toilet up needs at least the target level (design §4.7).
       if (agent && object.level < TOILET_MAX_LEVEL && agent.level >= object.level + 1) {
-        actions.push({ id: 'upgrade', kind: 'upgrade', label: '升级', target });
+        actions.push({ id: 'upgrade', kind: 'upgrade', label: { key: 'play.act.upgrade' }, target });
       }
       if (object.level > 1) {
-        actions.push({ id: 'downgrade', kind: 'downgrade', label: '降级', target });
+        actions.push({ id: 'downgrade', kind: 'downgrade', label: { key: 'play.act.downgrade' }, target });
       }
     }
   }
 
   if (occupant) {
-    actions.push({ id: 'attack', kind: 'attack', label: '打', dir });
+    actions.push({ id: 'attack', kind: 'attack', label: { key: 'play.act.attack' }, dir });
   }
   if (!agent || state.tick >= agent.defend_cooldown_until) {
-    actions.push({ id: 'defend', kind: 'defend', label: '防御', dir });
+    actions.push({ id: 'defend', kind: 'defend', label: { key: 'play.act.defend' }, dir });
   }
   return actions;
 }
@@ -185,8 +196,7 @@ export function menuFor(
 /** The use button: only while standing on a toilet. */
 export interface UseOffer {
   action: PlayAction;
-  /** `null` when usable, otherwise why the page keeps it disabled. */
-  reason: string | null;
+  reason: Key | null;
 }
 
 export function useOffer(state: PlayState): UseOffer | null {
@@ -194,9 +204,9 @@ export function useOffer(state: PlayState): UseOffer | null {
   if (!me || !canAct(state, state.agent)) return null;
   const here = objectAt(state, me);
   if (!here || here.kind !== 'toilet' || here.site) return null;
-  const action: PlayAction = { id: 'use', kind: 'use', label: '使用' };
-  if (!state.agent?.need) return { action, reason: '现在没有需求' };
-  if (state.agent.action) return { action, reason: '动作进行中' };
+  const action: PlayAction = { id: 'use', kind: 'use', label: { key: 'play.act.use' } };
+  if (!state.agent?.need) return { action, reason: 'play.reason.noNeed' };
+  if (state.agent.action) return { action, reason: 'play.reason.busy' };
   return { action, reason: null };
 }
 
@@ -207,12 +217,12 @@ export function describeCell(state: PlayState, cell: Pos): string {
   const parts: string[] = [];
   if (agent) parts.push(agent.nick);
   if (object) {
-    if (object.site) parts.push(`${object.site} 工地`);
-    else if (object.kind === 'wall') parts.push('墙');
-    else if (object.kind === 'door') parts.push(object.open ? '开着门' : '关着门');
-    else parts.push(`马桶 L${object.level}`);
+    if (object.site) parts.push(t('play.cell.site', { kind: object.site }));
+    else if (object.kind === 'wall') parts.push(t('play.cell.wall'));
+    else if (object.kind === 'door') parts.push(t(object.open ? 'play.cell.doorOpen' : 'play.cell.doorClosed'));
+    else parts.push(t('play.cell.toilet', { level: object.level }));
   }
-  return parts.length > 0 ? parts.join(' · ') : '空地';
+  return parts.length > 0 ? parts.join(' · ') : t('play.cell.empty');
 }
 
 /** Cells adjacent to `origin` inside the window, for keyboard/adjacency tests. */

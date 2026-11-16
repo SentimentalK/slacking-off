@@ -5,6 +5,7 @@
 import { useMemo, useRef, useState } from 'preact/hooks';
 import { MARKER_COLOR, SPEEDS, offsetOfTick, pointerOffset, precedingSpanIndex, spanIndexAt, tickAtOffset } from '../replay-source';
 import type { SpanIndex } from '../replay-source';
+import { useI18n } from '../i18n';
 import type { Timeline, WorldSummary } from '../types';
 
 interface Props {
@@ -44,6 +45,7 @@ export function BottomReplay({
   onSpeed,
   onSeek,
 }: Props) {
+  const { t, tn, lang } = useI18n();
   const spans = index.spans;
   const hasSpans = spans.length > 0;
   const scale = index.total > 0 ? 100 / index.total : 0;
@@ -63,13 +65,13 @@ export function BottomReplay({
       left: index.starts[i] * scale,
       width: length * scale,
       played,
-      title: `第 ${i + 1} 段 · TICK ${span.from}–${span.to}`,
+      title: t('replay.segment', { i: i + 1, from: span.from, to: span.to }),
     };
   });
   const gaps = spans.slice(1).map((span, i) => ({
     key: `gap:${i}`,
     left: index.starts[i + 1] * scale,
-    title: `跳过 ${span.from - spans[i].to - 1} 回合`,
+    title: tn('replay.skip', span.from - spans[i].to - 1),
   }));
   const marks = useMemo(() => {
     const placed: Array<{ key: string; left: number; color: string; title: string }> = [];
@@ -80,11 +82,11 @@ export function BottomReplay({
         key: `mark:${i}`,
         left: (offset + 0.5) * scale,
         color: MARKER_COLOR[marker.kind],
-        title: `TICK ${marker.tick} · ${marker.text}`,
+        title: t('replay.mark', { tick: marker.tick, text: marker.text }),
       });
     });
     return placed;
-  }, [markers, index, scale]);
+  }, [markers, index, scale, lang]);
   const nextMarkerTick = useMemo(() => {
     let best: number | null = null;
     for (const marker of markers) {
@@ -117,8 +119,8 @@ export function BottomReplay({
   const status = tick < 0
     ? ''
     : current >= 0
-      ? `第 ${current + 1}/${spans.length} 段 · 回合 ${tick}`
-      : `回合 ${tick} · 非高光`;
+      ? t('replay.status', { i: current + 1, n: spans.length, tick })
+      : t('replay.offHighlight', { tick });
 
   const worldDisabled = !worlds || worlds.length <= 1;
 
@@ -126,9 +128,9 @@ export function BottomReplay({
     <div class="rp-bar panel" data-mode="replay">
       <div class="replay-timeline">
         {!loaded ? (
-          <div class="rp-empty">载入中…</div>
+          <div class="rp-empty">{t('replay.loading')}</div>
         ) : !hasSpans ? (
-          <div class="rp-empty">没有可回放的区间</div>
+          <div class="rp-empty">{t('replay.noSpans')}</div>
         ) : (
           <>
             <div
@@ -183,7 +185,7 @@ export function BottomReplay({
               <span>{spans[0].from}</span>
               <span>
                 {status}
-                {reduceMotion ? ' · 减少动态' : ''}
+                {reduceMotion ? t('replay.reduceMotion') : ''}
               </span>
               <span>{spans[spans.length - 1].to}</span>
             </div>
@@ -194,55 +196,55 @@ export function BottomReplay({
       <div class="rp-controls">
         <button
           type="button"
-          aria-label={playing ? '暂停' : '播放'}
+          aria-label={playing ? t('replay.pause') : t('replay.play')}
           aria-pressed={playing}
           disabled={!hasSpans}
           onClick={onPlay}
         >
-          {playing ? '暂停' : '播放'}
+          {playing ? t('replay.pause') : t('replay.play')}
         </button>
         <button type="button" disabled={!hasSpans} onClick={cycleSpeed}>
           {speed}×
         </button>
         <button
           type="button"
-          aria-label="上一段"
+          aria-label={t('replay.prev')}
           disabled={!hasSpans || anchor <= 0}
           onClick={() => {
             const previous = spans[anchor - 1];
             if (previous) onSeek(previous.from);
           }}
         >
-          上一段
+          {t('replay.prev')}
         </button>
         <button
           type="button"
-          aria-label="下一段"
+          aria-label={t('replay.next')}
           disabled={!hasSpans || anchor >= spans.length - 1}
           onClick={() => {
             const next = spans[anchor + 1];
             if (next) onSeek(next.from);
           }}
         >
-          下一段
+          {t('replay.next')}
         </button>
         <button
           type="button"
-          aria-label="下一个高光"
+          aria-label={t('replay.nextMark')}
           disabled={nextMarkerTick === null}
           onClick={() => {
             if (nextMarkerTick !== null) onSeek(nextMarkerTick);
           }}
         >
-          下一个高光
+          {t('replay.nextMark')}
         </button>
         <label class="rp-field">
-          <span>回合</span>
+          <span>{t('replay.turn')}</span>
           <input
             type="text"
             inputMode="numeric"
             value={tickText}
-            aria-label="跳转到回合"
+            aria-label={t('replay.jump')}
             onInput={(event) => setDraft(event.currentTarget.value)}
             onBlur={commitTick}
             onKeyDown={(event) => {
@@ -255,20 +257,20 @@ export function BottomReplay({
         </label>
         <select
           class="rp-world"
-          aria-label="世界"
+          aria-label={t('replay.worldLabel')}
           value={worldId ?? ''}
           disabled={worldDisabled}
           onChange={(event) => onWorld(Number(event.currentTarget.value))}
         >
           {(worlds ?? []).map((entry) => (
             <option key={entry.id} value={entry.id} title={entry.name}>
-              世界 {entry.id}
+              {t('replay.world', { id: entry.id })}
             </option>
           ))}
         </select>
         {loadError ? (
           <button type="button" class="rp-retry" onClick={onRetry}>
-            这个回合没取到，重试
+            {t('replay.retry')}
           </button>
         ) : null}
       </div>

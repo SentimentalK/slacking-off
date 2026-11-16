@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'preact/hooks';
 import type { ComponentChildren } from 'preact';
+import { useI18n } from '../i18n';
 
 interface Props {
   title: string;
@@ -9,6 +10,7 @@ interface Props {
 }
 
 export function Window({ title, windowKey, onClose, children }: Props) {
+  const { t } = useI18n();
   const closeRef = useRef<HTMLButtonElement | null>(null);
   const winRef = useRef<HTMLDivElement | null>(null);
 
@@ -36,7 +38,7 @@ export function Window({ title, windowKey, onClose, children }: Props) {
         <header>
           <h2>{title}</h2>
           <button type="button" class="win-close" ref={closeRef} onClick={onClose}>
-            关闭
+            {t('window.close')}
           </button>
         </header>
         {children}

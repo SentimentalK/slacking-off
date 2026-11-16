@@ -17,11 +17,14 @@ import {
   samePos,
   useOffer,
 } from '../play/actions';
+import { labelText } from '../play/actions';
 import type { PlayAction, UseOffer } from '../play/actions';
 import { playProjection, visionGrid } from '../play/frame';
 import { findPath } from '../play/path';
 import { needLabel } from '../labels';
-import { zhAction, zhEvent } from '../eventText';
+import { actionIn, eventIn } from '../eventText';
+import { t, tn, useI18n } from '../i18n';
+import type { Key } from '../i18n';
 import { agentColor } from '../palette';
 import type { ClickHit, WorldView } from '../world3d';
 import type {
@@ -36,6 +39,8 @@ import type {
 } from '../types';
 import { Card, DEADLINE_MAX_TICKS, meterColor } from './Card';
 import { Window } from './Window';
+import { msgText } from '../play/client';
+import type { Msg } from '../play/client';
 import type { CommandResult } from './usePlay';
 import { usePlay } from './usePlay';
 import type { WorldOverride } from './useWorld';
@@ -46,12 +51,12 @@ const MENU_GAP = 14;
 const EDGE = 8;
 const CREATE_COLORS = 12;
 
-const OUTCOME_LABEL: Record<SessionOutcome, string> = {
-  success: '成功',
-  failed_deadline: '没憋住，超时了',
-  failed_recovery: '中断后没能续上',
-  left: '主动离场',
-  abandoned: '掉线了',
+const OUTCOME_LABEL: Record<SessionOutcome, Key> = {
+  success: 'play.outcome.success',
+  failed_deadline: 'play.outcome.failed_deadline',
+  failed_recovery: 'play.outcome.failed_recovery',
+  left: 'play.outcome.left',
+  abandoned: 'play.outcome.abandoned',
 };
 
 interface Props {
@@ -110,20 +115,22 @@ function pathCells(start: Pos, path: string): Pos[] {
 }
 
 function untilText(until: number, tick: number): string {
-  if (until <= tick) return '就绪';
-  return `还有 ${until - tick} 回合`;
+  if (until <= tick) return t('play.ready');
+  return tn('play.until', until - tick);
 }
 
 function buildMenu(state: PlayState, terrain: Terrain | null, menu: Menu, offer: UseOffer | null): MenuItem[] {
   if (menu.own) {
-    return offer ? [{ action: offer.action, disabled: offer.reason !== null, reason: offer.reason }] : [];
+    return offer
+      ? [{ action: offer.action, disabled: offer.reason !== null, reason: offer.reason ? t(offer.reason) : null }]
+      : [];
   }
   const me = ownPos(state);
   if (!me) return [];
   const items: MenuItem[] = [];
   const dir = dirBetween(me, menu.cell);
   if (dir && !objectAt(state, menu.cell) && !agentAt(state, menu.cell)) {
-    const walk: PlayAction = { id: 'move', label: '走过去', kind: 'move', dir };
+    const walk: PlayAction = { id: 'move', label: { key: 'play.act.walk' }, kind: 'move', dir };
     items.push({ action: walk, disabled: false, reason: null });
   }
   for (const action of menuFor(state, menu.cell, terrain)) {
@@ -219,6 +226,7 @@ function placeMenu(el: HTMLElement, rect: Rect, target: { x: number; y: number }
 }
 
 export function PlayMode({ terrain, top3, view, viewReady, override, clickRef, cameraRef, blocked }: Props) {
+  const { lang } = useI18n();
   const play = usePlay(true);
   const state = play.state;
   const [worldId, setWorldId] = useState<number | null>(null);
@@ -228,12 +236,12 @@ export function PlayMode({ terrain, top3, view, viewReady, override, clickRef, c
   const followRef = useRef(false);
   const menuCellRef = useRef<Pos | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
-  const [flash, setFlash] = useState<string | null>(null);
+  const [flash, setFlash] = useState<Msg | null>(null);
   const flashTimer = useRef(0);
   const [createOpen, setCreateOpen] = useState(false);
   const [createNick, setCreateNick] = useState('');
   const [createColor, setCreateColor] = useState(0);
-  const [createError, setCreateError] = useState<string | null>(null);
+  const [createError, setCreateError] = useState<Msg | null>(null);
 
   const W = terrain?.width ?? 0;
   const H = terrain?.height ?? 0;
@@ -247,8 +255,8 @@ export function PlayMode({ terrain, top3, view, viewReady, override, clickRef, c
   const remaining = agent ? Math.max(0, agent.deadline_tick - (state?.tick ?? 0)) : 0;
   const fraction = agent?.need ? Math.min(1, remaining / DEADLINE_MAX_TICKS) : 0;
 
-  const say = (text: string) => {
-    setFlash(text);
+  const say = (message: Msg) => {
+    setFlash(message);
     window.clearTimeout(flashTimer.current);
     flashTimer.current = window.setTimeout(() => setFlash(null), FLASH_MS);
   };
@@ -306,12 +314,12 @@ export function PlayMode({ terrain, top3, view, viewReady, override, clickRef, c
     }
     const route = findPath(state, W, H, cell);
     if (route === null) {
-      say('走不到：没去过或被挡住');
+      say({ key: 'play.noRoute' });
       return;
     }
     if (route === '') return;
     void submitAction(
-      { id: 'path', kind: 'path', label: `走到 (${cell.x},${cell.y})`, path: route },
+      { id: 'path', kind: 'path', label: { key: 'play.act.path', vars: { cell: `(${cell.x},${cell.y})` } }, path: route },
       { cells: pathCells(mePos, route), tick: state.tick },
     );
   };
@@ -342,7 +350,7 @@ export function PlayMode({ terrain, top3, view, viewReady, override, clickRef, c
   const onCreate = (event: Event) => {
     event.preventDefault();
     if (!NICK_RE.test(createNick)) {
-      setCreateError('昵称只能是小写字母、数字和 -，2–16 个字符');
+      setCreateError({ key: 'play.nickError' });
       return;
     }
     setCreateError(null);
@@ -522,29 +530,29 @@ export function PlayMode({ terrain, top3, view, viewReady, override, clickRef, c
 
   let hintNode: ComponentChildren;
   if (flash !== null) {
-    hintNode = flash;
+    hintNode = msgText(flash);
   } else if (play.phase === 'loading') {
-    hintNode = '载入中…';
+    hintNode = t('play.loading');
   } else if (play.phase === 'signedOut') {
     hintNode = (
       <>
-        登录后才能上场{' '}
+        {t('play.hint.signedOut')}{' '}
         <button type="button" onClick={() => navigate('/login')}>
-          登录
+          {t('window.login')}
         </button>{' '}
         <button type="button" onClick={() => navigate('/register')}>
-          注册
+          {t('window.register')}
         </button>
       </>
     );
   } else if (play.phase === 'failed') {
-    hintNode = `入场口打不开：${play.loadError ?? ''}`;
+    hintNode = t('play.hint.loadFailed', { reason: play.loadError ? msgText(play.loadError) : '' });
   } else if (play.phase === 'noAgent') {
     hintNode = (
       <>
-        先建一个角色{' '}
+        {t('play.hint.noAgent')}{' '}
         <button type="button" data-testid="play-create-open" onClick={() => setCreateOpen(true)}>
-          建角色
+          {t('play.createOpen')}
         </button>
       </>
     );
@@ -553,38 +561,42 @@ export function PlayMode({ terrain, top3, view, viewReady, override, clickRef, c
     hintNode = (
       <>
         <span data-testid="play-outcome">
-          {OUTCOME_LABEL[play.outcome.outcome]}
-          {score !== null ? ` · 得分 ${score}` : ''}
+          {t(OUTCOME_LABEL[play.outcome.outcome])}
+          {score !== null ? t('play.score', { score }) : ''}
         </span>{' '}
         <button type="button" data-testid="play-again" disabled={play.busy} onClick={join}>
-          再玩一次
+          {t('play.again')}
         </button>
       </>
     );
   } else if (state?.placement === 'waiting') {
-    hintNode = `排队中，前面 ${state.agent?.queue_ahead ?? '—'} 人`;
+    hintNode = t('play.hint.waiting', { n: state.agent?.queue_ahead ?? '—' });
   } else if (!state?.joined) {
     hintNode = (
       <>
-        准备好了就入场{' '}
+        {t('play.hint.join')}{' '}
         <button type="button" data-testid="play-join" disabled={play.busy} onClick={join}>
-          入场
+          {t('play.join')}
         </button>
       </>
     );
   } else if (onToilet) {
-    if (offer && offer.reason === null) hintNode = '点「使用」开始如厕';
-    else if (offer?.reason) hintNode = offer.reason;
+    if (offer && offer.reason === null) hintNode = t('play.hint.useToilet');
+    else if (offer?.reason) hintNode = t(offer.reason);
     else if (agent && ownAgent(state)?.pose === 'using') {
-      hintNode = `如厕中 ${agent.use_ticks_done}/${agent.use_ticks_total}`;
-    } else hintNode = '在马桶上';
+      hintNode = t('play.hint.using', { done: agent.use_ticks_done, total: agent.use_ticks_total });
+    } else hintNode = t('play.hint.onToilet');
   } else {
-    hintNode = '点地面走到马桶上；点相邻的墙、门可以建、拆、开关';
+    hintNode = t('play.hint.default');
   }
 
   const menuItems = state && menu ? buildMenu(state, terrain, menu, offer) : [];
   const placementText =
-    state?.placement === 'inside' ? '在场' : state?.placement === 'waiting' ? '排队中' : '未入场';
+    state?.placement === 'inside'
+      ? t('play.placement.inside')
+      : state?.placement === 'waiting'
+        ? t('play.placement.waiting')
+        : t('play.placement.out');
 
   const pips =
     agent && agent.use_ticks_total > 0
@@ -596,38 +608,40 @@ export function PlayMode({ terrain, top3, view, viewReady, override, clickRef, c
   const stats =
     state && agent ? (
       <details class="pm-detail">
-        <summary>详细</summary>
+        <summary>{t('play.details')}</summary>
         <div class="pm-stats" data-testid="play-stats">
           <div class="kv">
-            <span class="sub">位置</span>
+            <span class="sub">{t('play.stat.pos')}</span>
             <span class="mono">{mePos ? `${mePos.x},${mePos.y}` : '—'}</span>
           </div>
           <div class="kv">
-            <span class="sub">需求</span>
-            <span>{agent.need ? needLabel(agent.need) : '无'}</span>
+            <span class="sub">{t('play.stat.need')}</span>
+            <span>{agent.need ? needLabel(agent.need) : t('play.none')}</span>
           </div>
           <div class="kv">
-            <span class="sub">截止</span>
+            <span class="sub">{t('play.stat.deadline')}</span>
             <span class="mono">
               {agent.deadline_tick > 0
-                ? `${agent.deadline_tick}（还有 ${Math.max(0, agent.deadline_tick - state.tick)} 回合）`
+                ? tn('play.deadline', Math.max(0, agent.deadline_tick - state.tick), { tick: agent.deadline_tick })
                 : '—'}
             </span>
           </div>
           <div class="kv">
-            <span class="sub">当前动作</span>
+            <span class="sub">{t('play.stat.action')}</span>
             <span class="mono">
-              {agent.action ? `${zhAction(agent.action.description)} · 剩 ${agent.action.remaining} 回合` : '无'}
+              {agent.action
+                ? `${actionIn(lang, agent.action.description)} · ${tn('play.bar.left', agent.action.remaining)}`
+                : t('play.none')}
             </span>
           </div>
           <div class="kv">
-            <span class="sub">打 / 防冷却</span>
+            <span class="sub">{t('play.stat.cooldown')}</span>
             <span class="mono">
               {`${untilText(agent.attack_cooldown_until, state.tick)} / ${untilText(agent.defend_cooldown_until, state.tick)}`}
             </span>
           </div>
           <div class="kv">
-            <span class="sub">眩晕 / 免疫</span>
+            <span class="sub">{t('play.stat.stun')}</span>
             <span class="mono">
               {`${untilText(agent.stun_until, state.tick)} / ${untilText(agent.immunity_until, state.tick)}`}
             </span>
@@ -640,10 +654,10 @@ export function PlayMode({ terrain, top3, view, viewReady, override, clickRef, c
     <>
       <div class="ui-clock play-clock">
         <div class="big" data-testid="play-tick">
-          回合 {state?.tick ?? '–'}
+          {t('top.turn', { n: state?.tick ?? '–' })}
         </div>
         <div class="countdown">
-          下次结算 <span data-testid="play-countdown">{play.countdown}</span>
+          {t('top.nextSettle')} <span data-testid="play-countdown">{play.countdown}</span>
         </div>
         <div class="play-placement" data-testid="play-placement">
           {placementText}
@@ -651,14 +665,14 @@ export function PlayMode({ terrain, top3, view, viewReady, override, clickRef, c
       </div>
 
       <div class="ui-feed panel play-feed">
-        <h3>我的事件</h3>
+        <h3>{t('play.events')}</h3>
         {play.events.length === 0 ? (
-          <div class="sub">还没有事件。</div>
+          <div class="sub">{t('play.noEvents')}</div>
         ) : (
           <ol class="pm-events" data-testid="play-events">
             {play.events.slice(0, 3).map((event) => (
               <li key={`${event.tick}:${event.seq}`} class="pm-event">
-                <span class="pm-event-tick">回合 {event.tick}</span> <span>{zhEvent(event.text)}</span>
+                <span class="pm-event-tick">{t('top.turn', { n: event.tick })}</span> <span>{eventIn(lang, event.text)}</span>
               </li>
             ))}
           </ol>
@@ -682,7 +696,7 @@ export function PlayMode({ terrain, top3, view, viewReady, override, clickRef, c
       {menu && state ? (
         <div class="panel play-menu" data-play-menu ref={menuRef}>
           <p class="play-menu-title">{describeCell(state, menu.cell)}</p>
-          {menuItems.length === 0 ? <p class="sub">这个格子没有可用动作。</p> : null}
+          {menuItems.length === 0 ? <p class="sub">{t('play.noActions')}</p> : null}
           {menuItems.map((item) => (
             <button
               key={item.action.id}
@@ -692,7 +706,7 @@ export function PlayMode({ terrain, top3, view, viewReady, override, clickRef, c
               title={item.reason ?? undefined}
               onClick={() => onMenuItem(item)}
             >
-              {item.action.label}
+              {labelText(item.action.label)}
             </button>
           ))}
           {menuItems.some((item) => item.reason) ? (
@@ -711,7 +725,7 @@ export function PlayMode({ terrain, top3, view, viewReady, override, clickRef, c
             frameOnSelf();
           }}
         >
-          回到自己
+          {t('play.recenter')}
         </button>
       ) : null}
 
@@ -721,9 +735,13 @@ export function PlayMode({ terrain, top3, view, viewReady, override, clickRef, c
             <div class="col play-need">
               <div class="kv">
                 <b>
-                  {agent.need ? `${needLabel(agent.need)}${urgent ? ' · 快憋不住了' : ''}` : '没有需求'}
+                  {agent.need
+                    ? urgent
+                      ? t('card.needUrgent', { need: needLabel(agent.need) })
+                      : needLabel(agent.need)
+                    : t('card.noNeed')}
                 </b>
-                <span class="sub">{agent.need ? `还能憋 ${remaining} 回合` : '—'}</span>
+                <span class="sub">{agent.need ? tn('card.hold', remaining) : '—'}</span>
               </div>
               <div class="bar">
                 <i style={{ width: `${agent.need ? fraction * 100 : 0}%`, background: meterColor(fraction) }} />
@@ -731,12 +749,12 @@ export function PlayMode({ terrain, top3, view, viewReady, override, clickRef, c
             </div>
             <span class="sep" />
             <div class="col play-pips-col">
-              <span class="sub">如厕进度 {agent.use_ticks_done}/{agent.use_ticks_total}</span>
+              <span class="sub">{t('card.progress', { done: agent.use_ticks_done, total: agent.use_ticks_total })}</span>
               <div class="pips">{pips}</div>
             </div>
             <span class="sep" />
             <div class="col play-doing">
-              <span class="sub">正在做</span>
+              <span class="sub">{t('play.doing')}</span>
               <span
                 class={`pm-pending pm-pending-${play.bar.tone}`}
                 data-testid="play-pending"
@@ -753,18 +771,18 @@ export function PlayMode({ terrain, top3, view, viewReady, override, clickRef, c
                 class="gold"
                 data-testid="play-use"
                 disabled={!offer || offer.reason !== null || play.busy}
-                title={offer?.reason ?? undefined}
+                title={offer?.reason ? t(offer.reason) : undefined}
                 onClick={() => {
                   if (offer) void submitAction(offer.action);
                 }}
               >
-                使用
+                {t('play.act.use')}
               </button>
               <button type="button" data-testid="play-cancel" disabled={!agent.action || play.busy} onClick={cancel}>
-                取消
+                {t('play.cancel')}
               </button>
               <button type="button" data-testid="play-leave" disabled={play.busy} onClick={leave}>
-                离场
+                {t('play.leave')}
               </button>
             </div>
           </div>
@@ -775,10 +793,10 @@ export function PlayMode({ terrain, top3, view, viewReady, override, clickRef, c
       </div>
 
       {createOpen ? (
-        <Window title="建角色" windowKey="create" onClose={() => setCreateOpen(false)}>
+        <Window title={t('play.createOpen')} windowKey="create" onClose={() => setCreateOpen(false)}>
           <form class="play-create" onSubmit={onCreate}>
             <label>
-              <span class="sub">昵称</span>
+              <span class="sub">{t('play.nick')}</span>
               <input
                 type="text"
                 value={createNick}
@@ -787,14 +805,14 @@ export function PlayMode({ terrain, top3, view, viewReady, override, clickRef, c
                 onInput={(event) => setCreateNick((event.target as HTMLInputElement).value.toLowerCase())}
               />
             </label>
-            <p class="sub">只能用小写字母、数字和 -，2–16 个字符。</p>
-            <div class="sw" role="radiogroup" aria-label="身体颜色">
+            <p class="sub">{t('play.nickRule')}</p>
+            <div class="sw" role="radiogroup" aria-label={t('play.bodyColor')}>
               {Array.from({ length: CREATE_COLORS }, (_, index) => (
                 <i
                   key={index}
                   role="radio"
                   aria-checked={index === createColor ? 'true' : 'false'}
-                  aria-label={`颜色 ${index + 1}`}
+                  aria-label={t('play.color', { n: index + 1 })}
                   class={index === createColor ? 'on' : undefined}
                   style={{ background: agentColor(index) }}
                   onClick={() => setCreateColor(index)}
@@ -802,9 +820,9 @@ export function PlayMode({ terrain, top3, view, viewReady, override, clickRef, c
               ))}
             </div>
             <button type="submit" class="gold" data-testid="play-create" disabled={play.busy}>
-              {play.busy ? '创建中…' : '创建'}
+              {t(play.busy ? 'play.creating' : 'play.create')}
             </button>
-            {createError ? <p class="pm-notice">{createError}</p> : null}
+            {createError ? <p class="pm-notice">{msgText(createError)}</p> : null}
           </form>
         </Window>
       ) : null}
