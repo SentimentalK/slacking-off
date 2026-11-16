@@ -99,6 +99,23 @@
   opacity: 0.85;
   margin-top: 3px;
 }
+@media (max-width: 480px) {
+  .shell .ui-brand {
+    min-width: 0;
+    overflow: hidden;
+  }
+  .shell .ui-brand .t1 {
+    font-size: 18px;
+    line-height: 1.3;
+    letter-spacing: 1px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  html:lang(en) .ui-navr .cnt .lbl {
+    display: none;
+  }
+}
 .shell .ui-clock {
   position: fixed;
   left: 20px;
@@ -736,6 +753,20 @@
 }
 .shell .play-row .pips {
   margin: 0;
+}
+.shell .play-need .kv b {
+  white-space: nowrap;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.shell .card-origin {
+  white-space: nowrap;
+}
+.shell .card-origin > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .shell .pm-pending {
   display: flex;

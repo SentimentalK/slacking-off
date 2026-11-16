@@ -128,10 +128,18 @@ export function TopBar({
 
       <div class="ui-navr">
         {playing ? (
-          <div class="panel cnt">{t('top.playing')}</div>
+          <div class="panel cnt" title={t('top.playing')}>
+            <span class="lbl">{t('top.playingWord')} · </span>
+            <span class="lbl">{t('top.viewWord')} </span>
+            9×9
+          </div>
         ) : (
-          <div class="panel cnt">
-            {t('top.inside')} <b>{projection?.counts.inside ?? '–'}</b>/{projection?.counts.capacity ?? '–'} · {t('top.queue')}{' '}
+          <div
+            class="panel cnt"
+            title={`${t('top.inside')} ${projection?.counts.inside ?? '–'}/${projection?.counts.capacity ?? '–'} · ${t('top.queue')} ${projection?.counts.queued ?? '–'}/${projection?.counts.queue_capacity ?? '–'}`}
+          >
+            <span class="lbl">{t('top.inside')} </span>
+            <b>{projection?.counts.inside ?? '–'}</b>/{projection?.counts.capacity ?? '–'} · <span class="lbl">{t('top.queue')} </span>
             <b>{projection?.counts.queued ?? '–'}</b>/{projection?.counts.queue_capacity ?? '–'}
           </div>
         )}

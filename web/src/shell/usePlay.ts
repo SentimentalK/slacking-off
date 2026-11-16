@@ -287,7 +287,9 @@ export function usePlay(active: boolean) {
       const placement = envelope.result.placement;
       const notice: Msg =
         'Waiting' in placement
-          ? { key: 'play.notice.queued', vars: { ahead: placement.Waiting.ahead } }
+          ? placement.Waiting.ahead === 0
+            ? { key: 'play.notice.queuedNext' }
+            : { key: 'play.notice.queued', vars: { ahead: placement.Waiting.ahead } }
           : { key: 'play.notice.joined' };
       setOutcome(null);
       await refresh();
