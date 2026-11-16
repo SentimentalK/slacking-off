@@ -23,8 +23,8 @@ export function Shell({ route }: { route: Route }) {
   const override = useRef<WorldOverride | null>(null);
   const clickRef = useRef<((hit: ClickHit) => void) | null>(null);
   const cameraRef = useRef<(() => void) | null>(null);
-  const world = useWorld(canvasRef, override, clickRef, cameraRef);
   const [mode, setMode] = useState<Mode>(route.name === 'play' ? 'play' : 'watch');
+  const world = useWorld(canvasRef, override, clickRef, cameraRef, mode === 'watch');
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
 
@@ -64,6 +64,7 @@ export function Shell({ route }: { route: Route }) {
             current={world.mode === 'replay' ? 'replay' : mode}
             onSettings={() => setSettingsOpen(true)}
             hideClock={mode === 'play'}
+            playing={mode === 'play'}
           />
           {mode === 'play' ? (
             <PlayMode

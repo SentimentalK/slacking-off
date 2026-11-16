@@ -20,6 +20,7 @@ interface Props {
   current: TopMode;
   onSettings: () => void;
   hideClock?: boolean;
+  playing?: boolean;
 }
 
 function useNow(intervalMs: number): number {
@@ -31,7 +32,16 @@ function useNow(intervalMs: number): number {
   return now;
 }
 
-export function TopBar({ status, replaying, projection, arrivedAt, current, onSettings, hideClock = false }: Props) {
+export function TopBar({
+  status,
+  replaying,
+  projection,
+  arrivedAt,
+  current,
+  onSettings,
+  hideClock = false,
+  playing = false,
+}: Props) {
   const now = useNow(200);
   const auth = useAuth();
   const [menuOpen, setMenuOpen] = useState(false);
@@ -106,10 +116,14 @@ export function TopBar({ status, replaying, projection, arrivedAt, current, onSe
       </div>
 
       <div class="ui-navr">
-        <div class="panel cnt">
-          在场 <b>{projection?.counts.inside ?? '–'}</b>/{projection?.counts.capacity ?? '–'} · 排队{' '}
-          <b>{projection?.counts.queued ?? '–'}</b>/{projection?.counts.queue_capacity ?? '–'}
-        </div>
+        {playing ? (
+          <div class="panel cnt">上场中 · 视野 9×9</div>
+        ) : (
+          <div class="panel cnt">
+            在场 <b>{projection?.counts.inside ?? '–'}</b>/{projection?.counts.capacity ?? '–'} · 排队{' '}
+            <b>{projection?.counts.queued ?? '–'}</b>/{projection?.counts.queue_capacity ?? '–'}
+          </div>
+        )}
         {items}
         <button
           type="button"

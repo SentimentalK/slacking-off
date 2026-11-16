@@ -99,6 +99,7 @@ export function useWorld(
   override: RefObject<WorldOverride | null>,
   onClick: RefObject<((hit: ClickHit) => void) | null>,
   onUserCamera: RefObject<(() => void) | null>,
+  active: boolean,
 ) {
   const [projection, setProjection] = useState<Projection | null>(null);
   const [terrain, setTerrain] = useState<Terrain | null>(null);
@@ -109,6 +110,8 @@ export function useWorld(
   const [reduceMotion, setReduceMotion] = useState(false);
   const [mode, setMode] = useState<ViewMode>('live');
   const modeRef = useRef<ViewMode>('live');
+  const activeRef = useRef(active);
+  activeRef.current = active;
   const [replay, setReplay] = useState<{ from: number; to: number } | null>(null);
   const replayTick = useRef(0);
   const replayCache = useRef(new Map<number, Projection>());
@@ -183,7 +186,7 @@ export function useWorld(
     getJSON<Timeline>(`/api/timeline?from=0&to=${liveTick}`)
       .then((timeline) => {
         const span = pickReplaySpan(timeline.spans, liveTick);
-        if (!span || modeRef.current !== 'live') return;
+        if (!span || modeRef.current !== 'live' || !activeRef.current) return;
         replayCache.current.clear();
         replayTick.current = span.from;
         setReplay(span);
@@ -229,6 +232,23 @@ export function useWorld(
         if (alive) setTerrain({ width: 0, height: 0, entrance: { x: 0, y: 0 }, rows: [] });
       });
 
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!active) {
+      if (modeRef.current === 'replay') {
+        replayCache.current.clear();
+        modeRef.current = 'live';
+        setReplay(null);
+        setMode('live');
+      }
+      return;
+    }
+    let alive = true;
+
     getJSON<LeaderRow[]>('/api/leaderboard?metric=score&limit=3')
       .then((rows) => {
         if (alive) setTop3(rows);
@@ -256,7 +276,7 @@ export function useWorld(
       alive = false;
       stop();
     };
-  }, []);
+  }, [active]);
 
   useEffect(() => {
     const canvas = canvasRef.current;

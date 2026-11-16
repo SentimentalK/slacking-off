@@ -78,6 +78,7 @@ export class CameraControls {
   private readonly onDown = (e: PointerEvent): void => this.down(e);
   private readonly onMove = (e: PointerEvent): void => this.move(e);
   private readonly onUp = (e: PointerEvent): void => this.up(e);
+  private readonly onCancel = (e: PointerEvent): void => this.cancel(e);
   private fit: number;
   private home: number;
   private dist: number;
@@ -85,6 +86,7 @@ export class CameraControls {
   private downX = 0;
   private downY = 0;
   private pinching = false;
+  private dragging = false;
   private pinchPrev = 0;
 
   constructor(
@@ -108,7 +110,8 @@ export class CameraControls {
       canvas.addEventListener('pointerdown', this.onDown);
       canvas.addEventListener('pointermove', this.onMove);
       canvas.addEventListener('pointerup', this.onUp);
-      canvas.addEventListener('pointercancel', this.onUp);
+      canvas.addEventListener('pointercancel', this.onCancel);
+      canvas.addEventListener('lostpointercapture', this.onCancel);
     }
   }
 
@@ -150,7 +153,8 @@ export class CameraControls {
     this.canvas.removeEventListener('pointerdown', this.onDown);
     this.canvas.removeEventListener('pointermove', this.onMove);
     this.canvas.removeEventListener('pointerup', this.onUp);
-    this.canvas.removeEventListener('pointercancel', this.onUp);
+    this.canvas.removeEventListener('pointercancel', this.onCancel);
+    this.canvas.removeEventListener('lostpointercapture', this.onCancel);
   }
 
   private aspect(): number {
@@ -185,7 +189,8 @@ export class CameraControls {
     if (this.pointers.size === 1) {
       this.downX = e.clientX;
       this.downY = e.clientY;
-      this.anchor = this.groundAt(e.clientX, e.clientY);
+      this.dragging = false;
+      this.anchor = null;
     } else if (this.pointers.size === 2) {
       this.pinching = true;
       this.pinchPrev = this.pinchDistance();
@@ -206,6 +211,12 @@ export class CameraControls {
       this.onUserCamera();
       return;
     }
+    if (!this.dragging) {
+      if (Math.hypot(e.clientX - this.downX, e.clientY - this.downY) < CLICK_PX) return;
+      this.dragging = true;
+      this.anchor = this.groundAt(e.clientX, e.clientY);
+      return;
+    }
     if (!this.anchor) return;
     const cur = this.groundAt(e.clientX, e.clientY);
     if (!cur) return;
@@ -219,10 +230,22 @@ export class CameraControls {
   private up(e: PointerEvent): void {
     const wasSingle = this.pointers.size === 1 && !this.pinching;
     this.pointers.delete(e.pointerId);
-    if (wasSingle && Math.hypot(e.clientX - this.downX, e.clientY - this.downY) < CLICK_PX) {
-      this.onClick(e.clientX, e.clientY);
+    if (wasSingle && !this.dragging) {
+      this.onClick(this.downX, this.downY);
     }
-    if (this.pointers.size === 0) this.pinching = false;
+    if (wasSingle) this.dragging = false;
+    if (this.pointers.size === 0) this.resetGesture();
+  }
+
+  private cancel(e: PointerEvent): void {
+    this.pointers.delete(e.pointerId);
+    if (this.pointers.size === 0) this.resetGesture();
+  }
+
+  private resetGesture(): void {
+    this.pinching = false;
+    this.dragging = false;
+    this.anchor = null;
   }
 
   private pinchDistance(): number {
