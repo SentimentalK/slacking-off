@@ -345,13 +345,19 @@
         "id": 31,
         "nick": "tofu",
         "color": 1,
-        "pos": null
+        "pos": {
+          "x": 2,
+          "y": 12
+        }
       },
       {
         "id": 44,
         "nick": "kiwi",
         "color": 7,
-        "pos": null
+        "pos": {
+          "x": 3,
+          "y": 12
+        }
       }
     ],
     "events": [
@@ -721,13 +727,19 @@
         "id": 31,
         "nick": "tofu",
         "color": 1,
-        "pos": null
+        "pos": {
+          "x": 2,
+          "y": 12
+        }
       },
       {
         "id": 44,
         "nick": "kiwi",
         "color": 7,
-        "pos": null
+        "pos": {
+          "x": 3,
+          "y": 12
+        }
       }
     ],
     "events": [
@@ -1091,13 +1103,19 @@
         "id": 31,
         "nick": "tofu",
         "color": 1,
-        "pos": null
+        "pos": {
+          "x": 2,
+          "y": 12
+        }
       },
       {
         "id": 44,
         "nick": "kiwi",
         "color": 7,
-        "pos": null
+        "pos": {
+          "x": 3,
+          "y": 12
+        }
       }
     ],
     "events": [
