@@ -30,6 +30,10 @@ const SHOTS = [
   { name: 'states', fixture: 'states.json', query: 'focus=37.25,13.75&zoom=0.69', w: 1440, h: 900 },
   { name: 'overview-day', fixture: 'crowd.json', query: '', w: 1440, h: 900 },
   { name: 'overview-dusk', fixture: 'crowd.json', query: 'dusk=1', w: 1440, h: 900 },
+  // Close-up comparable to the prototype: a shack and the crossroads, ~25x16 tiles (the prototype's 18x12 map plus its margin),
+  // the prototype's 64-degree pitch (?pitch=proto is measurement-only).
+  { name: 'near-day', fixture: 'crowd.json', query: 'focus=17,12&zoom=0.5&pitch=proto', w: 1440, h: 900 },
+  { name: 'near-dusk', fixture: 'crowd.json', query: 'focus=17,12&zoom=0.5&pitch=proto&dusk=1', w: 1440, h: 900 },
   { name: 'closeup-day', fixture: 'crowd.json', query: 'focus=16,14&zoom=0.5', w: 1440, h: 900 },
   { name: 'closeup-dusk', fixture: 'crowd.json', query: 'focus=16,14&zoom=0.5&dusk=1', w: 1440, h: 900 },
   { name: 'low-390', fixture: 'crowd.json', query: 'quality=low', w: 390, h: 844 },

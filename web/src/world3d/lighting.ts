@@ -43,7 +43,7 @@ export function createLighting(scene: THREE.Scene): Lighting {
       sun.intensity = (2.6 - 1.75 * k) * Math.PI;
       hemi.color.copy(HEM_DAY).lerp(HEM_DUSK, k);
       hemi.groundColor.copy(GND_DAY);
-      hemi.intensity = (0.42 - 0.1 * k) * Math.PI;
+      hemi.intensity = (0.42 - 0.14 * k) * Math.PI;
       SUN_DIR.set(-12 - 6 * k, 13 - 8 * k, 5).normalize();
       sun.position.set(cx + SUN_DIR.x * SUN_DIST, SUN_DIR.y * SUN_DIST, cz + SUN_DIR.z * SUN_DIST);
       sun.target.position.set(cx, 0, cz);

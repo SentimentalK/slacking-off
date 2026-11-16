@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import type { ProjectionAgent, ProjectionObject, Terrain } from '../types';
 import { cellAt, cellKey } from './grid';
 import { duskK } from './lighting';
-import { clearLampSources, setLampSources, type LampSource } from './lamplight';
+import { clearLampSources, LAMPS_OFF, setLampSources, type LampSource } from './lamplight';
 import {
   ACCENT,
   barrier,
@@ -56,7 +56,8 @@ const BADGE_LIFT = 0.22;
 const BADGE_SHOWN = 0.5;
 const SHACK_LIGHT_Y = 1.0;
 const SHACK_LIGHT_DIST = 5;
-const SHACK_LIGHT_INTENSITY = 1.8;
+const SHACK_LIGHT_INTENSITY = 2.2 * Math.PI;
+const SHACK_LIGHT_DECAY = 2;
 const SHACK_LIGHT_COLOR: [number, number, number] = [1, 0xb0 / 255, 0x60 / 255];
 const SHACK_OWNER = 'shack-lamps';
 
@@ -265,7 +266,7 @@ export function createObjectsLayer(ctx: SceneCtx): Layer {
       }
 
       if (t.site !== 'toilet' && t.level >= 1) {
-        shackSources.push({ x: tx, z: tz, y: SHACK_LIGHT_Y, color: SHACK_LIGHT_COLOR, intensity: SHACK_LIGHT_INTENSITY, distance: SHACK_LIGHT_DIST });
+        shackSources.push({ x: tx, z: tz, y: SHACK_LIGHT_Y, color: SHACK_LIGHT_COLOR, intensity: SHACK_LIGHT_INTENSITY, distance: SHACK_LIGHT_DIST, decay: SHACK_LIGHT_DECAY });
       }
 
       const prevT = pIdx ? sameKind(pIdx.get(cellKey(t.pos.x, t.pos.y)), t) : undefined;
@@ -330,7 +331,7 @@ export function createObjectsLayer(ctx: SceneCtx): Layer {
           outer.rotation.y = faceRot;
           (outer.userData.inner as THREE.Group).rotation.x = tilt + shake;
           const glass = outer.userData.glass as THREE.Mesh | null;
-          if (glass) (glass.material as THREE.MeshStandardMaterial).emissiveIntensity = occupied ? 1.6 * k : 0;
+          if (glass) (glass.material as THREE.MeshStandardMaterial).emissiveIntensity = occupied && !LAMPS_OFF ? 1.6 * k : 0;
         } else if (o.kind === 'wall') {
           const pw = prevO ? lerp(progressOf(prevO), progressOf(o), e) : progressOf(o);
           const site = reg.get(`siteWall:${ck}@${tk}`, () => {

@@ -10,7 +10,7 @@ import { createPathMarksLayer } from './pathmarks';
 import { createGround } from './ground';
 import { createLighting, duskK } from './lighting';
 import { applyLamps, applyVision, installVisionShader } from './vision';
-import { allLampSources } from './lamplight';
+import { allLampSources, LAMPS_OFF } from './lamplight';
 import type { FrameInput, Layer, Quality, SceneCtx } from './types';
 
 export type { FrameInput, Layer, Quality, SceneCtx, UiState, VisionGrid } from './types';
@@ -47,6 +47,22 @@ export interface WorldView {
 }
 
 const GROUND = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+
+// Measurement only (?pitch=proto): the prototype looks along (0, 33, 16), a steeper 64 degrees than
+// the product camera's (0, 30, 19). Used by the close-up comparison shots; the product camera is untouched.
+const PROTO_PITCH = typeof location !== 'undefined' && new URLSearchParams(location.search).get('pitch') === 'proto';
+const PROTO_DIR = new THREE.Vector3(0, 33, 16).normalize();
+const tiltFocus = new THREE.Vector3();
+
+function tiltToPrototype(camera: THREE.PerspectiveCamera): void {
+  const forward = camera.getWorldDirection(tiltFocus);
+  if (forward.y >= -1e-6) return;
+  const dist = camera.position.y / -forward.y;
+  const focus = camera.position.clone().addScaledVector(forward, dist);
+  camera.position.copy(focus).addScaledVector(PROTO_DIR, dist);
+  camera.lookAt(focus);
+  camera.updateMatrixWorld();
+}
 
 export const extraLayers: Array<(ctx: SceneCtx) => Layer> = [];
 extraLayers.push((ctx) => createObjectsLayer(ctx));
@@ -125,7 +141,7 @@ export function createWorldView(canvas: HTMLCanvasElement, opts: WorldViewOption
   };
 
   const syncLamps = (input: FrameInput): void => {
-    const toggled = applyLamps(vision, allLampSources(), duskK(input.ui, input.clock), input.terrain.width, input.terrain.height);
+    const toggled = applyLamps(vision, LAMPS_OFF ? null : allLampSources(), duskK(input.ui, input.clock), input.terrain.width, input.terrain.height);
     if (!toggled) return;
     scene.traverse((o) => {
       const m = (o as THREE.Mesh).material;
@@ -186,6 +202,7 @@ export function createWorldView(canvas: HTMLCanvasElement, opts: WorldViewOption
       for (const l of layers) l.update(input, ctx);
       lighting.update(input, quality);
       cam.apply();
+      if (PROTO_PITCH) tiltToPrototype(cam.camera);
       applyVision(vision, input.ui.vision);
       syncLamps(input);
       renderer.render(scene, cam.camera);
