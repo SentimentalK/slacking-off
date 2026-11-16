@@ -4,6 +4,7 @@ import type { Pos, Projection, Terrain } from '../types';
 export interface VisionGrid {
   width: number;
   height: number;
+  scale?: number;
   values: Uint8Array;
 }
 

@@ -796,7 +796,7 @@ async function shot(name, note, { checkWidth = false } = {}) {
     assert(overflow <= 0, `${name}: the page scrolls horizontally by ${overflow}px`);
   }
   const snap = await playSnap();
-  await screenshot(page, `l4/${name}`, snap?.body.result.tick ?? 0, note);
+  await screenshot(page, `l5/${name}`, snap?.body.result.tick ?? 0, note);
 }
 
 async function waitEnabled(selector, timeout = 6_000) {
@@ -824,6 +824,51 @@ async function centreOffset(agentId) {
   }, agentId);
 }
 
+async function framingCheck(label) {
+  const vp = page.viewport();
+  const me = (await playSnap()).body.result.agent.pos;
+  const vertical = vp.width >= vp.height;
+  const span = await page.evaluate(
+    (cell, wide) => {
+      const view = window.__looView;
+      if (wide) {
+        const a = view.screenOfCell(cell.x, cell.y + 4);
+        const b = view.screenOfCell(cell.x, cell.y - 4);
+        return { value: (a.y - b.y) * (9 / 8), need: 0.6 * window.innerHeight, axis: 'vertical' };
+      }
+      const a = view.screenOfCell(cell.x + 4, cell.y);
+      const b = view.screenOfCell(cell.x - 4, cell.y);
+      return { value: (a.x - b.x) * (9 / 8), need: 0.85 * window.innerWidth, axis: 'horizontal' };
+    },
+    me,
+    vertical,
+  );
+  assert(
+    span.value >= span.need,
+    `${label}: the 9x9 view spans ${span.value.toFixed(0)} px ${span.axis}ly, need ${span.need.toFixed(0)} px`,
+  );
+  pass(`framing: ${label} 9x9 view spans ${span.value.toFixed(0)} px ${span.axis}ly, need ${span.need.toFixed(0)} px`);
+}
+
+async function assertMenuClearOfShack(label, toilet) {
+  const box = await page.evaluate((cell) => {
+    const view = window.__looView;
+    const corners = [-1.5, 1.5].flatMap((dy) => [-1.5, 1.5].map((dx) => view.screenOfCell(cell.x + dx, cell.y + dy)));
+    const xs = corners.map((p) => p.x);
+    const ys = corners.map((p) => p.y);
+    const menu = document.querySelector('[data-play-menu]')?.getBoundingClientRect();
+    return {
+      shack: { left: Math.min(...xs), right: Math.max(...xs), top: Math.min(...ys), bottom: Math.max(...ys) },
+      menu: menu ? { left: menu.left, right: menu.right, top: menu.top, bottom: menu.bottom } : null,
+    };
+  }, toilet);
+  assert(box.menu, `${label}: the door menu is not on the page`);
+  const { shack, menu } = box;
+  const overlaps = menu.left < shack.right && menu.right > shack.left && menu.top < shack.bottom && menu.bottom > shack.top;
+  assert(!overlaps, `${label}: the menu ${JSON.stringify(menu)} covers the shack ${JSON.stringify(shack)}`);
+  pass(`menu clear of shack: ${label} menu does not overlap the shack's 3x3 screen box`);
+}
+
 async function memoryLuma(own) {
   return page.evaluate(async (cell) => {
     const view = window.__looView;
@@ -838,31 +883,42 @@ async function memoryLuma(own) {
     work.height = image.height;
     const context = work.getContext('2d');
     context.drawImage(image, 0, 0);
-    const luma = (point) => {
+    const pixelLuma = (point) => {
       const x = Math.round((point.x - rect.left) * (image.width / rect.width));
       const y = Math.round((point.y - rect.top) * (image.height / rect.height));
-      const data = context.getImageData(x - 2, y - 2, 5, 5).data;
+      const data = context.getImageData(x, y, 1, 1).data;
+      return 0.299 * data[0] + 0.587 * data[1] + 0.114 * data[2];
+    };
+    const luma = (cell) => {
+      const at = (x, y) => view.screenOfCell(x, y);
+      const center = at(cell.x, cell.y);
+      const ex = { x: (at(cell.x + 1, cell.y).x - at(cell.x - 1, cell.y).x) / 2, y: (at(cell.x + 1, cell.y).y - at(cell.x - 1, cell.y).y) / 2 };
+      const ey = { x: (at(cell.x, cell.y + 1).x - at(cell.x, cell.y - 1).x) / 2, y: (at(cell.x, cell.y + 1).y - at(cell.x, cell.y - 1).y) / 2 };
+      const steps = [-0.3, -0.15, 0, 0.15, 0.3];
       let sum = 0;
-      for (let i = 0; i < data.length; i += 4) {
-        sum += 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+      let count = 0;
+      for (const u of steps) {
+        for (const v of steps) {
+          sum += pixelLuma({ x: center.x + u * ex.x + v * ey.x, y: center.y + u * ex.y + v * ey.y });
+          count += 1;
+        }
       }
-      return sum / (data.length / 4);
+      return sum / count;
     };
     const onCanvas = (point) =>
       point.x >= rect.left && point.y >= rect.top && point.x <= rect.right && point.y <= rect.bottom;
-    const near = view.screenOfCell(cell.x, cell.y);
-    const farEntry = [
-      { x: cell.x + 8, y: cell.y },
-      { x: cell.x - 8, y: cell.y },
-      { x: cell.x, y: cell.y + 8 },
-      { x: cell.x, y: cell.y - 8 },
-    ]
-      .map((candidate) => ({ candidate, at: view.screenOfCell(candidate.x, candidate.y) }))
-      .find((entry) => entry.at && onCanvas(entry.at));
+    const row = [1, -1]
+      .map((sign) =>
+        [1, 2, 3].map((k) => {
+          const candidate = { x: cell.x + sign * (4 + k), y: cell.y };
+          return { candidate, at: view.screenOfCell(candidate.x, candidate.y) };
+        }),
+      )
+      .find((entries) => entries.every((entry) => entry.at && onCanvas(entry.at)));
     return {
-      own: luma(near),
-      far: farEntry ? luma(farEntry.at) : null,
-      farCell: farEntry ? farEntry.candidate : null,
+      own: luma(cell),
+      outside: row ? row.map((entry) => luma(entry.candidate)) : null,
+      cells: row ? row.map((entry) => entry.candidate) : null,
     };
   }, own);
 }
@@ -997,12 +1053,16 @@ async function walkToToiletByClicks(label, midWalk = null) {
 
 async function shotSession(label, { entry = null, menu = null, using = null, checkWidth = false }) {
   await joinWithRoom(label);
-  if (entry) await shot(entry, `${label}: just joined`, { checkWidth });
+  if (entry) {
+    await framingCheck(label);
+    await shot(entry, `${label}: just joined`, { checkWidth });
+  }
   if (menu || using) await walkToToiletByClicks(label);
   if (menu) {
     await tapCell(DOOR_AT);
     await page.waitForSelector('[data-play-menu] [data-action="door-close"]', { visible: true, timeout: 6_000 });
     await waitEnabled('[data-play-menu] [data-action="door-close"]');
+    await assertMenuClearOfShack(label, (await playSnap()).body.result.agent.pos);
     await shot(menu, `${label}: the door menu`, { checkWidth });
   }
   if (using) {
@@ -1117,14 +1177,17 @@ async function clickOnlyRound({ label, shots = {}, memory = false, checkWidth = 
       );
       const here = (await playSnap()).body.result.agent.pos;
       const luma = await memoryLuma(here);
-      assert(luma.far !== null, `${label}: no cell eight away from the human is on the canvas`);
-      assert(
-        luma.own > luma.far * 1.2,
-        `${label}: own cell luminance ${luma.own.toFixed(1)} is not clearly above ${luma.far.toFixed(1)} eight cells away`,
-      );
-      await shot(shots.memory, `${label}: own cell and the cell eight away`, { checkWidth });
+      assert(luma.outside !== null, `${label}: the three cells east or west of the 9x9 window are not all on the canvas`);
+      const [L0, [L1, L2, L3]] = [luma.own, luma.outside];
+      assert(L0 > L1 && L1 > Math.max(L2, L3), `${label}: own ${L0.toFixed(1)} > first ${L1.toFixed(1)} > max(second ${L2.toFixed(1)}, third ${L3.toFixed(1)}) does not hold`);
+      for (const [name, value] of [['second', L2], ['third', L3]]) {
+        const ratio = value / L0;
+        assert(ratio >= 0.12 && ratio <= 0.45, `${label}: the ${name} outside cell is ${(ratio * 100).toFixed(1)}% of own, expected 12–45%`);
+      }
+      const ratio = L3 / L0;
+      await shot(shots.memory, `${label}: own cell and the three cells outside the window`, { checkWidth });
       pass(
-        `memory shading: own cell luminance ${luma.own.toFixed(1)} vs ${luma.far.toFixed(1)} at ${luma.farCell.x},${luma.farCell.y}, outside the 9x9 window`,
+        `memory shading: own ${L0.toFixed(1)}, outside ${L1.toFixed(1)} > max(${L2.toFixed(1)}, ${L3.toFixed(1)}) (third at ${(ratio * 100).toFixed(1)}% of own), cells ${luma.cells.map((c) => `${c.x},${c.y}`).join(' ')}`,
       );
     }
 
@@ -1494,7 +1557,7 @@ async function main() {
     assert(joined.body.result.agent?.deadline_tick > 0, 'the joined human has no deadline');
     await page.waitForSelector('.ui-bottom[data-mode="play"] .play-row', { visible: true, timeout: 5_000 });
     const statusText = await page.$eval('[data-testid=play-stats]', (element) => element.textContent ?? '');
-    assert(/需求/.test(statusText) && /deadline/.test(statusText), `status panel lacks need/deadline: ${statusText}`);
+    assert(/需求/.test(statusText) && /截止/.test(statusText), `status panel lacks need/deadline: ${statusText}`);
     const countdownText = await page.$eval(
       '[data-testid=play-countdown]',
       (element) => element.textContent?.trim() ?? '',

@@ -40,7 +40,7 @@ const FRAGMENT_AFTER_LIGHTS = [
   '',
 ].join('\n');
 const FRAGMENT_BEFORE_TONEMAP = [
-  'if ( visionOn > 0.5 ) { vec2 visionUV = vVisionXZ / visionSize; float visionK = ( visionUV.x < 0.0 || visionUV.y < 0.0 || visionUV.x > 1.0 || visionUV.y > 1.0 ) ? 0.12 : texture2D( visionMap, visionUV ).r; gl_FragColor.rgb *= visionK; }',
+  'if ( visionOn > 0.5 ) { vec2 visionUV = vVisionXZ / visionSize; float visionK = ( visionUV.x < 0.0 || visionUV.y < 0.0 || visionUV.x > 1.0 || visionUV.y > 1.0 ) ? 0.30 : texture2D( visionMap, visionUV ).r; float visionSat = 0.65 + 0.35 * smoothstep( 0.5, 1.0, visionK ); vec3 visionL = vec3( dot( gl_FragColor.rgb, vec3( 0.2126, 0.7152, 0.0722 ) ) ); gl_FragColor.rgb = mix( visionL, gl_FragColor.rgb, visionSat ) * visionK; }',
   '',
 ].join('\n');
 
@@ -113,9 +113,10 @@ export function applyVision(u: VisionUniforms, grid: VisionGrid | null | undefin
   u.visionOn.value = 1;
   u.visionSize.value.set(grid.width, grid.height);
   if (grid.values === uploaded) return;
+  const scale = grid.scale ?? 1;
   uploaded = grid.values;
   u.visionMap.value.dispose();
-  u.visionMap.value = makeTexture(grid.values, grid.width, grid.height);
+  u.visionMap.value = makeTexture(grid.values, grid.width * scale, grid.height * scale);
 }
 
 export function applyLamps(u: VisionUniforms, sources: LampSource[] | null, k: number, W: number, H: number): boolean {
