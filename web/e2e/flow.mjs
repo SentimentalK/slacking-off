@@ -162,7 +162,7 @@ async function waitForWindow(page, key) {
   // The window's Escape listener and its initial focus are set up in the same
   // effect pass, so focus inside the window means the key handler is attached.
   await until(
-    () => page.evaluate(() => document.activeElement?.closest('.win') !== null && document.activeElement?.closest('.win') !== undefined),
+    () => page.evaluate(() => !!document.activeElement?.closest('.win')),
     { timeout: 10_000, label: `${key} window focus` },
   );
 }
@@ -243,7 +243,7 @@ async function main() {
     const info = gl && gl.getExtension('WEBGL_debug_renderer_info');
     return info ? String(gl.getParameter(info.UNMASKED_RENDERER_WEBGL)) : 'unknown';
   });
-  if (/swiftshader|llvmpipe|softpipe|software/i.test(renderer)) {
+  if (renderer === 'unknown' || /swiftshader|llvmpipe|softpipe|software/i.test(renderer)) {
     console.error(`FAIL: software renderer: ${renderer}`);
     await browser.close();
     process.exit(1);
@@ -668,6 +668,10 @@ async function main() {
       { LOO_HOME: HOME },
     );
     assert(/attached/.test(reattached.stdout), `expected attached after restart, got:\n${reattached.stdout}`);
+    const restored = JSON.parse(run(LOO, ['--json', 'status'], { LOO_HOME: HOME }).stdout).state;
+    if (restored?.placement === 'inside' || restored?.placement === 'waiting') {
+      assert(run(LOO, ['leave'], { LOO_HOME: HOME }).status === 0, 'loo leave of the session restored from the snapshot failed');
+    }
     assert(run(LOO, ['join', '--sent-by', 'self', '--why', 'e2e why'], { LOO_HOME: HOME }).status === 0, 'loo join after restart failed');
     await page.click('.win-close');
     await waitForPath(page, '/');

@@ -608,7 +608,7 @@ async function main() {
     const info = gl && gl.getExtension('WEBGL_debug_renderer_info');
     return info ? String(gl.getParameter(info.UNMASKED_RENDERER_WEBGL)) : 'unknown';
   });
-  if (/swiftshader|llvmpipe|softpipe|software/i.test(renderer)) {
+  if (renderer === 'unknown' || /swiftshader|llvmpipe|softpipe|software/i.test(renderer)) {
     console.error(`FAIL: software renderer: ${renderer}`);
     await browser.close();
     process.exit(1);

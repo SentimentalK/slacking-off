@@ -37,9 +37,9 @@ const AI_NICK = 'e2e-ai';
 const NEED_AT = { x: 13, y: 10 };
 const DOOR_AT = { x: 13, y: 11 };
 const ENTRANCE = { x: 6, y: 15 };
-/** Ticks we want left when a round starts: 12 steps + door + use fit easily. */
-// Software-rendered Chrome draws about 2 fps, so every still-camera tap costs several ticks of the drawn deadline.
-const ROUND_TICKS_REQUIRED = 55;
+// The server draws the deadline uniformly from 36–60 ticks (0.5 s each); a full click-only round took 36–41 ticks from join to success on this host, and the menu sub-rounds stay outside the shack.
+const ROUND_TICKS_REQUIRED = 50;
+const MENU_ROUND_TICKS_REQUIRED = 44;
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -1142,7 +1142,11 @@ async function clickOnlyRound({ label, shots = {}, memory = false, checkWidth = 
 function ensureAiInWorld() {
   const state = cliStatus().state;
   if (state?.placement === 'inside' || state?.placement === 'waiting') return;
-  run(LOO, ['join', '--sent-by', 'self', '--why', 'e2e'], { LOO_HOME: HOME });
+  const joined = run(LOO, ['join', '--sent-by', 'self', '--why', 'e2e'], { LOO_HOME: HOME }, { allowFail: true });
+  const after = cliStatus().state;
+  if (after?.placement !== 'inside' && after?.placement !== 'waiting') {
+    throw new Error(`${AI_NICK} could not rejoin for the mixed round: ${joined.stdout}${joined.stderr ?? ''}`);
+  }
 }
 
 async function parkAi() {
@@ -1234,7 +1238,7 @@ async function menuVsServer(label) {
 
   await leaveRound();
   await parkAi();
-  await joinWithRoom(`${label}: pillar`);
+  await joinWithRoom(`${label}: pillar`, MENU_ROUND_TICKS_REQUIRED);
   phase(`${label}: pillar`);
   const pillarPlans = [
     { stand: { x: 12, y: 12 }, pillar: { x: 12, y: 11 } },
@@ -1302,7 +1306,7 @@ async function menuVsServer(label) {
 
   await leaveRound();
   await parkAi();
-  await joinWithRoom(`${label}: wall`);
+  await joinWithRoom(`${label}: wall`, MENU_ROUND_TICKS_REQUIRED);
   phase(`${label}: wall`);
   await walkToToiletByClicks(label);
   state = await now();
@@ -1363,7 +1367,7 @@ async function main() {
     const info = gl && gl.getExtension('WEBGL_debug_renderer_info');
     return info ? String(gl.getParameter(info.UNMASKED_RENDERER_WEBGL)) : 'unknown';
   });
-  if (/swiftshader|llvmpipe|softpipe|software/i.test(renderer)) {
+  if (renderer === 'unknown' || /swiftshader|llvmpipe|softpipe|software/i.test(renderer)) {
     console.error(`FAIL: software renderer: ${renderer}`);
     await browser.close();
     process.exit(1);
