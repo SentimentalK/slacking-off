@@ -23,7 +23,7 @@ import type { Layer, SceneCtx } from './types';
 const PI = Math.PI;
 const LAMP_BULB_Y = 1.45;
 const LAMP_LIGHT_DIST = 7;
-const LAMP_LIGHT_INTENSITY = 3.0;
+const LAMP_LIGHT_INTENSITY = 2.4;
 const LAMP_COLOR = new THREE.Color(0xffa850);
 const LAMP_OWNER = 'lamp-posts';
 

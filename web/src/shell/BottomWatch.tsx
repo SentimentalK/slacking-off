@@ -2,7 +2,7 @@ import { useEffect, useState } from 'preact/hooks';
 import { navigate } from '../router';
 import type { ProjectionQueueEntry } from '../types';
 
-const QUEUE_SHOWN = 5;
+const QUEUE_SHOWN = 3;
 const QUEUE_SHOWN_NARROW = 2;
 const NARROW_QUERY = '(max-width: 700px)';
 

@@ -8,7 +8,7 @@ interface Props {
 }
 
 export function Feed({ events, colors }: Props) {
-  const latest = events.slice(0, 6);
+  const latest = events.slice(0, 4);
   return (
     <div class="ui-feed panel">
       <h3>现场</h3>
@@ -16,9 +16,11 @@ export function Feed({ events, colors }: Props) {
         <div class="sub">暂无事件</div>
       ) : (
         latest.map((event) => (
-          <div class="row" key={`${event.tick}:${event.seq}`}>
-            <span class="tag">{EVENT_LABEL[event.kind]}</span>{' '}
-            <EventText text={event.text} colors={colors} />
+          <div class="row feed-row" key={`${event.tick}:${event.seq}`} title={event.text}>
+            <span class="chip">{EVENT_LABEL[event.kind]}</span>
+            <span class="feed-text">
+              <EventText text={event.text} colors={colors} />
+            </span>
           </div>
         ))
       )}

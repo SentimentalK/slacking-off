@@ -28,6 +28,7 @@ export function Card({ agent, tick, top3, onVision, vision = true, play = false,
   const [expanded, setExpanded] = useState(false);
 
   if (!agent) {
+    if (top3.length === 0) return null;
     return (
       <div class="ui-card panel empty">
         <h3>带薪榜 · TOP 3</h3>

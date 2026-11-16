@@ -566,13 +566,13 @@ export function roof(palette: readonly [number, number]): { group: THREE.Group; 
 const GOLD = 0xffcf40;
 const GOLD_MAT: MatParams = { emissive: GOLD, emissiveIntensity: 0.35 };
 const FLAG_LIT = 0.35;
-const BADGE_SPACING = 0.15;
+const BADGE_SPACING = 0.225;
 
 export function levelBadge(level: number): THREE.Group {
-  const plate = single(boxGeo(0.9, 0.3, 0.04), level === 5 ? GOLD : DEEP_WOOD, level === 5 ? GOLD_MAT : undefined);
+  const plate = single(boxGeo(1.35, 0.45, 0.04), level === 5 ? GOLD : DEEP_WOOD, level === 5 ? GOLD_MAT : undefined);
   const dots = new Batch();
   for (let i = 0; i < level; i++) {
-    dots.add(new THREE.SphereGeometry(0.065, 10, 8), T((i - (level - 1) / 2) * BADGE_SPACING, 0, 0.03), GOLD);
+    dots.add(new THREE.SphereGeometry(0.0975, 10, 8), T((i - (level - 1) / 2) * BADGE_SPACING, 0, 0.03), GOLD);
   }
   const g = new THREE.Group();
   g.add(plate);
@@ -587,8 +587,8 @@ export function flagMaterial(open: boolean): THREE.MeshStandardMaterial {
 }
 
 export function doorFlag(height: number): THREE.Group {
-  const pole = shadowed(new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, height, 6).translate(0, height / 2, 0), S(DEEP_WOOD)));
-  const cloth = shadowed(new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.18, 0.02).translate(0.15, height - 0.1, 0), flagMaterial(true)));
+  const pole = shadowed(new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.045, height, 6).translate(0, height / 2, 0), S(DEEP_WOOD)));
+  const cloth = shadowed(new THREE.Mesh(new THREE.BoxGeometry(0.48, 0.288, 0.02).translate(0.24, height - 0.1, 0), flagMaterial(true)));
   const g = new THREE.Group();
   g.add(pole, cloth);
   g.userData.cloth = cloth;
