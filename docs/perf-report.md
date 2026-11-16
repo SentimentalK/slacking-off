@@ -116,7 +116,7 @@
 ## 7. 视觉一致性
 
 - 同一 fixture（`.conductor/perf/visual/data.tar`，满场 50/50，`--tick-seconds 120` 冻结）、1440×900、DPR1、`prefers-reduced-motion: reduce`、`document.fonts.ready` + 2 rAF。
-- 截图：`docs/screenshots/perf-before-spectator.png` / `perf-after-spectator.png`、`perf-before-replay-213.png` / `perf-after-replay-213.png`（2D 旧画面，截图已删除，见 git 历史 `8e32592`）。
+- 截图：`docs/screenshots/perf-before-spectator.png` / `perf-after-spectator.png`、`perf-before-replay-213.png` / `perf-after-replay-213.png`（截图已删除）。
 - 逐像素：观战页 `diff_pixels=0 / 1,296,000`，回放页 `diff_pixels=0 / 1,296,000`（`node scripts/perf/pixdiff.mjs <a> <b>`）。**外观未变。**
 - 观战页在这台机器上有两种相机居中变体（首帧尺寸竞态，与本次改动无关）：base 变体在 before/after 都是多数（4/5、3/5），另一种变体两边的差异都是 `312,528` 像素、bbox `{0,174–959,784}`，即整块画布偏移；变体文件在 `.conductor/perf/visual/variants-*/`。对照用的是各自 run 的多数变体。
 

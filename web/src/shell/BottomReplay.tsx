@@ -256,8 +256,8 @@ export function BottomReplay({
           onChange={(event) => onWorld(Number(event.currentTarget.value))}
         >
           {(worlds ?? []).map((entry) => (
-            <option key={entry.id} value={entry.id}>
-              {entry.name}
+            <option key={entry.id} value={entry.id} title={entry.name}>
+              世界 {entry.id}
             </option>
           ))}
         </select>

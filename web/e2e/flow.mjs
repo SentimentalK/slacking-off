@@ -522,6 +522,7 @@ async function main() {
       { timeout: 5_000 },
     );
     pass('clicking the agent on the field selects it into the card');
+    // The feed lists only events that arrive after the page opened.
     const moves = ['E', 'W', 'N', 'S'];
     let fed = false;
     for (let attempt = 0; attempt < 8 && !fed; attempt += 1) {
@@ -540,10 +541,14 @@ async function main() {
     // --- replay / profile / leaderboard / stats ---------------------------
     const tick = await currentTick();
     await page.goto(`${BASE}/replay?tick=${tick}`, { waitUntil: 'domcontentloaded' });
-    await page.waitForSelector('canvas[data-renderer="3d"]', { timeout: 10_000 });
     await page.waitForSelector('.rp-bar .rp-track', { timeout: 15_000 });
-    await page.waitForFunction(() => (window.__looView?.tick() ?? -1) >= 0, { timeout: 15_000 });
-    pass('/replay opens the replay mode of the shell on the 3D renderer');
+    await page.waitForFunction(
+      (want) => document.querySelector('.ui-modes .on')?.textContent?.trim() === want && window.__looView?.tick() > 0,
+      { timeout: 15_000 },
+      '回放',
+    );
+    pass('/replay opens the shell replay mode and the 3D view draws a replay frame');
+    await assertChinese(page, ['.rp-bar', '.ui-feed', '.ui-clock'], 'replay: timeline, feed and clock');
     await sleep(300);
     await screenshot(page, 'replay-1440.png');
 
