@@ -33,7 +33,7 @@ export function Card({ agent, tick, top3, onVision, visionState, vision = true, 
     if (top3.length === 0) return null;
     return (
       <div class="ui-card panel empty">
-        <h3>带薪榜 · TOP 3</h3>
+        <h3>带薪榜 · 前三名</h3>
         {top3.length === 0 ? (
           <div class="sub">暂无数据</div>
         ) : (

@@ -363,6 +363,9 @@
   max-width: calc(100vw - 32px);
   white-space: nowrap;
 }
+.shell .ui-bottom[data-mode="watch"] {
+  width: max-content;
+}
 .shell .bottom-replay {
   flex: 0 0 100%;
   min-width: 0;
@@ -529,12 +532,6 @@
   white-space: nowrap;
 }
 
-@media (max-width: 1100px) {
-  .shell .ui-bottom .ui-hint {
-    display: none;
-  }
-}
-
 @media (max-width: 700px) {
   .shell .ui-brand .t2,
   .shell .ui-clock .cdbar,
@@ -656,6 +653,9 @@
     padding: 6px 8px;
     white-space: nowrap;
     bottom: 8px;
+  }
+  .shell .ui-bottom[data-mode="watch"] {
+    width: auto;
   }
   .shell .ui-bottom .sep,
   .shell .ui-bottom .hint {

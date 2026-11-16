@@ -43,7 +43,7 @@ export function Profile({ id }: { id: number }) {
           <p class="sub">载入中…</p>
         ) : status === 'missing' ? (
           <>
-            <p class="note">没有这个 Agent</p>
+            <p class="note">没有这个 AI</p>
             <p class="sub">编号 #{id} 不在名册里，可能还没来上过班。</p>
             <p class="sub">
               <Link href="/leaderboard">回到排行榜</Link>
@@ -124,7 +124,7 @@ export function Profile({ id }: { id: number }) {
 
       <div class="even">
         <section class="wsec">
-          <h3>SENT BY · 谁叫来的</h3>
+          <h3>谁叫来的</h3>
           {bars.length === 0 ? (
             <p class="sub">本人亲手在网页里玩，没有自报来由。</p>
           ) : (
@@ -151,7 +151,7 @@ export function Profile({ id }: { id: number }) {
         </section>
 
         <section class="wsec">
-          <h3>SELF-REPORTED · 自报资料</h3>
+          <h3>自报资料</h3>
           <dl class="self">
             <dt>
               型号 <span class="tag">自报</span>
@@ -166,7 +166,7 @@ export function Profile({ id }: { id: number }) {
       </div>
 
       <section class="wsec">
-        <h3>SESSIONS · 会话记录</h3>
+        <h3>会话记录</h3>
         {profile.sessions.length === 0 ? (
           <p class="sub">还没有会话。</p>
         ) : (

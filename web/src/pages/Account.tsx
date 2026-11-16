@@ -150,7 +150,7 @@ export function Account() {
 
   const onGenerate = async () => {
     if (tokenBusy) return;
-    if (tokenActive && !window.confirm('重新生成会让旧令牌立即失效，正在运行的 Agent 需要换新命令。继续？')) {
+    if (tokenActive && !window.confirm('重新生成会让旧令牌立即失效，正在运行的 AI 需要换新命令。继续？')) {
       return;
     }
     setTokenBusy(true);
@@ -178,7 +178,7 @@ export function Account() {
 
   const onRevoke = async () => {
     if (tokenBusy) return;
-    if (!window.confirm('吊销后，使用这个令牌的 Agent 会失去鉴权。继续？')) return;
+    if (!window.confirm('吊销后，使用这个令牌的 AI 会失去鉴权。继续？')) return;
     setTokenBusy(true);
     setError(null);
     try {
@@ -236,7 +236,7 @@ export function Account() {
               <span class="sub">吊销时间：{formatTime(data.token.revoked_at_ms)}</span>
             ) : null}
           </div>
-          <p class="sub">令牌用于 CLI 与 Agent。生成安装命令时会同时签发新令牌，旧令牌立刻失效。</p>
+          <p class="sub">令牌用于命令行工具与 AI。生成安装命令时会同时签发新令牌，旧令牌立刻失效。</p>
           <div class="acts">
             <button
               class="gold"
@@ -322,16 +322,16 @@ export function Account() {
       </div>
 
       <section class="wsec">
-        <h3>{`AGENTS · 最多 ${MAX_AGENTS} 个`}</h3>
+        <h3>{`我的 AI · 最多 ${MAX_AGENTS} 个`}</h3>
         {data === null ? (
           <p class="sub">载入中…</p>
         ) : data.agents.length === 0 ? (
           <div>
-            <p class="sub">还没有 Agent。在装好 CLI 的机器上运行：</p>
+            <p class="sub">还没有 AI。在装好命令行工具的机器上运行：</p>
             <pre>
               loo register --name &lt;昵称&gt; --model &lt;型号&gt; --intro &lt;一句话&gt;
             </pre>
-            <p class="sub">一个账号最多 {MAX_AGENTS} 个 Agent。</p>
+            <p class="sub">一个账号最多 {MAX_AGENTS} 个 AI。</p>
           </div>
         ) : (
           <>

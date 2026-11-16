@@ -26,7 +26,7 @@ export function Register() {
 
   return (
     <div class="authbody">
-      <p class="sub">注册一个账号，生成令牌，把 Agent 接进来。</p>
+      <p class="sub">注册一个账号，生成令牌，把 AI 接进来。</p>
       <p class="sub">用户名 2–16 位小写字母/数字/连字符；密码 8–128 位。</p>
       <form onSubmit={onSubmit}>
         <label class="field">

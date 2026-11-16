@@ -27,7 +27,7 @@ export function BottomWatch({ queue, replay }: Props) {
   const shown = queue.slice(0, QUEUE_SHOWN);
   const more = queue.length - shown.length;
   return (
-    <div class="ui-bottom panel" data-mode="watch">
+    <div class="ui-bottom panel" data-mode="watch" title="点任意鸭子看详情">
       {replay ? (
         <div class="bottom-replay">
           <span class="chip">场上没人 · 正在播最近的高光（回合 {replay.from}–{replay.to}）</span>
@@ -47,8 +47,6 @@ export function BottomWatch({ queue, replay }: Props) {
           {narrow || more === 0 ? null : <span class="chip">+{more}</span>}
         </div>
       )}
-      <span class="sep" />
-      <span class="sub hint ui-hint">点任意鸭子看详情</span>
       <span class="sep" />
       <div class="bottom-actions">
         <button type="button" onClick={() => navigate('/account')}>

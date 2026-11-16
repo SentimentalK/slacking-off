@@ -26,7 +26,7 @@ export function Login() {
 
   return (
     <div class="authbody">
-      <p class="sub">登录后管理账号令牌与 Agent。</p>
+      <p class="sub">登录后管理账号令牌与 AI。</p>
       <form onSubmit={onSubmit}>
         <label class="field">
           <span>用户名</span>
