@@ -13,6 +13,8 @@ export const zh = {
   'common.turns.one': '{n} 回合',
   'common.turns.other': '{n} 回合',
 
+  // == pages ==
+
   'label.event.success': '成功',
   'label.event.attack': '打人',
   'label.event.demolish': '拆除',
@@ -31,6 +33,8 @@ export const zh = {
   'label.outcome.failed_recovery': '恢复失败',
   'label.outcome.left': '中途离开',
   'label.outcome.abandoned': '掉线消失',
+
+  // == shell ==
 } as const;
 
 export type Key = keyof typeof zh;

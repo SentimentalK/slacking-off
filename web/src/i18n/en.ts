@@ -15,6 +15,8 @@ export const en: Record<Key, string> = {
   'common.turns.one': '{n} turn',
   'common.turns.other': '{n} turns',
 
+  // == pages ==
+
   'label.event.success': 'Made it',
   'label.event.attack': 'Hit',
   'label.event.demolish': 'Demolish',
@@ -33,4 +35,6 @@ export const en: Record<Key, string> = {
   'label.outcome.failed_recovery': "Couldn't recover in time",
   'label.outcome.left': 'Left early',
   'label.outcome.abandoned': 'Dropped out',
+
+  // == shell ==
 };
