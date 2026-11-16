@@ -353,7 +353,7 @@ export const zh = {
   'play.notice.queuedNext': '排队中，前面还有 0 人',
   'play.hint.waitingNext': '排队中，前面 0 人',
   'top.playingWord': '上场中',
-  'top.viewWord': '视野',
+  'top.playingGrid': '视野 9×9',
 } as const;
 
 export type Key = keyof typeof zh;

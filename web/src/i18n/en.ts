@@ -355,5 +355,5 @@ export const en: Record<Key, string> = {
   'play.notice.queuedNext': "You're up next",
   'play.hint.waitingNext': 'Up next',
   'top.playingWord': 'Playing',
-  'top.viewWord': 'view',
+  'top.playingGrid': '9×9 view',
 };

@@ -130,8 +130,7 @@ export function TopBar({
         {playing ? (
           <div class="panel cnt" title={t('top.playing')}>
             <span class="lbl">{t('top.playingWord')} · </span>
-            <span class="lbl">{t('top.viewWord')} </span>
-            9×9
+            {t('top.playingGrid')}
           </div>
         ) : (
           <div
