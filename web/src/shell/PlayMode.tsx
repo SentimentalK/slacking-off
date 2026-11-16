@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'preact/hooks';
+import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import type { ComponentChildren, RefObject } from 'preact';
 import { getJSON } from '../api';
 import { navigate } from '../router';
@@ -411,6 +411,15 @@ export function PlayMode({ terrain, top3, view, override, clickRef, cameraRef, b
     v.setView({ focus: state.agent.pos, zoom: FOLLOW_ZOOM });
     setFollow(true);
   }, [inScene]);
+
+  useLayoutEffect(() => {
+    const cell = menuCellRef.current;
+    const el = menuRef.current;
+    const v = view();
+    if (!v || !el || !cell) return;
+    const at = v.screenOfCell(cell.x, cell.y);
+    if (at) placeMenu(el, at);
+  });
 
   useEffect(() => {
     let frame = 0;
