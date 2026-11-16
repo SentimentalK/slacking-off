@@ -2,8 +2,6 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { playProjection, visionGrid } from '../src/play/frame.ts';
 
-const MEMORY_VALUE = 110;
-const DARK_VALUE = 30;
 const W = 12;
 const H = 10;
 const WIN = { origin: { x: 0, y: 0 }, width: 9, height: 9 };
@@ -150,23 +148,25 @@ test('remembered character letters do not create agents', () => {
   assert.deepEqual(p.counts, { inside: 0, queued: 0, capacity: 0, queue_capacity: 0 });
 });
 
-test('vision grid gives 255 in window, 110 for remembered outside, 30 otherwise', () => {
-  const seenOutside = new Set(['10,0', '11,0', '9,9']);
+function sample(g, x, y) {
+  return g.values[(y * g.scale + 2) * g.width * g.scale + x * g.scale + 2];
+}
+
+test('vision grid is 255 in the window and fades from the window edge to the memory or dark base', () => {
+  const seen = new Set(['10,0', '12,0']);
   const s = state({
     agents: [playAgent(1, 4, 4)],
-    map: memory(() => '.', (x, y) => (seenOutside.has(`${x},${y}`) ? 3 : 0)),
+    map: memory(() => '.', (x, y) => (seen.has(`${x},${y}`) ? 3 : 0)),
   });
   const g = visionGrid(s, W, H);
-  assert.equal(g.width, W);
-  assert.equal(g.height, H);
-  assert.equal(g.values.length, W * H);
-  const counts = new Map();
-  for (const v of g.values) counts.set(v, (counts.get(v) ?? 0) + 1);
-  assert.equal(counts.get(255), 81);
-  assert.equal(counts.get(110), 3);
-  assert.equal(counts.get(30), 36);
-  assert.equal(g.values[0 * W + 0], 255);
-  assert.equal(g.values[0 * W + 10], 110);
+  assert.equal(g.scale, 4);
+  assert.equal(g.values.length, W * 4 * H * 4);
+  assert.equal(sample(g, 0, 0), 255);
+  assert.equal(sample(g, 8, 8), 255);
+  const edge = sample(g, 9, 0);
+  assert.ok(edge > 77 && edge < 255, `0.6 cells outside an unseen cell should be between 77 and 255, got ${edge}`);
+  assert.equal(sample(g, 10, 0), 128, 'a remembered cell two cells out shows its base');
+  assert.equal(sample(g, 11, 0), 77, 'an unseen cell two cells out shows its base');
 });
 
 test('memory indexes seen_at relative to the grid origin', () => {
@@ -176,16 +176,14 @@ test('memory indexes seen_at relative to the grid origin', () => {
   };
   const s = { ...state({ agents: [playAgent(1, 0, 0)], map }), window: { origin: { x: 0, y: 0 }, width: 1, height: 1 } };
   const g = visionGrid(s, W, H);
-  assert.equal(g.values[1 * W + 2], MEMORY_VALUE);
-  assert.equal(g.values[1 * W + 3], DARK_VALUE);
-  assert.equal(g.values[2 * W + 2], DARK_VALUE);
+  assert.equal(sample(g, 2, 1), 128);
+  assert.equal(sample(g, 3, 1), 77);
+  assert.equal(sample(g, 2, 2), 77);
 });
 
-test('vision grid without map is 30 outside the window', () => {
+test('vision grid without map is dark outside the window', () => {
   const g = visionGrid(state({ agents: [playAgent(1, 4, 4)], map: null }), W, H);
-  const counts = new Map();
-  for (const v of g.values) counts.set(v, (counts.get(v) ?? 0) + 1);
-  assert.equal(counts.get(255), 81);
-  assert.equal(counts.get(30), 39);
-  assert.equal(counts.get(110), undefined);
+  assert.equal(sample(g, 4, 4), 255);
+  assert.equal(sample(g, 10, 0), 77);
+  assert.equal(sample(g, 11, 5), 77);
 });

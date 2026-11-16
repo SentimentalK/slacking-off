@@ -37,6 +37,7 @@ export interface WorldView {
   resize(): void;
   setQuality(q: Quality): void;
   setView(view: { focus?: Pos; zoom?: number }): void;
+  frameCells(center: Pos, cells: number): void;
   capture(): { tick: number; png: string; calls: number; triangles: number };
   groundCell(clientX: number, clientY: number): Pos | null;
   screenOf(agentId: number): { x: number; y: number } | null;
@@ -90,11 +91,16 @@ export function createWorldView(canvas: HTMLCanvasElement, opts: WorldViewOption
   let controls: CameraControls | null = null;
   let controlsDims = '';
   let pendingView: { focus?: Pos; zoom?: number } = {};
+  let pendingFrame: { center: Pos; cells: number } | null = null;
 
   const applyView = (): void => {
     if (!controls) return;
     if (pendingView.focus) controls.setFocus(pendingView.focus.x + 0.5, pendingView.focus.y + 0.5);
     if (pendingView.zoom !== undefined) controls.setZoom(pendingView.zoom);
+    if (pendingFrame) {
+      controls.frameCells(pendingFrame.center.x, pendingFrame.center.y, pendingFrame.cells);
+      pendingFrame = null;
+    }
   };
 
   const applyRenderer = (q: Quality): void => {
@@ -238,6 +244,13 @@ export function createWorldView(canvas: HTMLCanvasElement, opts: WorldViewOption
     setView(view) {
       pendingView = view;
       applyView();
+    },
+    frameCells(center, cells) {
+      if (controls) {
+        controls.frameCells(center.x, center.y, cells);
+        return;
+      }
+      pendingFrame = { center, cells };
     },
     lastTick() {
       return last ? last.cur.tick : -1;

@@ -62,6 +62,34 @@ export function fitHeightDistance(W: number, H: number, aspect: number, frac: nu
   return hi;
 }
 
+export function frameDistance(cx: number, cz: number, cells: number, aspect: number, axis: 'x' | 'y', span: number): number {
+  const cam = new THREE.PerspectiveCamera(FOV, aspect, NEAR, FAR);
+  const center = new THREE.Vector3(cx, 0, cz);
+  const h = cells / 2;
+  const corners = [
+    new THREE.Vector3(cx - h, 0, cz - h),
+    new THREE.Vector3(cx + h, 0, cz - h),
+    new THREE.Vector3(cx - h, 0, cz + h),
+    new THREE.Vector3(cx + h, 0, cz + h),
+  ];
+  const width = (d: number): number => {
+    cam.position.copy(center).addScaledVector(VIEW_DIR, d);
+    cam.lookAt(center);
+    cam.updateMatrixWorld();
+    const v = corners.map((c) => c.clone().project(cam)[axis]);
+    return Math.max(...v) - Math.min(...v);
+  };
+  let lo = 0.5;
+  let hi = FAR;
+  if (width(hi) > span) return hi;
+  for (let i = 0; i < 60; i++) {
+    const mid = (lo + hi) / 2;
+    if (width(mid) > span) lo = mid;
+    else hi = mid;
+  }
+  return hi;
+}
+
 export class CameraControls {
   readonly camera: THREE.PerspectiveCamera;
   private readonly center: THREE.Vector3;
@@ -82,6 +110,7 @@ export class CameraControls {
   private fit: number;
   private home: number;
   private dist: number;
+  private minDist: number;
   private anchor: THREE.Vector3 | null = null;
   private downX = 0;
   private downY = 0;
@@ -103,6 +132,7 @@ export class CameraControls {
     this.fit = fitDistance(W, H, this.aspect());
     this.home = this.homeDistance(this.aspect());
     this.dist = this.home;
+    this.minDist = 0.3 * this.fit;
     this.apply();
     if (!still) {
       canvas.style.touchAction = 'none';
@@ -134,6 +164,18 @@ export class CameraControls {
   reset(): void {
     this.focus.copy(this.center);
     this.dist = this.home;
+    this.minDist = 0.3 * this.fit;
+    this.apply();
+  }
+
+  frameCells(cx: number, cz: number, cells: number): void {
+    const aspect = this.aspect();
+    const d =
+      aspect >= 1
+        ? frameDistance(cx, cz, cells, aspect, 'y', 2 * 0.66)
+        : frameDistance(cx, cz, cells, aspect, 'x', 2 * 0.9);
+    this.dist = Math.min(this.fit, d);
+    this.minDist = this.dist;
     this.apply();
   }
 
@@ -166,8 +208,12 @@ export class CameraControls {
     return Math.min(fitHeightDistance(this.W, this.H, aspect, 0.8), this.fit);
   }
 
+  private zoomFloor(): number {
+    return Math.min(0.3 * this.fit, this.minDist);
+  }
+
   private zoomBy(f: number): void {
-    this.dist = Math.min(this.fit, Math.max(0.3 * this.fit, this.dist * f));
+    this.dist = Math.min(this.fit, Math.max(this.zoomFloor(), this.dist * f));
     this.apply();
   }
 
@@ -205,7 +251,7 @@ export class CameraControls {
     if (this.pinching) {
       if (this.pointers.size !== 2) return;
       const d = this.pinchDistance();
-      this.dist = Math.min(this.fit, Math.max(0.3 * this.fit, this.dist * (this.pinchPrev / d)));
+      this.dist = Math.min(this.fit, Math.max(this.zoomFloor(), this.dist * (this.pinchPrev / d)));
       this.pinchPrev = d;
       this.apply();
       this.onUserCamera();

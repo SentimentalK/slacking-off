@@ -781,6 +781,44 @@
 .shell .play-menu > .sub {
   margin: 0;
 }
+.shell .play-menu::before {
+  content: '';
+  position: absolute;
+  width: 0;
+  height: 0;
+  border: 6px solid transparent;
+  pointer-events: none;
+}
+.shell .play-menu.pm-menu--right::before {
+  right: 100%;
+  top: var(--pm-arrow, 50%);
+  margin-top: -6px;
+  border-right-color: var(--ink);
+}
+.shell .play-menu.pm-menu--left::before {
+  left: 100%;
+  top: var(--pm-arrow, 50%);
+  margin-top: -6px;
+  border-left-color: var(--ink);
+}
+.shell .play-menu.pm-menu--below::before {
+  bottom: 100%;
+  left: var(--pm-arrow, 50%);
+  margin-left: -6px;
+  border-bottom-color: var(--ink);
+}
+.shell .play-menu.pm-menu--above::before {
+  top: 100%;
+  left: var(--pm-arrow, 50%);
+  margin-left: -6px;
+  border-top-color: var(--ink);
+}
+.shell .pm-detail > summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--dim);
+  margin-top: 6px;
+}
 .shell .play-recenter {
   position: fixed;
   right: 16px;

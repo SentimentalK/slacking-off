@@ -2,8 +2,10 @@ import type { PlayState, Pos, Projection, ProjectionAgent, ProjectionObject, Ter
 import type { VisionGrid } from '../world3d/types';
 
 const VISIBLE = 255;
-const MEMORY = 110;
-const DARK = 30;
+const MEMORY = 128;
+const DARK = 77;
+const SCALE = 4;
+const FADE = 1.5;
 const WILDERNESS = '~';
 const KNOWN_MEMORY = /^[.:@#+'*x1-9a-z]$/;
 
@@ -76,15 +78,34 @@ export function playProjection(
   };
 }
 
+function smoothstep(edge0: number, edge1: number, x: number): number {
+  const t = Math.min(1, Math.max(0, (x - edge0) / (edge1 - edge0)));
+  return t * t * (3 - 2 * t);
+}
+
 export function visionGrid(state: PlayState, width: number, height: number): VisionGrid {
-  const values = new Uint8Array(width * height);
-  for (let y = 0; y < height; y++) {
-    for (let x = 0; x < width; x++) {
-      const i = y * width + x;
-      if (inWindow(state, x, y)) values[i] = VISIBLE;
-      else if (memoryAt(state, x, y).seenAt > 0) values[i] = MEMORY;
-      else values[i] = DARK;
+  const w = width * SCALE;
+  const h = height * SCALE;
+  const values = new Uint8Array(w * h);
+  const win = state.window;
+  const x0 = win.origin.x;
+  const y0 = win.origin.y;
+  const x1 = x0 + win.width;
+  const y1 = y0 + win.height;
+  for (let py = 0; py < h; py++) {
+    const y = (py + 0.5) / SCALE;
+    const cy = Math.floor(y);
+    for (let px = 0; px < w; px++) {
+      const x = (px + 0.5) / SCALE;
+      const cx = Math.floor(x);
+      const d = Math.hypot(Math.max(0, x0 - x, x - x1), Math.max(0, y0 - y, y - y1));
+      if (d === 0) {
+        values[py * w + px] = VISIBLE;
+        continue;
+      }
+      const base = memoryAt(state, cx, cy).seenAt > 0 ? MEMORY : DARK;
+      values[py * w + px] = Math.round(VISIBLE + (base - VISIBLE) * smoothstep(0, FADE, d));
     }
   }
-  return { width, height, values };
+  return { width, height, scale: SCALE, values };
 }

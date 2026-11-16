@@ -40,7 +40,7 @@ import { usePlay } from './usePlay';
 import type { WorldOverride } from './useWorld';
 
 const FLASH_MS = 5000;
-const FOLLOW_ZOOM = 0.45;
+const FRAME_CELLS = 9;
 const MENU_GAP = 14;
 const EDGE = 8;
 const CREATE_COLORS = 12;
@@ -79,6 +79,17 @@ interface PathPlan {
   tick: number;
 }
 
+interface Rect {
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+}
+
+type Side = 'right' | 'left' | 'below' | 'above';
+const SIDES: Side[] = ['right', 'left', 'below', 'above'];
+const ARROW_INSET = 12;
+
 const dist = (a: Pos, b: Pos): number => Math.abs(a.x - b.x) + Math.abs(a.y - b.y);
 
 const clamp01 = (value: number): number => Math.min(1, Math.max(0, value));
@@ -98,7 +109,7 @@ function pathCells(start: Pos, path: string): Pos[] {
 
 function untilText(until: number, tick: number): string {
   if (until <= tick) return '就绪';
-  return `还有 ${until - tick} tick`;
+  return `还有 ${until - tick} 回合`;
 }
 
 function buildMenu(state: PlayState, terrain: Terrain | null, menu: Menu, offer: UseOffer | null): MenuItem[] {
@@ -147,16 +158,62 @@ function selfCard(state: PlayState, agent: NonNullable<PlayState['agent']>): Pro
   };
 }
 
-function placeMenu(el: HTMLElement, at: { x: number; y: number }): void {
+function boundsOf(points: Array<{ x: number; y: number }>): Rect {
+  return {
+    left: Math.min(...points.map((p) => p.x)),
+    top: Math.min(...points.map((p) => p.y)),
+    right: Math.max(...points.map((p) => p.x)),
+    bottom: Math.max(...points.map((p) => p.y)),
+  };
+}
+
+function menuRect(view: WorldView, cell: Pos, toilets: Pos[]): Rect | null {
+  const shack = toilets.find((t) => Math.abs(t.x - cell.x) <= 1 && Math.abs(t.y - cell.y) <= 1);
+  if (shack) {
+    const corners = [-1, 1].flatMap((dy) => [-1, 1].map((dx) => view.screenOfCell(shack.x + dx, shack.y + dy)));
+    if (corners.some((p) => p === null)) return null;
+    const box = boundsOf(corners as Array<{ x: number; y: number }>);
+    const padX = (box.right - box.left) / 4;
+    const padY = (box.bottom - box.top) / 4;
+    return { left: box.left - padX, top: box.top - padY, right: box.right + padX, bottom: box.bottom + padY };
+  }
+  const corners = [
+    [0, 0],
+    [1, 0],
+    [0, 1],
+    [1, 1],
+  ].map(([dx, dy]) => view.screenOfCell(cell.x + dx - 0.5, cell.y + dy - 0.5));
+  if (corners.some((p) => p === null)) return null;
+  return boundsOf(corners as Array<{ x: number; y: number }>);
+}
+
+function placeMenu(el: HTMLElement, rect: Rect, target: { x: number; y: number }): void {
   const width = el.offsetWidth;
   const height = el.offsetHeight;
-  const maxLeft = Math.max(EDGE, window.innerWidth - width - EDGE);
-  const left = Math.min(maxLeft, Math.max(EDGE, at.x - width / 2));
-  let top = at.y + MENU_GAP;
-  if (top + height > window.innerHeight - EDGE) top = at.y - height - MENU_GAP;
-  top = Math.min(Math.max(EDGE, top), Math.max(EDGE, window.innerHeight - height - EDGE));
+  const cx = (rect.left + rect.right) / 2;
+  const cy = (rect.top + rect.bottom) / 2;
+  const spots: Array<{ side: Side; left: number; top: number }> = [
+    { side: 'right', left: rect.right + MENU_GAP, top: cy - height / 2 },
+    { side: 'left', left: rect.left - MENU_GAP - width, top: cy - height / 2 },
+    { side: 'below', left: cx - width / 2, top: rect.bottom + MENU_GAP },
+    { side: 'above', left: cx - width / 2, top: rect.top - MENU_GAP - height },
+  ];
+  const inView = (spot: { left: number; top: number }): boolean =>
+    spot.left >= EDGE &&
+    spot.top >= EDGE &&
+    spot.left + width <= window.innerWidth - EDGE &&
+    spot.top + height <= window.innerHeight - EDGE;
+  const spot = spots.find(inView) ?? spots[0];
+  const left = Math.min(Math.max(EDGE, spot.left), Math.max(EDGE, window.innerWidth - width - EDGE));
+  const top = Math.min(Math.max(EDGE, spot.top), Math.max(EDGE, window.innerHeight - height - EDGE));
   el.style.left = `${left}px`;
   el.style.top = `${top}px`;
+  el.setAttribute('data-menu-side', spot.side);
+  for (const side of SIDES) el.classList.toggle(`pm-menu--${side}`, side === spot.side);
+  const vertical = spot.side === 'right' || spot.side === 'left';
+  const span = vertical ? height : width;
+  const along = vertical ? target.y - top : target.x - left;
+  el.style.setProperty('--pm-arrow', `${Math.min(Math.max(ARROW_INSET, along), span - ARROW_INSET)}px`);
 }
 
 export function PlayMode({ terrain, top3, view, override, clickRef, cameraRef, blocked }: Props) {
@@ -405,20 +462,34 @@ export function PlayMode({ terrain, top3, view, override, clickRef, cameraRef, b
     if (menu && state && mePos && !menu.own && dist(menu.cell, mePos) !== 1) closeMenu();
   }, [state]);
 
-  useEffect(() => {
+  const frameOnSelf = () => {
     const v = view();
-    if (!inScene || !v || !state?.agent?.pos) return;
-    v.setView({ focus: state.agent.pos, zoom: FOLLOW_ZOOM });
+    const pos = state?.agent?.pos;
+    if (!v || !pos) return;
+    v.setView({ focus: pos });
+    v.frameCells(pos, FRAME_CELLS);
+  };
+
+  useEffect(() => {
+    if (!inScene) return;
+    frameOnSelf();
     setFollow(true);
   }, [inScene]);
 
-  useLayoutEffect(() => {
+  const toiletsOf = (): Pos[] =>
+    override.current?.cur.objects.filter((o) => o.kind === 'toilet').map((o) => o.pos) ?? [];
+
+  const placeOpenMenu = (v: WorldView | null): void => {
     const cell = menuCellRef.current;
     const el = menuRef.current;
-    const v = view();
     if (!v || !el || !cell) return;
-    const at = v.screenOfCell(cell.x, cell.y);
-    if (at) placeMenu(el, at);
+    const target = v.screenOfCell(cell.x, cell.y);
+    const rect = menuRect(v, cell, toiletsOf());
+    if (target && rect) placeMenu(el, rect, target);
+  };
+
+  useLayoutEffect(() => {
+    placeOpenMenu(view());
   });
 
   useEffect(() => {
@@ -440,12 +511,7 @@ export function PlayMode({ terrain, top3, view, override, clickRef, cameraRef, b
           });
         }
       }
-      const cell = menuCellRef.current;
-      const el = menuRef.current;
-      if (v && el && cell) {
-        const at = v.screenOfCell(cell.x, cell.y);
-        if (at) placeMenu(el, at);
-      }
+      placeOpenMenu(v);
       frame = window.requestAnimationFrame(loop);
     };
     frame = window.requestAnimationFrame(loop);
@@ -527,49 +593,52 @@ export function PlayMode({ terrain, top3, view, override, clickRef, cameraRef, b
 
   const stats =
     state && agent ? (
-      <div class="pm-stats" data-testid="play-stats">
-        <div class="kv">
-          <span class="sub">位置</span>
-          <span class="mono">{mePos ? `${mePos.x},${mePos.y}` : '—'}</span>
+      <details class="pm-detail">
+        <summary>详细</summary>
+        <div class="pm-stats" data-testid="play-stats">
+          <div class="kv">
+            <span class="sub">位置</span>
+            <span class="mono">{mePos ? `${mePos.x},${mePos.y}` : '—'}</span>
+          </div>
+          <div class="kv">
+            <span class="sub">需求</span>
+            <span>{agent.need ? NEED_LABEL[agent.need] : '无'}</span>
+          </div>
+          <div class="kv">
+            <span class="sub">截止</span>
+            <span class="mono">
+              {agent.deadline_tick > 0
+                ? `${agent.deadline_tick}（还有 ${Math.max(0, agent.deadline_tick - state.tick)} 回合）`
+                : '—'}
+            </span>
+          </div>
+          <div class="kv">
+            <span class="sub">当前动作</span>
+            <span class="mono">
+              {agent.action ? `${agent.action.description} · 剩 ${agent.action.remaining}` : '无'}
+            </span>
+          </div>
+          <div class="kv">
+            <span class="sub">打 / 防冷却</span>
+            <span class="mono">
+              {`${untilText(agent.attack_cooldown_until, state.tick)} / ${untilText(agent.defend_cooldown_until, state.tick)}`}
+            </span>
+          </div>
+          <div class="kv">
+            <span class="sub">眩晕 / 免疫</span>
+            <span class="mono">
+              {`${untilText(agent.stun_until, state.tick)} / ${untilText(agent.immunity_until, state.tick)}`}
+            </span>
+          </div>
         </div>
-        <div class="kv">
-          <span class="sub">需求</span>
-          <span>{agent.need ? NEED_LABEL[agent.need] : '无'}</span>
-        </div>
-        <div class="kv">
-          <span class="sub">deadline</span>
-          <span class="mono">
-            {agent.deadline_tick > 0
-              ? `${agent.deadline_tick}（还有 ${Math.max(0, agent.deadline_tick - state.tick)} tick）`
-              : '—'}
-          </span>
-        </div>
-        <div class="kv">
-          <span class="sub">当前动作</span>
-          <span class="mono">
-            {agent.action ? `${agent.action.description} · 剩 ${agent.action.remaining}` : '无'}
-          </span>
-        </div>
-        <div class="kv">
-          <span class="sub">打 / 防冷却</span>
-          <span class="mono">
-            {`${untilText(agent.attack_cooldown_until, state.tick)} / ${untilText(agent.defend_cooldown_until, state.tick)}`}
-          </span>
-        </div>
-        <div class="kv">
-          <span class="sub">眩晕 / 免疫</span>
-          <span class="mono">
-            {`${untilText(agent.stun_until, state.tick)} / ${untilText(agent.immunity_until, state.tick)}`}
-          </span>
-        </div>
-      </div>
+      </details>
     ) : null;
 
   return (
     <>
       <div class="ui-clock play-clock">
         <div class="big" data-testid="play-tick">
-          TICK {state?.tick ?? '–'}
+          回合 {state?.tick ?? '–'}
         </div>
         <div class="countdown">
           下次结算 <span data-testid="play-countdown">{play.countdown}</span>
@@ -631,7 +700,15 @@ export function PlayMode({ terrain, top3, view, override, clickRef, cameraRef, b
       ) : null}
 
       {inScene && !following ? (
-        <button type="button" class="play-recenter" data-testid="play-recenter" onClick={() => setFollow(true)}>
+        <button
+          type="button"
+          class="play-recenter"
+          data-testid="play-recenter"
+          onClick={() => {
+            setFollow(true);
+            frameOnSelf();
+          }}
+        >
           回到自己
         </button>
       ) : null}
