@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import type { ProjectionAgent, ProjectionObject, Terrain } from '../types';
 import { cellAt, cellKey } from './grid';
 import { duskK } from './lighting';
-import { clearLampSources, setLampSources, type LampSource } from './lamplight';
+import { clearLampSources, LAMPS_OFF, setLampSources, type LampSource } from './lamplight';
 import {
   ACCENT,
   barrier,
@@ -331,7 +331,7 @@ export function createObjectsLayer(ctx: SceneCtx): Layer {
           outer.rotation.y = faceRot;
           (outer.userData.inner as THREE.Group).rotation.x = tilt + shake;
           const glass = outer.userData.glass as THREE.Mesh | null;
-          if (glass) (glass.material as THREE.MeshStandardMaterial).emissiveIntensity = occupied ? 1.6 * k : 0;
+          if (glass) (glass.material as THREE.MeshStandardMaterial).emissiveIntensity = occupied && !LAMPS_OFF ? 1.6 * k : 0;
         } else if (o.kind === 'wall') {
           const pw = prevO ? lerp(progressOf(prevO), progressOf(o), e) : progressOf(o);
           const site = reg.get(`siteWall:${ck}@${tk}`, () => {

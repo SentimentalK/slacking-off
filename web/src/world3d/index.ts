@@ -10,7 +10,7 @@ import { createPathMarksLayer } from './pathmarks';
 import { createGround } from './ground';
 import { createLighting, duskK } from './lighting';
 import { applyLamps, applyVision, installVisionShader } from './vision';
-import { allLampSources } from './lamplight';
+import { allLampSources, LAMPS_OFF } from './lamplight';
 import type { FrameInput, Layer, Quality, SceneCtx } from './types';
 
 export type { FrameInput, Layer, Quality, SceneCtx, UiState, VisionGrid } from './types';
@@ -119,7 +119,7 @@ export function createWorldView(canvas: HTMLCanvasElement, opts: WorldViewOption
   };
 
   const syncLamps = (input: FrameInput): void => {
-    const toggled = applyLamps(vision, allLampSources(), duskK(input.ui, input.clock), input.terrain.width, input.terrain.height);
+    const toggled = applyLamps(vision, LAMPS_OFF ? null : allLampSources(), duskK(input.ui, input.clock), input.terrain.width, input.terrain.height);
     if (!toggled) return;
     scene.traverse((o) => {
       const m = (o as THREE.Mesh).material;

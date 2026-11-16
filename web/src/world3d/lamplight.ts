@@ -8,6 +8,8 @@ export interface LampSource {
   decay: number;
 }
 
+export const LAMPS_OFF = typeof location !== 'undefined' && new URLSearchParams(location.search).get('lamps') === '0';
+
 const SURFACE_Y = 0.25;
 
 const owners = new Map<string, LampSource[]>();

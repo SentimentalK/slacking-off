@@ -24,6 +24,7 @@ const PI = Math.PI;
 const LAMP_LIGHT_Y = 1.35;
 const LAMP_LIGHT_DIST = 7;
 const LAMP_LIGHT_DECAY = 0;
+const LAMP_SPACING = 6;
 const LAMP_LIGHT_INTENSITY = 3.0;
 const LAMP_COLOR = new THREE.Color(0xffa850);
 const LAMP_OWNER = 'lamp-posts';
@@ -94,10 +95,13 @@ export function createDecor(ctx: SceneCtx): Layer {
   });
 
   const lamps: Item[] = [];
+  const picked: Array<{ x: number; y: number }> = [];
   forEachCell(terrain, (x, y, ch) => {
-    if (ch !== '.' || (x + 2 * y) % 9 !== 0) return;
+    if (ch !== '.') return;
     const beside = [[1, 0], [-1, 0], [0, 1], [0, -1]].some(([dx, dy]) => cellAt(terrain, x + dx, y + dy) === ':');
     if (!beside) return;
+    if (picked.some((p) => Math.abs(p.x - x) + Math.abs(p.y - y) < LAMP_SPACING)) return;
+    picked.push({ x, y });
     const g = place(x + 0.5, 0, y + 0.5, 0, 1);
     lamps.push({ x, y, mats: LAMP_LOCAL.map((l) => g.clone().multiply(l)) });
   });
