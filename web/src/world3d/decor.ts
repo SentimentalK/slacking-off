@@ -21,9 +21,10 @@ import { rand01 } from './rng';
 import type { Layer, SceneCtx } from './types';
 
 const PI = Math.PI;
-const LAMP_BULB_Y = 1.45;
+const LAMP_LIGHT_Y = 1.35;
 const LAMP_LIGHT_DIST = 7;
-const LAMP_LIGHT_INTENSITY = 2.4;
+const LAMP_LIGHT_DECAY = 0;
+const LAMP_LIGHT_INTENSITY = 3.0;
 const LAMP_COLOR = new THREE.Color(0xffa850);
 const LAMP_OWNER = 'lamp-posts';
 
@@ -146,10 +147,11 @@ function lampSource(l: Item): LampSource {
   return {
     x: l.x + 0.5 + 0.34,
     z: l.y + 0.5,
-    y: LAMP_BULB_Y,
+    y: LAMP_LIGHT_Y,
     color: [LAMP_COLOR.r, LAMP_COLOR.g, LAMP_COLOR.b],
     intensity: LAMP_LIGHT_INTENSITY,
     distance: LAMP_LIGHT_DIST,
+    decay: LAMP_LIGHT_DECAY,
   };
 }
 

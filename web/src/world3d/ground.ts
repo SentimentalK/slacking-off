@@ -11,6 +11,9 @@ const PI = Math.PI;
 const BLADES = 30;
 const BLADE_HEIGHT = 1.5;
 const GRASS_SALT = 200;
+const GRASS_SAT = 0.92;
+const GRASS_VALUE_MIN = 0.72;
+const GRASS_VALUE_SPAN = 0.45;
 const PATCH_AREA = (18 + 2 * MG) * (12 + 2 * MG);
 const PATCH_COUNT = 840;
 const PATCH_COLORS = ['rgba(58,84,34,0.275)', 'rgba(96,128,48,0.231)', 'rgba(72,104,38,0.275)', 'rgba(110,138,56,0.165)', 'rgba(52,70,30,0.248)'];
@@ -176,7 +179,9 @@ function grassLayer(ctx: SceneCtx, root: THREE.Group): { inst: Instancer; cells:
         new THREE.Vector3(sc, sc * (0.7 + r(6) * 0.8) * BLADE_HEIGHT, sc),
       );
       inst.set(i, [m]);
-      const color = new THREE.Color(GRASS_COLORS[Math.floor(r(7) * GRASS_COLORS.length)]).multiplyScalar(0.8 + r(8) * 0.5);
+      const color = new THREE.Color(GRASS_COLORS[Math.floor(r(7) * GRASS_COLORS.length)]);
+      const hsl = color.getHSL({ h: 0, s: 0, l: 0 });
+      color.setHSL(hsl.h, hsl.s * GRASS_SAT, hsl.l * (GRASS_VALUE_MIN + r(8) * GRASS_VALUE_SPAN));
       mesh.setColorAt(i, color);
     }
   });

@@ -33,7 +33,7 @@
   position: absolute;
   inset: 0;
   pointer-events: none;
-  background: radial-gradient(ellipse at center, rgba(0, 0, 0, 0) 45%, rgba(6, 10, 6, 0.75) 100%);
+  background: radial-gradient(ellipse at center, rgba(0, 0, 0, 0) 45%, rgba(6, 10, 6, 0.78) 100%);
 }
 .shell .panel {
   background: var(--ink);

@@ -36,7 +36,7 @@ const FRAGMENT_HEAD = [
   '',
 ].join('\n');
 const FRAGMENT_AFTER_LIGHTS = [
-  'if ( lampK > 0.0 ) { vec2 lampUV = vVisionXZ / lampSize; if ( lampUV.x >= 0.0 && lampUV.y >= 0.0 && lampUV.x <= 1.0 && lampUV.y <= 1.0 ) { float lampH = clamp( ( 2.0 - vVisionY ) / 1.2, 0.0, 1.0 ); reflectedLight.directDiffuse += BRDF_Lambert( diffuseColor.rgb ) * texture2D( lampMap, lampUV ).rgb * lampK * lampH; } }',
+  'if ( lampK > 0.0 ) { vec2 lampUV = vVisionXZ / lampSize; if ( lampUV.x >= 0.0 && lampUV.y >= 0.0 && lampUV.x <= 1.0 && lampUV.y <= 1.0 ) { float lampH = clamp( ( 2.5 - vVisionY ) / 1.1, 0.0, 1.0 ); reflectedLight.directDiffuse += BRDF_Lambert( diffuseColor.rgb ) * texture2D( lampMap, lampUV ).rgb * lampK * lampH; } }',
   '',
 ].join('\n');
 const FRAGMENT_BEFORE_TONEMAP = [
@@ -126,7 +126,7 @@ export function applyLamps(u: VisionUniforms, sources: LampSource[] | null, k: n
     u.lampK.value = 0;
     return toggled;
   }
-  const key = `${W}x${H}|` + sources.map((s) => [s.x, s.y, s.z, s.color.join(','), s.intensity, s.distance].join(',')).join(';');
+  const key = `${W}x${H}|` + sources.map((s) => [s.x, s.y, s.z, s.color.join(','), s.intensity, s.distance, s.decay].join(',')).join(';');
   if (key !== lampKey) {
     lampKey = key;
     const rgb = lampIrradiance(sources, W, H, LAMP_RES);

@@ -567,17 +567,22 @@ const GOLD = 0xffcf40;
 const GOLD_MAT: MatParams = { emissive: GOLD, emissiveIntensity: 0.35 };
 const FLAG_LIT = 0.35;
 const BADGE_SPACING = 0.225;
+const BADGE_SCALE = 1.75;
+const BADGE_DOTS = [0xffffff, 0x4cc964, 0x3f7fb8, 0x9b5de5, GOLD];
 
 export function levelBadge(level: number): THREE.Group {
   const plate = single(boxGeo(1.35, 0.45, 0.04), level === 5 ? GOLD : DEEP_WOOD, level === 5 ? GOLD_MAT : undefined);
+  const dot = BADGE_DOTS[level - 1] ?? GOLD;
+  const dotMat: MatParams = { emissive: dot, emissiveIntensity: 0.35 };
   const dots = new Batch();
   for (let i = 0; i < level; i++) {
-    dots.add(new THREE.SphereGeometry(0.0975, 10, 8), T((i - (level - 1) / 2) * BADGE_SPACING, 0, 0.03), GOLD);
+    dots.add(new THREE.SphereGeometry(0.0975, 10, 8), T((i - (level - 1) / 2) * BADGE_SPACING, 0, 0.03), dot, dotMat);
   }
   const g = new THREE.Group();
   g.add(plate);
-  for (const m of dots.meshes(() => S(GOLD, GOLD_MAT))) g.add(m);
+  for (const m of dots.meshes((p) => S(dot, p))) g.add(m);
   g.rotation.x = -0.5;
+  g.scale.setScalar(BADGE_SCALE);
   return g;
 }
 

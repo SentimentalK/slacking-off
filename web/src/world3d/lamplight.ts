@@ -5,10 +5,10 @@ export interface LampSource {
   color: [number, number, number];
   intensity: number;
   distance: number;
+  decay: number;
 }
 
 const SURFACE_Y = 0.25;
-const COS_FLOOR = 0.25;
 
 const owners = new Map<string, LampSource[]>();
 
@@ -29,7 +29,7 @@ export function lampIrradiance(sources: readonly LampSource[], W: number, H: num
   const TH = H * res;
   const out = new Float32Array(TW * TH * 3);
   for (const s of sources) {
-    const scale = s.intensity * Math.PI;
+    const scale = s.intensity;
     const dy = s.y - SURFACE_Y;
     for (let j = 0; j < TH; j++) {
       const pz = (j + 0.5) / res;
@@ -38,9 +38,10 @@ export function lampIrradiance(sources: readonly LampSource[], W: number, H: num
         const dx = px - s.x;
         const dz = pz - s.z;
         const d = Math.sqrt(dx * dx + dy * dy + dz * dz);
-        const t = 1 - d / s.distance;
-        if (t <= 0) continue;
-        const g = scale * t * t * Math.max(COS_FLOOR, dy / d);
+        const u = (d / s.distance) ** 4;
+        if (u >= 1) continue;
+        const window = (1 - u) * (1 - u);
+        const g = scale * window * Math.max(0, dy / d) / Math.max(d ** s.decay, 0.01);
         const o = (j * TW + i) * 3;
         out[o] += s.color[0] * g;
         out[o + 1] += s.color[1] * g;

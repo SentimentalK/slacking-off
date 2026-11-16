@@ -19,6 +19,7 @@ const ICON_NEAR = 33;
 const ICON_MAX = 3.6;
 const ICON_OUTLINE = '#16120e';
 const ICON_LIFT = 0.45;
+const ICON_MIN_PX = 24;
 const NAME_H = 0.38;
 const NAME_LIFT = 0.55;
 const tmpIconAt = new THREE.Vector3();
@@ -105,6 +106,11 @@ const yawToward = (from: Pos, to: Pos): number => Math.atan2(to.x - from.x, to.y
 const progressOf = (s: Snap): number => (s.useTotal > 0 ? s.useDone / s.useTotal : 0);
 const iconScale = (camera: THREE.Camera, x: number, z: number): number =>
   Math.min(ICON_MAX, Math.max(1, camera.position.distanceTo(tmpIconAt.set(x, 0, z)) / ICON_NEAR));
+const minWorldSize = (camera: THREE.PerspectiveCamera, x: number, z: number): number => {
+  const d = camera.position.distanceTo(tmpIconAt.set(x, 0, z));
+  const viewH = window.innerHeight || 900;
+  return (ICON_MIN_PX * 2 * d * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2)) / viewH;
+};
 
 function canvasTexture(w: number, h: number, draw: (g: CanvasRenderingContext2D) => void): THREE.CanvasTexture {
   const c = document.createElement('canvas');
@@ -119,9 +125,12 @@ function canvasTexture(w: number, h: number, draw: (g: CanvasRenderingContext2D)
 }
 
 function drawAlert(g: CanvasRenderingContext2D): void {
-  g.fillStyle = '#e5484d';
   g.beginPath();
   g.arc(32, 32, 28, 0, TAU);
+  g.strokeStyle = ICON_OUTLINE;
+  g.lineWidth = 4;
+  g.stroke();
+  g.fillStyle = '#e5484d';
   g.fill();
   g.fillStyle = ICON_OUTLINE;
   g.fillRect(24, 9, 16, 32);
@@ -285,6 +294,7 @@ function drawActor(a: Actor, s: Snap, link: Snap | null, input: FrameInput, ctx:
   if (interrupted) shakeX = 0.02 * Math.sin(clock * 30);
 
   const icon = iconScale(ctx.camera, cx, cz);
+  const minWorld = minWorldSize(ctx.camera, cx, cz);
   const lift = (icon - 1) * ICON_LIFT;
 
   const d = a.duck;
@@ -306,7 +316,7 @@ function drawActor(a: Actor, s: Snap, link: Snap | null, input: FrameInput, ctx:
     const gold = key === 'gold';
     setArc(ring, inner, outer, 32, -TAU * f);
     ring.position.set(cx, EYE_Y + (gold ? lift : 0), cz);
-    ring.scale.setScalar(gold ? icon : 1);
+    ring.scale.setScalar(gold ? Math.max(icon, minWorld / 0.66) : Math.max(1, minWorld / 0.44));
     ring.quaternion.copy(ctx.camera.quaternion);
     ring.visible = f > 0;
   }
@@ -314,7 +324,7 @@ function drawActor(a: Actor, s: Snap, link: Snap | null, input: FrameInput, ctx:
   if (interrupted) {
     const alert = a.get('alert', () => a.alertSprite());
     alert.position.set(cx, 2.0 + lift, cz);
-    alert.scale.set(0.6 * icon, 0.6 * icon, 1);
+    alert.scale.setScalar(Math.max(0.6 * icon, minWorld));
     alert.visible = Math.sin(clock * 10) > -0.3;
   }
 
@@ -322,7 +332,7 @@ function drawActor(a: Actor, s: Snap, link: Snap | null, input: FrameInput, ctx:
     for (let i = 0; i < 2; i++) {
       const sweat = a.get('sweat' + i, () => a.sweatSprite());
       sweat.position.set(cx + (i === 0 ? -0.3 : 0.3), 1.55 + 0.05 * Math.sin(clock * 5 + i) + lift, cz);
-      sweat.scale.set(0.35 * icon, 0.35 * icon, 1);
+      sweat.scale.setScalar(Math.max(0.35 * icon, minWorld));
       sweat.visible = true;
     }
     const pulse = a.get('pulse', () => flatRing(RED, 0.46, 0.6, 32, { transparent: true, depthWrite: false }));
@@ -363,7 +373,7 @@ function drawActor(a: Actor, s: Snap, link: Snap | null, input: FrameInput, ctx:
     const push = 0.25 + 0.5 * fan.w;
     arrow.position.set(cx + (ax / dist) * push, 1.1, cz + (az / dist) * push);
     arrow.quaternion.setFromUnitVectors(UP, new THREE.Vector3(ax / dist, 0, az / dist));
-    arrow.scale.setScalar(0.8 + 0.6 * fan.w);
+    arrow.scale.setScalar(Math.max(0.8 + 0.6 * fan.w, minWorld / 0.42));
     arrow.visible = fan.len > 0;
   }
 
@@ -402,6 +412,7 @@ function drawActor(a: Actor, s: Snap, link: Snap | null, input: FrameInput, ctx:
     });
     shield.position.set(cx + dx / 2, 1, cz + dz / 2);
     shield.rotation.set(0, Math.atan2(dx, dz), 0);
+    shield.scale.setScalar(Math.max(1, minWorld));
     shield.visible = true;
     const outline = a.get('outline', () => {
       const grp = new THREE.Group();
