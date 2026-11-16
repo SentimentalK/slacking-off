@@ -35,7 +35,6 @@ try {
     { timeout: 30000 },
   );
   await live.waitForFunction(() => window.__looView && window.__looView.tick() >= 5, { timeout: 60000 });
-  const size = await live.$eval('canvas[data-renderer="3d"]', (canvas) => ({ width: canvas.clientWidth, height: canvas.clientHeight }));
   const captured = await live.evaluate(() => window.__looView.capture());
   const tick = captured.tick;
   await live.close();
@@ -46,13 +45,10 @@ try {
     if (message.type() === 'error') console.error(`replay console: ${message.text()}`);
   });
   await replay.setViewport({ width: 1440, height: 900, deviceScaleFactor: 1 });
-  await replay.goto(
-    `${BASE}/scene.html?api=1&tick=${tick}&still=1&quality=high&w=${size.width}&h=${size.height}`,
-    { waitUntil: 'load' },
-  );
-  await replay.waitForFunction('window.__looReady === true', { timeout: 120000 });
+  await replay.goto(`${BASE}/replay?tick=${tick}&still=1&quality=high&ui=0`, { waitUntil: 'domcontentloaded' });
+  await replay.waitForFunction((target) => window.__looView && window.__looView.tick() === target, { timeout: 120000 }, tick);
   await sleep(1000);
-  const rendered = await replay.evaluate(() => window.__looCapture());
+  const rendered = await replay.evaluate(() => window.__looView.capture());
   await replay.close();
 
   const check = await browser.newPage();

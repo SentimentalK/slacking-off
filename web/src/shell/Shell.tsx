@@ -2,10 +2,12 @@ import { useEffect, useRef, useState } from 'preact/hooks';
 import { navigate } from '../router';
 import type { Route } from '../router';
 import type { ClickHit } from '../world3d';
+import type { Projection } from '../types';
 import { BottomWatch } from './BottomWatch';
 import { Card } from './Card';
 import { Feed } from './Feed';
 import { PlayMode } from './PlayMode';
+import { ReplayMode } from './ReplayMode';
 import { Settings } from './Settings';
 import { TopBar } from './TopBar';
 import { Window } from './Window';
@@ -18,19 +20,28 @@ import './ui.css';
 
 const TOAST_MS = 4000;
 
+function modeOfRoute(route: Route): Mode {
+  if (route.name === 'play') return 'play';
+  if (route.name === 'replay') return 'replay';
+  return 'watch';
+}
+
 export function Shell({ route }: { route: Route }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const override = useRef<WorldOverride | null>(null);
   const clickRef = useRef<((hit: ClickHit) => void) | null>(null);
   const cameraRef = useRef<(() => void) | null>(null);
-  const [mode, setMode] = useState<Mode>(route.name === 'play' ? 'play' : 'watch');
+  const [mode, setMode] = useState<Mode>(modeOfRoute(route));
   const world = useWorld(canvasRef, override, clickRef, cameraRef, mode === 'watch');
+  const replayQuery = useRef(route.name === 'replay' ? location.search : '');
+  const [replayFrame, setReplayFrame] = useState<Projection | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
 
   useEffect(() => {
     if (route.name === 'spectator') setMode('watch');
     if (route.name === 'play') setMode('play');
+    if (route.name === 'replay') setMode('replay');
     setSettingsOpen(false);
   }, [route]);
 
@@ -54,12 +65,22 @@ export function Shell({ route }: { route: Route }) {
     <div class="shell">
       <canvas class="ui-canvas" data-renderer="3d" ref={canvasRef} role="img" aria-label={world.boardLabel} />
       <div class="ui-vig" />
+      {mode === 'replay' ? (
+        <ReplayMode
+          override={override}
+          clickRef={clickRef}
+          blocked={blocked}
+          queryRef={replayQuery}
+          onFrame={setReplayFrame}
+          ui={ui}
+        />
+      ) : null}
       {ui ? (
         <>
           <TopBar
             status={world.status}
-            replaying={world.mode === 'replay'}
-            projection={world.projection}
+            replaying={mode === 'replay' || world.mode === 'replay'}
+            projection={mode === 'replay' ? replayFrame : world.projection}
             arrivedAt={world.arrivedAt}
             current={world.mode === 'replay' ? 'replay' : mode}
             onSettings={() => setSettingsOpen(true)}
@@ -76,7 +97,7 @@ export function Shell({ route }: { route: Route }) {
               cameraRef={cameraRef}
               blocked={blocked}
             />
-          ) : (
+          ) : mode === 'replay' ? null : (
             <>
               <Feed events={world.events} colors={world.colors} />
               <Card agent={agent} tick={tick} top3={world.top3} onVision={world.setVision} visionState={world.vision} />
@@ -93,7 +114,7 @@ export function Shell({ route }: { route: Route }) {
           key={`${w.key}:${w.id ?? ''}`}
           title={windowTitle(w)}
           windowKey={w.key}
-          onClose={() => navigate(modeBase(mode))}
+          onClose={() => navigate(mode === 'replay' ? `/replay${replayQuery.current}` : modeBase(mode))}
         >
           <WindowBody w={w} />
         </Window>

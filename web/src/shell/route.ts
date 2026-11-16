@@ -2,7 +2,7 @@ import type { Route } from '../router';
 
 export type WindowKey = 'leaderboard' | 'stats' | 'account' | 'agent' | 'login' | 'register';
 
-export type Mode = 'watch' | 'play';
+export type Mode = 'watch' | 'play' | 'replay';
 
 export function windowOf(route: Route): { key: WindowKey; id?: number } | null {
   switch (route.name) {
@@ -20,5 +20,7 @@ export function windowOf(route: Route): { key: WindowKey; id?: number } | null {
 }
 
 export function modeBase(mode: Mode): string {
-  return mode === 'play' ? '/play' : '/';
+  if (mode === 'play') return '/play';
+  if (mode === 'replay') return '/replay';
+  return '/';
 }
