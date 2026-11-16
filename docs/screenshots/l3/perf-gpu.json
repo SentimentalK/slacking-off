@@ -5,46 +5,82 @@
       "width": 1440,
       "height": 900,
       "quality": "high",
-      "frames": 516,
-      "median_fps": 26.9,
-      "p10_fps": 23,
+      "frames": 515,
+      "median_fps": 26,
+      "p10_fps": 23.9,
       "calls": 516,
-      "triangles": 2062474
+      "triangles": 2062474,
+      "dusk": false,
+      "loadavg_1m": 3.53,
+      "loadavg_1m_after": 3.9
     },
     {
       "width": 1440,
       "height": 900,
       "quality": "medium",
-      "frames": 287,
-      "median_fps": 14.5,
-      "p10_fps": 13,
+      "frames": 590,
+      "median_fps": 29.7,
+      "p10_fps": 27.7,
       "calls": 515,
-      "triangles": 1870954
+      "triangles": 1870954,
+      "dusk": false,
+      "loadavg_1m": 3.9,
+      "loadavg_1m_after": 4.53
     },
     {
       "width": 1440,
       "height": 900,
       "quality": "low",
-      "frames": 714,
-      "median_fps": 37.2,
-      "p10_fps": 25.6,
+      "frames": 1169,
+      "median_fps": 59.2,
+      "p10_fps": 54.1,
       "calls": 265,
-      "triangles": 888288
+      "triangles": 888288,
+      "dusk": false,
+      "loadavg_1m": 4.53,
+      "loadavg_1m_after": 3.79
     },
     {
       "width": 390,
       "height": 844,
       "quality": "low",
-      "frames": 1199,
+      "frames": 1200,
       "median_fps": 59.9,
-      "p10_fps": 54.9,
+      "p10_fps": 59.5,
       "calls": 114,
-      "triangles": 778408
+      "triangles": 778408,
+      "dusk": false,
+      "loadavg_1m": 3.79,
+      "loadavg_1m_after": 3.88
+    },
+    {
+      "width": 1440,
+      "height": 900,
+      "quality": "high",
+      "frames": 550,
+      "median_fps": 27.7,
+      "p10_fps": 26.2,
+      "calls": 516,
+      "triangles": 2062474,
+      "dusk": true,
+      "loadavg_1m": 3.88,
+      "loadavg_1m_after": 4.13
+    },
+    {
+      "width": 1440,
+      "height": 900,
+      "quality": "medium",
+      "frames": 603,
+      "median_fps": 30.3,
+      "p10_fps": 28.8,
+      "calls": 515,
+      "triangles": 1870954,
+      "dusk": true,
+      "loadavg_1m": 4.13,
+      "loadavg_1m_after": 4.22
     }
   ],
   "chrome": "Chrome/156.0.8078.79",
   "gpu": "ANGLE (Intel, Mesa Intel(R) UHD Graphics (CML GT2), OpenGL ES 3.2)",
-  "loadavg_1m": 2.6,
-  "loadavg_1m_after": 3.76,
-  "note": "loadavg_1m is /proc/loadavg before the run (no dev stress running; the shot servers were stopped); loadavg_1m_after is after it. Vite dev server serves scene.html on 18132."
+  "note": "Re-run on the merged build (b345bf6 + final shots), vite dev server on 18132 serving web/scene.html with .conductor/l/scenes/crowd.json (fixture), --gpu headless Chrome. Four daytime configs via L_PERF_ONLY on web/scripts/l-perf.mjs; the two dusk configs (dusk=1) via an unmodified copy in .conductor/l34/w3h/l-perf-dusk.mjs with the dusk preset added. Each run uses 5 s warm-up and 20 s measurement. loadavg_1m is /proc/loadavg before each run, loadavg_1m_after after it. The dev and official servers were stopped before the run."
 }
