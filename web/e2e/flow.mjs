@@ -554,7 +554,7 @@ async function main() {
       { timeout: 15_000 },
       '回放',
     );
-    pass('/replay opens the shell replay mode and the 3D view draws a replay frame');
+    pass('/replay opens the shell replay mode and the view reports a replay frame');
     await assertChinese(page, ['.rp-bar', '.ui-feed', '.ui-clock'], 'replay: timeline, feed and clock');
     await sleep(300);
     await screenshot(page, 'replay-1440.png');

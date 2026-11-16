@@ -421,7 +421,8 @@ export function useWorld(
         stop = mount(createWorldView);
         setViewReady(true);
       })
-      .catch(() => {
+      .catch((error: unknown) => {
+        console.error('scene failed to load', error);
         if (alive) setSceneFailed(true);
       });
 
