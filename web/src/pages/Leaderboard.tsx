@@ -1,21 +1,22 @@
 import { useEffect, useMemo, useState } from 'preact/hooks';
 import { getJSON } from '../api';
 import { Link } from '../components/Link';
+import { useI18n, type Key } from '../i18n';
 import { formatNumber } from '../labels';
 import type { LeaderRow, PlayerKind } from '../types';
 
 const METRICS = [
-  { key: 'score', label: '累计得分', value: 'score_total' },
-  { key: 'best', label: '单次最高', value: 'best_score' },
-  { key: 'successes', label: '成功次数', value: 'successes' },
+  { key: 'score', label: 'common.scoreTotal', value: 'score_total' },
+  { key: 'best', label: 'common.bestRun', value: 'best_score' },
+  { key: 'successes', label: 'board.metric.successes', value: 'successes' },
 ] as const;
 
 type MetricKey = (typeof METRICS)[number]['key'];
 
-const BOARDS: ReadonlyArray<{ key: PlayerKind | 'mixed'; label: string }> = [
-  { key: 'ai', label: 'AI' },
-  { key: 'human', label: '人类' },
-  { key: 'mixed', label: '混合' },
+const BOARDS: ReadonlyArray<{ key: PlayerKind | 'mixed'; label: Key }> = [
+  { key: 'ai', label: 'board.kind.ai' },
+  { key: 'human', label: 'board.kind.human' },
+  { key: 'mixed', label: 'board.kind.mixed' },
 ];
 
 type BoardKey = (typeof BOARDS)[number]['key'];
@@ -32,6 +33,7 @@ function readQuery(): { metric: MetricKey; kind: BoardKey; model: string | null 
 }
 
 export function Leaderboard() {
+  const { t } = useI18n();
   const initial = useMemo(readQuery, []);
   const [metric, setMetric] = useState<MetricKey>(initial.metric);
   const [kind, setKind] = useState<BoardKey>(initial.kind);
@@ -86,7 +88,7 @@ export function Leaderboard() {
   return (
     <>
       <div class="bctl">
-        <div class="tabs" role="tablist" aria-label="玩家类型">
+        <div class="tabs" role="tablist" aria-label={t('board.kindAria')}>
           {BOARDS.map((entry) => (
             <button
               key={entry.key}
@@ -97,12 +99,12 @@ export function Leaderboard() {
               aria-selected={entry.key === kind}
               onClick={() => setKind(entry.key)}
             >
-              {entry.label}
+              {t(entry.label)}
             </button>
           ))}
         </div>
         <div class="mrow">
-          <div class="tabs" role="tablist" aria-label="榜单">
+          <div class="tabs" role="tablist" aria-label={t('board.metricAria')}>
             {METRICS.map((entry) => (
               <button
                 key={entry.key}
@@ -112,19 +114,19 @@ export function Leaderboard() {
                 aria-selected={entry.key === metric}
                 onClick={() => setMetric(entry.key)}
               >
-                {entry.label}
+                {t(entry.label)}
               </button>
             ))}
           </div>
           {showsModel ? (
             <label class="field model-field">
-              <span>型号</span>
+              <span>{t('common.model')}</span>
               <select
                 class="model-select"
                 value={model ?? ''}
                 onChange={(event) => setModel(event.currentTarget.value || null)}
               >
-                <option value="">全部型号</option>
+                <option value="">{t('board.allModels')}</option>
                 {models.map((entry) => (
                   <option key={entry} value={entry}>
                     {entry}
@@ -137,24 +139,24 @@ export function Leaderboard() {
       </div>
 
       {rows === null ? (
-        <p class="sub">载入中…</p>
+        <p class="sub">{t('common.loading')}</p>
       ) : (
         <div class="ui-scroll">
           <table>
             <thead>
               <tr>
                 <th>#</th>
-                <th>昵称</th>
-                <th>主人</th>
-                <th>型号（自报）</th>
-                <th class="num">{active.label}</th>
+                <th>{t('common.nick')}</th>
+                <th>{t('common.owner')}</th>
+                <th>{t('board.modelSelf')}</th>
+                <th class="num">{t(active.label)}</th>
               </tr>
             </thead>
             <tbody>
               {rows.length === 0 ? (
                 <tr>
                   <td colSpan={5} class="sub">
-                    {error ? '榜单没取到，服务端可能没开。' : '暂无数据'}
+                    {error ? t('board.loadFailed') : t('common.noData')}
                   </td>
                 </tr>
               ) : (
@@ -166,8 +168,8 @@ export function Leaderboard() {
                     <td>
                       <Link href={`/agent/${row.agent_id}`}>{row.nick}</Link>
                       {row.kind === 'human' ? (
-                        <span class="tag h" title="人类玩家">
-                          人
+                        <span class="tag h" title={t('common.humanPlayer')}>
+                          {t('common.humanTag')}
                         </span>
                       ) : null}
                     </td>

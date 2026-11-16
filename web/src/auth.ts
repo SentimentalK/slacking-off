@@ -7,6 +7,7 @@
 // red message instead of reloading it.
 
 import { useEffect, useState } from 'preact/hooks';
+import { t } from './i18n';
 import { navigate } from './router';
 import type { AccountResponse, AuthMe, TokenCreateResponse } from './types';
 
@@ -73,7 +74,7 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
       body: options.body === undefined ? undefined : JSON.stringify(options.body),
     });
   } catch {
-    throw new AuthError('network', `${path} 连不上服务端`, 0);
+    throw new AuthError('network', t('error.noServer', { path }), 0);
   }
 
   const text = await response.text();
@@ -99,7 +100,7 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
     throw error;
   }
   if (!envelope) {
-    throw new AuthError('protocol', `${path} 返回的不是 JSON 信封`, response.status);
+    throw new AuthError('protocol', t('error.notEnvelope', { path }), response.status);
   }
   return envelope.result as T;
 }

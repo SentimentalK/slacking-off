@@ -1,12 +1,15 @@
 import { useState } from 'preact/hooks';
 import { AuthError, login } from '../auth';
 import { Link } from '../components/Link';
+import { useI18n } from '../i18n';
 import { navigate } from '../router';
+import { problemText, type Problem } from './problem';
 
 export function Login() {
+  const { t } = useI18n();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<Problem | null>(null);
   const [busy, setBusy] = useState(false);
 
   const onSubmit = async (event: Event) => {
@@ -18,7 +21,7 @@ export function Login() {
       await login(username.trim(), password);
       navigate('/account');
     } catch (failure) {
-      setError(failure instanceof AuthError ? failure.message : '登录失败，请重试');
+      setError(failure instanceof AuthError ? { text: failure.message } : { key: 'login.failed' });
     } finally {
       setBusy(false);
     }
@@ -26,10 +29,10 @@ export function Login() {
 
   return (
     <div class="authbody">
-      <p class="sub">登录后管理账号令牌与 AI。</p>
+      <p class="sub">{t('login.sub')}</p>
       <form onSubmit={onSubmit}>
         <label class="field">
-          <span>用户名</span>
+          <span>{t('common.username')}</span>
           <input
             name="username"
             type="text"
@@ -42,7 +45,7 @@ export function Login() {
           />
         </label>
         <label class="field">
-          <span>密码</span>
+          <span>{t('common.password')}</span>
           <input
             name="password"
             type="password"
@@ -54,18 +57,19 @@ export function Login() {
         </label>
         {error ? (
           <p class="err" role="alert">
-            {error}
+            {problemText(error)}
           </p>
         ) : null}
         <button class="gold" type="submit" disabled={busy}>
-          {busy ? '登录中…' : '登录'}
+          {busy ? t('login.busy') : t('common.logIn')}
         </button>
       </form>
       <p class="sub">
-        还没有账号？<Link href="/register">注册</Link>
+        {t('login.noAccount')}
+        <Link href="/register">{t('common.signUp')}</Link>
       </p>
       <p class="sub">
-        <Link href="/">回到观战</Link>
+        <Link href="/">{t('common.backToWatch')}</Link>
       </p>
     </div>
   );

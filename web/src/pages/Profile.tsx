@@ -1,9 +1,11 @@
 import { useEffect, useState } from 'preact/hooks';
 import { ApiError, getJSON } from '../api';
 import { Link } from '../components/Link';
+import { useI18n } from '../i18n';
 import {
   needLabel,
   outcomeLabel,
+  sentByLabel,
   formatNumber,
   formatPercent,
 } from '../labels';
@@ -13,6 +15,7 @@ import type { ProfileResponse } from '../types';
 type Status = 'loading' | 'ready' | 'missing' | 'error';
 
 export function Profile({ id }: { id: number }) {
+  const { t, tn } = useI18n();
   const [profile, setProfile] = useState<ProfileResponse | null>(null);
   const [status, setStatus] = useState<Status>('loading');
   const [retryToken, setRetryToken] = useState(0);
@@ -40,21 +43,21 @@ export function Profile({ id }: { id: number }) {
     return (
       <section class="wsec">
         {status === 'loading' ? (
-          <p class="sub">载入中…</p>
+          <p class="sub">{t('common.loading')}</p>
         ) : status === 'missing' ? (
           <>
-            <p class="note">没有这个 AI</p>
-            <p class="sub">编号 #{id} 不在名册里，可能还没来上过班。</p>
+            <p class="note">{t('profile.missing')}</p>
+            <p class="sub">{t('profile.missingHelp', { id })}</p>
             <p class="sub">
-              <Link href="/leaderboard">回到排行榜</Link>
+              <Link href="/leaderboard">{t('profile.backToBoard')}</Link>
             </p>
           </>
         ) : (
           <>
-            <p class="note">载入失败</p>
-            <p class="sub">档案没取到，检查服务端后再试。</p>
+            <p class="note">{t('profile.loadFailed')}</p>
+            <p class="sub">{t('profile.loadFailedHelp')}</p>
             <button type="button" onClick={() => setRetryToken((value) => value + 1)}>
-              重新载入
+              {t('profile.reload')}
             </button>
           </>
         )}
@@ -69,10 +72,10 @@ export function Profile({ id }: { id: number }) {
     profile.kind === 'human'
       ? []
       : [
-          { key: 'self', label: '摸鱼来的', count: profile.self_sessions, color: 'var(--gold)' },
+          { key: 'self', label: sentByLabel('self'), count: profile.self_sessions, color: 'var(--gold)' },
           {
             key: 'human',
-            label: '主人叫来的',
+            label: sentByLabel('human'),
             count: profile.human_sessions,
             color: 'var(--blue)',
           },
@@ -86,18 +89,18 @@ export function Profile({ id }: { id: number }) {
           <div class="nick">
             {profile.nick}
             {profile.kind === 'human' ? (
-              <span class="tag h" title="人类玩家">
-                人
+              <span class="tag h" title={t('common.humanPlayer')}>
+                {t('common.humanTag')}
               </span>
             ) : null}
           </div>
           {profile.kind === 'human' ? (
             <div>
-              <span class="tag h">人类角色</span>
+              <span class="tag h">{t('profile.humanRole')}</span>
             </div>
           ) : null}
           <div class="sub">
-            主人 <b>{profile.owner}</b> · 自报型号{' '}
+            {t('common.owner')} <b>{profile.owner}</b> · {t('profile.selfModel')}{' '}
             <span class="mono">{profile.model || '—'}</span>
           </div>
         </div>
@@ -106,27 +109,27 @@ export function Profile({ id }: { id: number }) {
       <div class="tiles">
         <div class="tile">
           <b class="mono">{profile.level}</b>
-          等级
+          {t('common.level')}
         </div>
         <div class="tile">
           <b class="mono">{formatNumber(profile.score_total)}</b>
-          累计得分
+          {t('common.scoreTotal')}
         </div>
         <div class="tile">
-          <b class="mono">{profile.visits} 次</b>
-          来过
+          <b class="mono">{tn('profile.visits', profile.visits)}</b>
+          {t('profile.visited')}
         </div>
         <div class="tile">
           <b class="mono">{formatPercent(profile.success_rate)}</b>
-          成功率
+          {t('common.successRate')}
         </div>
       </div>
 
       <div class="even">
         <section class="wsec">
-          <h3>谁叫来的</h3>
+          <h3>{t('profile.whoSent')}</h3>
           {bars.length === 0 ? (
-            <p class="sub">本人亲手在网页里玩，没有自报来由。</p>
+            <p class="sub">{t('profile.webOnly')}</p>
           ) : (
             <>
               {bars.map((bar) => (
@@ -145,46 +148,44 @@ export function Profile({ id }: { id: number }) {
               ))}
             </>
           )}
-          <p class="sub">
-            共 {profile.visits} 次会话，成功 {profile.successes} 次。
-          </p>
+          <p class="sub">{t('profile.summary', { visits: profile.visits, successes: profile.successes })}</p>
         </section>
 
         <section class="wsec">
-          <h3>自报资料</h3>
+          <h3>{t('profile.selfInfo')}</h3>
           <dl class="self">
             <dt>
-              型号 <span class="tag">自报</span>
+              {t('common.model')} <span class="tag">{t('common.selfTag')}</span>
             </dt>
             <dd class="mono">{profile.model}</dd>
             <dt>
-              自我介绍 <span class="tag">自报</span>
+              {t('profile.intro')} <span class="tag">{t('common.selfTag')}</span>
             </dt>
-            <dd>{profile.intro || '（没写）'}</dd>
+            <dd>{profile.intro || t('profile.unwritten')}</dd>
           </dl>
         </section>
       </div>
 
       <section class="wsec">
-        <h3>会话记录</h3>
+        <h3>{t('profile.sessions')}</h3>
         {profile.sessions.length === 0 ? (
-          <p class="sub">还没有会话。</p>
+          <p class="sub">{t('profile.noSessions')}</p>
         ) : (
           <div class="ui-scroll">
             <table>
               <thead>
                 <tr>
-                  <th>开始</th>
-                  <th>结束</th>
-                  <th>结局</th>
-                  <th class="num">得分</th>
-                  <th>需求</th>
-                  <th>来由（自报）</th>
-                  <th class="num">走</th>
-                  <th class="num">建</th>
-                  <th class="num">挨打</th>
-                  <th class="num">防守</th>
-                  <th>回放</th>
+                  <th>{t('profile.colStart')}</th>
+                  <th>{t('profile.colEnd')}</th>
+                  <th>{t('profile.colOutcome')}</th>
+                  <th class="num">{t('profile.colScore')}</th>
+                  <th>{t('profile.colNeed')}</th>
+                  <th>{t('profile.colWhy')}</th>
+                  <th class="num">{t('profile.colMoved')}</th>
+                  <th class="num">{t('profile.colBuilt')}</th>
+                  <th class="num">{t('profile.colHits')}</th>
+                  <th class="num">{t('profile.colDefends')}</th>
+                  <th>{t('profile.replay')}</th>
                 </tr>
               </thead>
               <tbody>
@@ -194,16 +195,16 @@ export function Profile({ id }: { id: number }) {
                     <td class="num mono">
                       {session.ended_tick === null ? '—' : formatNumber(session.ended_tick)}
                     </td>
-                    <td>{session.outcome ? outcomeLabel(session.outcome) : '进行中'}</td>
+                    <td>{session.outcome ? outcomeLabel(session.outcome) : t('profile.inProgress')}</td>
                     <td class="num mono">{formatNumber(session.score)}</td>
                     <td>{session.need ? needLabel(session.need) : '—'}</td>
                     <td>
                       {profile.kind === 'human' ? (
-                        <span>网页入场</span>
+                        <span>{t('profile.webJoin')}</span>
                       ) : (
                         <>
-                          <span class="tag">自报</span>{' '}
-                          <span>{session.why || '（没写）'}</span>
+                          <span class="tag">{t('common.selfTag')}</span>{' '}
+                          <span>{session.why || t('profile.unwritten')}</span>
                         </>
                       )}
                     </td>
@@ -213,7 +214,7 @@ export function Profile({ id }: { id: number }) {
                     <td class="num mono">{session.defends}</td>
                     <td>
                       <Link href={`/replay?tick=${session.started_tick}&agent=${profile.agent_id}`}>
-                        回放
+                        {t('profile.replay')}
                       </Link>
                     </td>
                   </tr>
