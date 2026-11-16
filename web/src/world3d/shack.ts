@@ -566,20 +566,27 @@ export function roof(palette: readonly [number, number]): { group: THREE.Group; 
 const GOLD = 0xffcf40;
 const GOLD_MAT: MatParams = { emissive: GOLD, emissiveIntensity: 0.35 };
 const FLAG_LIT = 0.35;
-const BADGE_SPACING = 0.225;
-const BADGE_SCALE = 1.75;
+const BADGE_SPACING = 0.26;
+const BADGE_SCALE = 2.8; // 1.6 x the previous 1.75
+const BADGE_DOT_R = 0.12; // the dots read ~7 px at the default overview distance
+const BADGE_BACK = 0x1c1511;
+const BADGE_BACK_OPACITY = 0.85;
 const BADGE_DOTS = [0xffffff, 0x4cc964, 0x3f7fb8, 0x9b5de5, GOLD];
 
 export function levelBadge(level: number): THREE.Group {
-  const plate = single(boxGeo(1.35, 0.45, 0.04), level === 5 ? GOLD : DEEP_WOOD, level === 5 ? GOLD_MAT : undefined);
+  // A dark 85 % backing for every level; the level 5 gold plate sits on it with the backing showing as a rim.
+  const back = single(boxGeo(level === 5 ? 1.45 : 1.35, level === 5 ? 0.55 : 0.45, 0.04), BADGE_BACK, { transparent: true, opacity: BADGE_BACK_OPACITY, depthWrite: false });
+  const plate = level === 5 ? single(boxGeo(1.35, 0.45, 0.04), GOLD, GOLD_MAT) : null;
+  if (plate) plate.position.z = 0.03;
   const dot = BADGE_DOTS[level - 1] ?? GOLD;
   const dotMat: MatParams = { emissive: dot, emissiveIntensity: 0.35 };
   const dots = new Batch();
   for (let i = 0; i < level; i++) {
-    dots.add(new THREE.SphereGeometry(0.0975, 10, 8), T((i - (level - 1) / 2) * BADGE_SPACING, 0, 0.03), dot, dotMat);
+    dots.add(new THREE.SphereGeometry(BADGE_DOT_R, 10, 8), T((i - (level - 1) / 2) * BADGE_SPACING, 0, plate ? 0.06 : 0.03), dot, dotMat);
   }
   const g = new THREE.Group();
-  g.add(plate);
+  g.add(back);
+  if (plate) g.add(plate);
   for (const m of dots.meshes((p) => S(dot, p))) g.add(m);
   g.rotation.x = -0.5;
   g.scale.setScalar(BADGE_SCALE);
@@ -608,7 +615,7 @@ export function signMaterial(open: boolean): THREE.MeshStandardMaterial {
 export function roofPalette(worldId: number, x: number, y: number): readonly [number, number] {
   const palettes: ReadonlyArray<readonly [number, number]> = [
     [0x58808a, 0x44656e],
-    [0x9a5038, 0x7a3d2a],
+    [0x7b4838, 0x61372b], // the red pair: lightness -15 %, saturation -20 % of 0x9a5038 / 0x7a3d2a
     [0xb08f3a, 0x8c7029],
   ];
   return palettes[Math.floor(rand01(worldId, x, y, 7) * palettes.length)];

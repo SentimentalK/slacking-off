@@ -24,8 +24,8 @@ export function allLampSources(): LampSource[] {
   return [...owners.values()].flat();
 }
 
-/** The lamp-post colour (0xffa850, linear). The field is scalar; lamps of another colour are weighted by their luminance relative to this one. */
-export const FIELD_COLOR: [number, number, number] = [1, 0.3916, 0.0802];
+/** The lamp-post colour (0xffb45a, linear). The field is scalar; lamps of another colour are weighted by their luminance relative to this one. */
+export const FIELD_COLOR: [number, number, number] = [1, 0.4564, 0.1022];
 const FIELD_LUM = (FIELD_COLOR[0] + FIELD_COLOR[1] + FIELD_COLOR[2]) / 3;
 
 /** Height slices of the baked field, bottom to top, `FIELD_STEP` apart. */

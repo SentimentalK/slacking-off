@@ -23,11 +23,11 @@ import type { FrameInput, Layer, SceneCtx } from './types';
 
 const PI = Math.PI;
 const LAMP_LIGHT_Y = 1.35;
-const LAMP_LIGHT_DIST = 7;
-const LAMP_LIGHT_DECAY = 0;
+const LAMP_LIGHT_DIST = 3.0;
+const LAMP_LIGHT_DECAY = 2;
 const LAMP_SPACING = 6;
-const LAMP_LIGHT_INTENSITY = 3.0;
-const LAMP_COLOR = new THREE.Color(0xffa850);
+const LAMP_LIGHT_INTENSITY = 42.0;
+const LAMP_COLOR = new THREE.Color(0xffb45a);
 const LAMP_OWNER = 'lamp-posts';
 
 interface Item {

@@ -164,9 +164,9 @@ test('vision grid is 255 in the window and fades from the window edge to the mem
   assert.equal(sample(g, 0, 0), 255);
   assert.equal(sample(g, 8, 8), 255);
   const edge = sample(g, 9, 0);
-  assert.ok(edge > 77 && edge < 255, `0.6 cells outside an unseen cell should be between 77 and 255, got ${edge}`);
+  assert.ok(edge > 92 && edge < 255, `0.6 cells outside an unseen cell should be between 92 and 255, got ${edge}`);
   assert.equal(sample(g, 10, 0), 128, 'a remembered cell two cells out shows its base');
-  assert.equal(sample(g, 11, 0), 77, 'an unseen cell two cells out shows its base');
+  assert.equal(sample(g, 11, 0), 92, 'an unseen cell two cells out shows its base');
 });
 
 test('memory indexes seen_at relative to the grid origin', () => {
@@ -177,13 +177,13 @@ test('memory indexes seen_at relative to the grid origin', () => {
   const s = { ...state({ agents: [playAgent(1, 0, 0)], map }), window: { origin: { x: 0, y: 0 }, width: 1, height: 1 } };
   const g = visionGrid(s, W, H);
   assert.equal(sample(g, 2, 1), 128);
-  assert.equal(sample(g, 3, 1), 77);
-  assert.equal(sample(g, 2, 2), 77);
+  assert.equal(sample(g, 3, 1), 92);
+  assert.equal(sample(g, 2, 2), 92);
 });
 
 test('vision grid without map is dark outside the window', () => {
   const g = visionGrid(state({ agents: [playAgent(1, 4, 4)], map: null }), W, H);
   assert.equal(sample(g, 4, 4), 255);
-  assert.equal(sample(g, 10, 0), 77);
-  assert.equal(sample(g, 11, 5), 77);
+  assert.equal(sample(g, 10, 0), 92);
+  assert.equal(sample(g, 11, 5), 92);
 });

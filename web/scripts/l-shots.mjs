@@ -10,6 +10,7 @@ function parseArgs(argv) {
 }
 
 const args = parseArgs(process.argv.slice(2));
+const only = args.only ? new Set(args.only.split(',')) : null;
 for (const key of ['base', 'scenes', 'out']) {
   if (!args[key]) {
     console.error(`missing --${key}`);
@@ -34,6 +35,7 @@ const SHOTS = [
   // the prototype's 64-degree pitch (?pitch=proto is measurement-only).
   { name: 'near-day', fixture: 'crowd.json', query: 'focus=17,12&zoom=0.5&pitch=proto', w: 1440, h: 900 },
   { name: 'near-dusk', fixture: 'crowd.json', query: 'focus=17,12&zoom=0.5&pitch=proto&dusk=1', w: 1440, h: 900 },
+  { name: 'near-dusk-nolamp', fixture: 'crowd.json', query: 'focus=17,12&zoom=0.5&pitch=proto&dusk=1&lamps=0', w: 1440, h: 900 },
   { name: 'closeup-day', fixture: 'crowd.json', query: 'focus=16,14&zoom=0.5', w: 1440, h: 900 },
   { name: 'closeup-dusk', fixture: 'crowd.json', query: 'focus=16,14&zoom=0.5&dusk=1', w: 1440, h: 900 },
   { name: 'low-390', fixture: 'crowd.json', query: 'quality=low', w: 390, h: 844 },
@@ -62,6 +64,7 @@ const browser = await puppeteer.launch({
 let failed = false;
 try {
   for (const shot of SHOTS) {
+    if (only && !only.has(shot.name)) continue;
     const fixturePath = path.join(args.scenes, shot.fixture);
     const query = ['still=1', `fixture=/@fs${fixturePath}`, shot.w === 1440 ? 'quality=high' : '', shot.query].filter(Boolean).join('&');
     const page = await browser.newPage();
