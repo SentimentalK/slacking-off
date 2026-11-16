@@ -22,11 +22,18 @@ LOO="$ROOT/target/release/loo"
 
 SERVER_PID=""
 VITE_PID=""
+listener_pid() {
+  ss -ltnp "sport = :$1" 2>/dev/null | sed -n 's/.*pid=\([0-9]*\).*/\1/p' | head -n 1
+}
+
 cleanup() {
   if [ -n "$VITE_PID" ]; then
+    VITE_LISTENER=$(listener_pid "$VITE_PORT")
+    if [ -n "$VITE_LISTENER" ]; then
+      kill "$VITE_LISTENER" 2>/dev/null || true
+    fi
     kill "$VITE_PID" 2>/dev/null || true
   fi
-  pkill -f "vite --port $VITE_PORT --strictPort" 2>/dev/null || true
   if [ -n "$SERVER_PID" ]; then
     kill "$SERVER_PID" 2>/dev/null || true
     wait "$SERVER_PID" 2>/dev/null || true

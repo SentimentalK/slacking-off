@@ -53,4 +53,4 @@
 ## 性能与逐像素
 
 - `perf-gpu.json` — `node web/scripts/l-perf.mjs --base http://127.0.0.1:18132 --fixture <abs path>/.conductor/l/scenes/crowd.json --out docs/screenshots/l3/perf-gpu.json --gpu`。四档中位 fps：1440×900 high 26.9、medium 14.5、low 37.2，390×844 low 59.9。`loadavg_1m` 2.60（运行前），`loadavg_1m_after` 3.76。
-- 逐像素：见 `docs/screenshots/l/pixel.json`（`scripts/l-pixel.sh`，结果仍在原位置；本轮未通过，见提交说明）。
+- 逐像素：`bash scripts/l-pixel.sh`，结果在 `docs/screenshots/l/pixel*`（tick 14，1440×900 canvas，`diff_pixels` 0）。脚本的实时页选择器已改为外壳（`.ui-clock .live` 含 LIVE、`canvas[data-renderer="3d"]`），清理只杀它自己记录的 PID。

@@ -30,9 +30,12 @@ try {
   const live = await browser.newPage();
   await live.setViewport({ width: 1440, height: 900, deviceScaleFactor: 1 });
   await live.goto(`${BASE}/?still=1&quality=high`, { waitUntil: 'domcontentloaded' });
-  await live.waitForSelector('.live[data-status=live]', { timeout: 30000 });
+  await live.waitForFunction(
+    () => Array.from(document.querySelectorAll('.ui-clock .live')).some((element) => element.textContent.includes('LIVE')),
+    { timeout: 30000 },
+  );
   await live.waitForFunction(() => window.__looView && window.__looView.tick() >= 5, { timeout: 60000 });
-  const size = await live.$eval('canvas.board', (canvas) => ({ width: canvas.clientWidth, height: canvas.clientHeight }));
+  const size = await live.$eval('canvas[data-renderer="3d"]', (canvas) => ({ width: canvas.clientWidth, height: canvas.clientHeight }));
   const captured = await live.evaluate(() => window.__looView.capture());
   const tick = captured.tick;
   await live.close();
