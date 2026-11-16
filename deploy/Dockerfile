@@ -12,8 +12,6 @@ WORKDIR /src/web
 COPY web/package.json web/package-lock.json ./
 RUN npm ci
 COPY web/ ./
-# The SPA imports `docs/art/sprites.svg?raw`, which lives outside the Vite root.
-COPY docs/art/sprites.svg /src/docs/art/sprites.svg
 RUN npm run build
 
 FROM --platform=$BUILDPLATFORM rust:1-bookworm AS build
