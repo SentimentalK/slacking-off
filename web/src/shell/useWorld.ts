@@ -4,8 +4,19 @@ import { getJSON, watch } from '../api';
 import type { WatchStatus } from '../api';
 import { eventColors } from '../components/EventText';
 import { pickReplaySpan, REPLAY_TICKS_PER_SECOND } from '../replay-source';
-import { AutoQuality, chooseQuality, rendererName } from '../world3d/quality';
+import {
+  AUTO_LADDER,
+  LadderQuality,
+  chooseQuality,
+  describeSettings,
+  ladderAllowed,
+  rendererName,
+  saveAutoRecord,
+  startIndexFor,
+} from '../world3d/quality';
+import type { LadderEvent } from '../world3d/quality';
 import type { ClickHit, Quality, UiState, VisionGrid, WorldView } from '../world3d';
+import { loadScene } from '../sceneLoader';
 import type { LeaderRow, Pos, Projection, ProjectionEvent, Terrain, Timeline } from '../types';
 
 declare global {
@@ -17,6 +28,7 @@ declare global {
       cellAt: (x: number, y: number) => Pos | null;
       tick: () => number;
     };
+    __looQualityLog?: LadderEvent[];
   }
 }
 
@@ -121,12 +133,14 @@ export function useWorld(
   const startingReplay = useRef(false);
   const [dusk, setDusk] = useState(false);
   const [choice, setChoice] = useState<QualityChoice>('high');
+  const [autoLabel, setAutoLabel] = useState('');
   const [visionState, setVisionState] = useState(true);
   const [arrivedAt, setArrivedAt] = useState(0);
 
   const viewRef = useRef<WorldView | null>(null);
-  const autoRef = useRef<AutoQuality | null>(null);
+  const autoRef = useRef<LadderQuality | null>(null);
   const qualityRef = useRef<Quality>('high');
+  const rendererRef = useRef('');
   const live = useRef<LiveState>({
     projection: null,
     previous: null,
@@ -289,10 +303,15 @@ export function useWorld(
     const params = new URLSearchParams(location.search);
     const urlQuality = params.get('quality');
     const stored = readStoredQuality();
-    const initial = chooseQuality(urlQuality, stored, innerWidth, navigator.hardwareConcurrency ?? 8, rendererName());
-    qualityRef.current = initial;
+    const renderer = rendererName();
+    rendererRef.current = renderer;
+    const initial = chooseQuality(urlQuality, stored, innerWidth, navigator.hardwareConcurrency ?? 8, renderer);
     const autoPick = !STILL_MODE && urlQuality === null && stored === null;
-    autoRef.current = new AutoQuality(autoPick);
+    const ladder = autoPick && ladderAllowed(innerWidth, renderer);
+    const start = startIndexFor(renderer);
+    qualityRef.current = ladder ? 'high' : autoPick ? 'low' : initial;
+    autoRef.current = ladder ? new LadderQuality(true, start, onLadderEvent) : null;
+    setAutoLabel(ladder ? describeSettings(AUTO_LADDER[autoRef.current?.level ?? start]) : '');
     setChoice(autoPick ? 'auto' : initial);
     const initialDusk = params.get('dusk') === '1';
     live.current.dusk = initialDusk;
@@ -310,6 +329,7 @@ export function useWorld(
         onUserCamera: () => onUserCamera.current?.(),
       });
       viewRef.current = view;
+      if (autoRef.current) view.setSettings(AUTO_LADDER[autoRef.current.level]);
       window.__looView = {
         capture: () => view.capture(),
         screenOf: (id) => view.screenOf(id),
@@ -339,11 +359,8 @@ export function useWorld(
         const state = live.current;
         const auto = autoRef.current;
         if (auto) {
-          const next = auto.frame(now, qualityRef.current);
-          if (next) {
-            qualityRef.current = next;
-            view.setQuality(next);
-          }
+          const next = auto.frame(now);
+          if (next !== null) view.setSettings(AUTO_LADDER[next]);
         }
         const ov = override.current;
         const cur = ov ? ov.cur : state.projection;
@@ -396,7 +413,7 @@ export function useWorld(
       };
     };
 
-    void import('../world3d').then(({ createWorldView }) => {
+    void loadScene().then(({ createWorldView }) => {
       if (alive) stop = mount(createWorldView);
     });
 
@@ -438,13 +455,29 @@ export function useWorld(
     setDusk(on);
   };
 
+  const onLadderEvent = (event: LadderEvent) => {
+    window.__looQualityLog = [...(window.__looQualityLog ?? []), event];
+    setAutoLabel(describeSettings(AUTO_LADDER[event.to]));
+    if (event.event === 'settle') saveAutoRecord(rendererRef.current, event.to);
+  };
+
   const setQuality = (next: QualityChoice) => {
     if (next === 'auto') {
-      const picked = chooseQuality(null, null, innerWidth, navigator.hardwareConcurrency ?? 8, rendererName());
       clearStoredQuality();
-      autoRef.current = new AutoQuality(!STILL_MODE);
-      qualityRef.current = picked;
-      viewRef.current?.setQuality(picked);
+      const renderer = rendererRef.current;
+      if (ladderAllowed(innerWidth, renderer)) {
+        const start = startIndexFor(renderer);
+        autoRef.current = new LadderQuality(!STILL_MODE, start, onLadderEvent);
+        qualityRef.current = 'high';
+        viewRef.current?.setQuality('high');
+        viewRef.current?.setSettings(AUTO_LADDER[start]);
+        setAutoLabel(describeSettings(AUTO_LADDER[start]));
+      } else {
+        autoRef.current = null;
+        qualityRef.current = 'low';
+        viewRef.current?.setQuality('low');
+        setAutoLabel('');
+      }
       setChoice('auto');
       return;
     }
@@ -452,6 +485,7 @@ export function useWorld(
     qualityRef.current = next;
     viewRef.current?.setQuality(next);
     writeStoredQuality(next);
+    setAutoLabel('');
     setChoice(next);
   };
 
@@ -504,6 +538,7 @@ export function useWorld(
     dusk,
     toggleDusk,
     quality: choice,
+    autoLabel,
     setQuality,
     arrivedAt,
     colors,

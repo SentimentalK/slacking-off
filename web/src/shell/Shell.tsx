@@ -124,6 +124,7 @@ export function Shell({ route }: { route: Route }) {
             dusk={world.dusk}
             onDusk={world.toggleDusk}
             quality={world.quality}
+            autoLabel={world.autoLabel}
             onQuality={world.setQuality}
           />
         </Window>

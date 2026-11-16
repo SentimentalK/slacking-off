@@ -13,10 +13,11 @@ interface Props {
   dusk: boolean;
   onDusk: () => void;
   quality: 'auto' | Quality;
+  autoLabel: string;
   onQuality: (q: 'auto' | Quality) => void;
 }
 
-export function Settings({ dusk, onDusk, quality, onQuality }: Props) {
+export function Settings({ dusk, onDusk, quality, autoLabel, onQuality }: Props) {
   return (
     <div>
       <h3>画面</h3>
@@ -36,7 +37,7 @@ export function Settings({ dusk, onDusk, quality, onQuality }: Props) {
               class={quality === option.value ? 'on' : undefined}
               onClick={() => onQuality(option.value)}
             >
-              {option.label}
+              {option.value === 'auto' && autoLabel ? `${option.label} · ${autoLabel}` : option.label}
             </button>
           );
         })}
