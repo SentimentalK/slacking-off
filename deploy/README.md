@@ -12,18 +12,26 @@
 所以 Rust 编译不经过 qemu：
 
 ```sh
-docker buildx build --platform linux/arm64 -f deploy/Dockerfile -t loo-server:f-arm64 .
-docker image inspect loo-server:f-arm64 --format '{{.Architecture}}'   # arm64
+bash scripts/build-cli.sh
+docker buildx build --platform linux/arm64 -f deploy/Dockerfile \
+  --build-arg LOO_BUILD_SHA=$(git rev-parse --short=12 HEAD) -t slacking-off:arm64 --load .
+docker image inspect slacking-off:arm64 --format '{{.Architecture}}'   # arm64
 ```
+
+两步必须在同一个干净 commit 上。镜像的 CLI 包只取自 `dist/`，Dockerfile 会拒绝以下情况：没传
+`LOO_BUILD_SHA`、树是脏的（sha 以 `-dirty` 结尾）、缺少五个必备包、`dist/` 里 `loo-linux-x64 --version`
+的 sha 与传入的 `LOO_BUILD_SHA` 对不上（`dist/` 是在别的 commit 上构建的）。镜像启动时带
+`--downloads-dir /app/downloads`，`/app/downloads` 下是 `dist/` 里全部 `loo-*` 包。
 
 ## 本地运行
 
 ```sh
 mkdir -p .conductor/deploy-data && chmod 777 .conductor/deploy-data
 docker run --rm --platform linux/arm64 -p 18089:18080 \
-  -v "$PWD/.conductor/deploy-data:/data" loo-server:f-arm64
+  -v "$PWD/.conductor/deploy-data:/data" slacking-off:arm64
 
 curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:18089/healthz      # 200 {"ok":true}
+curl -s http://127.0.0.1:18089/api/downloads                                 # 下载清单（dist/ 里的全部包）
 curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:18089/             # 200: 内嵌 SPA
 curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:18089/api/projection # 200: 公开投影
 ```
@@ -38,14 +46,14 @@ curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:18089/api/projection #
 
 `/downloads/<name>` 的文件名约定，`--downloads-dir`（默认 `target/release`）就指向这些文件：
 
-| name | 平台 |
-| --- | --- |
-| `loo-linux-x64` | Linux x64 |
-| `loo-linux-arm64` | Linux arm64 |
-| `loo-macos-x64` | macOS x64 |
-| `loo-macos-arm64` | macOS arm64 |
-| `loo-windows-x64.exe` | Windows x64 |
-| `loo-windows-arm64.exe` | Windows arm64 |
+| name | 平台 | 目标三元组 | 链接方式 | 本次验证到哪一步 |
+| --- | --- | --- | --- | --- |
+| `loo-linux-x64` | Linux x64 | `x86_64-unknown-linux-musl` | musl 静态 | 本机运行（`--version`；install.sh 装出后运行） |
+| `loo-linux-arm64` | Linux arm64 | `aarch64-unknown-linux-musl` | musl 静态 | qemu 运行（`--version`） |
+| `loo-macos-x64` | macOS x64 | `x86_64-apple-darwin` | 动态，链接 `/usr/lib/libSystem.B.dylib` | 只查了文件类型与链接依赖，没有在真机运行 |
+| `loo-macos-arm64` | macOS arm64 | `aarch64-apple-darwin` | 动态，链接 `/usr/lib/libSystem.B.dylib` | 只查了文件类型与链接依赖，没有在真机运行 |
+| `loo-windows-x64.exe` | Windows x64 | `x86_64-pc-windows-gnu` | PE 可执行文件 | wine 运行（`--version`；install.ps1 实装后运行） |
+| `loo-windows-arm64.exe` | Windows arm64 | `aarch64-pc-windows-gnullvm` | PE 可执行文件 | 只查了文件类型，没有运行过 |
 
 服务端只服务真实存在的文件；`GET /api/downloads` 返回实际清单（`file` 与字节数，顺序同上表），
 账号页按它渲染，没有文件的平台不出现。
