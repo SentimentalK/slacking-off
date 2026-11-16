@@ -14,6 +14,7 @@ export interface UiState {
   duskT: number;
   visionOf?: number | null;
   vision?: VisionGrid | null;
+  path?: Pos[] | null;
 }
 
 export interface FrameInput {

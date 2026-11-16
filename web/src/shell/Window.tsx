@@ -10,6 +10,7 @@ interface Props {
 
 export function Window({ title, windowKey, onClose, children }: Props) {
   const closeRef = useRef<HTMLButtonElement | null>(null);
+  const winRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -20,7 +21,8 @@ export function Window({ title, windowKey, onClose, children }: Props) {
   }, [onClose]);
 
   useEffect(() => {
-    closeRef.current?.focus();
+    const field = winRef.current?.querySelector<HTMLElement>('input, select, textarea');
+    (field ?? closeRef.current)?.focus();
   }, []);
 
   return (
@@ -30,7 +32,7 @@ export function Window({ title, windowKey, onClose, children }: Props) {
         if (event.target === event.currentTarget) onClose();
       }}
     >
-      <div class="win panel" role="dialog" aria-modal="true" aria-label={title} data-window={windowKey}>
+      <div class="win panel" ref={winRef} role="dialog" aria-modal="true" aria-label={title} data-window={windowKey}>
         <header>
           <h2>{title}</h2>
           <button type="button" class="win-close" ref={closeRef} onClick={onClose}>

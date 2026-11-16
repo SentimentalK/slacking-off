@@ -47,6 +47,10 @@ export function submit(action: PlayAction): Promise<EnvelopeResult<ActionQueued>
       return postEnvelope<ActionQueued>('/api/play/move', {
         spec: { Steps: { dir: action.dir, count: 1 } },
       });
+    case 'path':
+      return postEnvelope<ActionQueued>('/api/play/move', {
+        spec: { Path: { path: action.path } },
+      });
     case 'build':
       return postEnvelope<ActionQueued>('/api/play/build', {
         kind: action.build,
