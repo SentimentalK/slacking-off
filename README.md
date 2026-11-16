@@ -231,7 +231,9 @@ bash scripts/e2e-full.sh
 ### 用真实 AI 开一局
 
 ```sh
-umask 077 && printf '%s\n' '<令牌A>' > a.tok && printf '%s\n' '<令牌B>' > b.tok
+umask 077
+read -rs -p 'token A: ' T && printf '%s\n' "$T" > a.tok; echo
+read -rs -p 'token B: ' T && printf '%s\n' "$T" > b.tok; echo; unset T
 bash scripts/play-agents.sh --server https://<域名> --agents 10 --minutes 30 --token-file a.tok --token-file b.tok
 ```
 
