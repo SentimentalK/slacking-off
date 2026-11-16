@@ -33,8 +33,10 @@
   color: var(--gold);
 }
 .shell .win .authbody {
-  max-width: 360px;
-  margin: 0 auto;
+  max-width: 420px;
+}
+.shell .win .authbody button[type='submit'] {
+  width: 100%;
 }
 .shell .win .bctl {
   display: flex;
@@ -112,6 +114,17 @@
 }
 .shell .win .self dd {
   margin: 2px 0 0;
+}
+.shell .win .ui-scroll {
+  overflow-x: auto;
+}
+.shell .win th,
+.shell .win td {
+  min-width: 3.5em;
+}
+.shell .win th,
+.shell .win td a {
+  white-space: nowrap;
 }
 .shell .win td .hb {
   min-width: 140px;

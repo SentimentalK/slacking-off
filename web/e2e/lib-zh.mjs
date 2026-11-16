@@ -1,7 +1,7 @@
 // Chinese-only check for the watch and play screens: the text under each selector
 // may carry nicknames and the few product words the UI keeps in Latin letters.
 
-const KEPT = ['AI', 'LIVE', 'COMPANY TIME'];
+const KEPT = ['AI', 'LIVE', 'COMPANY TIME', 'Linux', 'macOS', 'Windows'];
 const LATIN_WORD = /[A-Za-z]{3,}/;
 
 async function nicknames(page) {

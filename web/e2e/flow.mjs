@@ -505,6 +505,7 @@ async function main() {
     );
     await page.waitForSelector('.win[data-window="agent"] table thead');
     pass('档案 window lists the session table');
+    await assertChinese(page, ['.win'], '档案 window', ['e2e-bot', 'e2e-model', 'e2e intro', 'e2e why', username]);
     await page.click('.win-close');
     await waitForPath(page, '/');
 
@@ -536,6 +537,12 @@ async function main() {
     await assertChinese(page, ['.ui-feed'], 'watch: event feed');
     await assertChinese(page, ['.ui-card'], 'watch: selected card');
     await assertChinese(page, ['.ui-bottom'], 'watch: bottom bar');
+    const bottomHeight = await page.$eval(
+      '.ui-bottom[data-mode="watch"]',
+      (element) => element.getBoundingClientRect().height,
+    );
+    assert(bottomHeight < 64, `watch bottom bar is ${bottomHeight}px tall at 1440×900; expected one line`);
+    pass(`watch bottom bar sits on one line at 1440×900 (${Math.round(bottomHeight)}px)`);
     await assertChinese(page, ['.ui-brand', '.ui-clock'], 'watch: top bar');
 
     // --- replay / profile / leaderboard / stats ---------------------------
@@ -567,10 +574,12 @@ async function main() {
       { timeout: 10_000 },
     );
     await screenshot(page, 'leaderboard-1440.png');
+    await assertChinese(page, ['.win'], 'leaderboard window', ['e2e-bot', 'e2e-model', 'e2e intro', 'e2e why', username]);
 
     await page.goto(`${BASE}/stats`, { waitUntil: 'domcontentloaded' });
     await page.waitForSelector('.win[data-window="stats"] .tiles', { timeout: 10_000 });
     await screenshot(page, 'stats-1440.png');
+    await assertChinese(page, ['.win'], 'stats window', ['e2e-bot', 'e2e-model', 'e2e intro', 'e2e why', username]);
 
     // --- phone viewport ----------------------------------------------------
     await page.setViewport({
@@ -601,6 +610,7 @@ async function main() {
       () => document.querySelector('[data-testid=token-action]')?.textContent?.includes('重新生成'),
       { timeout: 10_000 },
     );
+    await assertChinese(page, ['.win'], 'account window', ['e2e-bot', 'e2e-model', 'e2e intro', 'e2e why', username]);
     const oldConfig = readConfig();
     await page.click('[data-testid=token-action]');
     await page.waitForSelector('[data-testid=install-command]', { timeout: 10_000 });

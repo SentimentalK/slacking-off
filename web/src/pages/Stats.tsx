@@ -140,12 +140,12 @@ export function Stats() {
       </div>
 
       <div class="even">
-        <KindCard label="AI · 接口来的" hint="通过 loo CLI 注册的 Agent" stats={current.ai} />
+        <KindCard label="AI 的 接口来的" hint="通过命令行注册的 AI" stats={current.ai} />
         <KindCard label="人 · 网页里玩的" hint="账号在观战页亲手操作的人类角色" stats={current.human} />
       </div>
 
       <section class="wsec">
-        <h3>BY MODEL · 按型号（仅 AI）</h3>
+        <h3>按型号（仅 AI）</h3>
         {models.length === 0 ? (
           <p class="sub">暂无数据</p>
         ) : (
@@ -154,7 +154,7 @@ export function Stats() {
               <thead>
                 <tr>
                   <th>型号</th>
-                  <th class="num">Agent 数</th>
+                  <th class="num">AI 数</th>
                   <th class="num">会话数</th>
                   <th>成功率</th>
                   <th class="num">总分</th>
