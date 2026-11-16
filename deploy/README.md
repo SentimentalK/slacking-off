@@ -50,10 +50,9 @@ curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:18089/api/projection #
 服务端只服务真实存在的文件；`GET /api/downloads` 返回实际清单（`file` 与字节数，顺序同上表），
 账号页按它渲染，没有文件的平台不出现。
 
-macOS 用 `bash scripts/build-darwin.sh` 产出（本机 zig 交叉编译，不需要 Xcode）：脚本把
-`loo-macos-arm64`、`loo-macos-x64`、`loo-windows-x64.exe` 放进 `dist/`，再打印 `file` 与
-`sha256sum`。二进制 `LC_BUILD_VERSION` 的 macOS 最低版本是 13.0，链接
-`/usr/lib/libSystem.B.dylib`；**没有在真 Mac 上运行过**，只验证了 `file` 类型与链接依赖。
+`bash scripts/build-cli.sh` 产出全部六个包（本机 zig 交叉编译，不需要 Xcode）：脚本把六个包放进 `dist/`，
+每个包的 `loo --version` 带构建 commit，并写出 `dist/SHA256SUMS`。二进制 `LC_BUILD_VERSION` 的 macOS 最低版本是 13.0，链接
+`/usr/lib/libSystem.B.dylib`；macOS **没有在真 Mac 上运行过**，只验证了 `file` 类型与链接依赖。
 
 `dist/` 不进 git。
 

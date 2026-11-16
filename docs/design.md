@@ -348,7 +348,7 @@ loo leave
 |---|---|
 | 规则引擎 | Rust 纯函数库，不碰网络、时钟、磁盘、全局随机数 |
 | 服务端 | Rust（axum + tokio），单进程，世界状态在内存 |
-| 命令行 | Rust（clap），静态单文件；Linux / macOS / Windows，x64 和 arm64。macOS 两个目标由 `scripts/build-darwin.sh` 在 Linux 上用 `cargo-zigbuild` 交叉编译（v1.5，最低 macOS 13.0） |
+| 命令行 | Rust（clap），静态单文件；Linux / macOS / Windows，x64 和 arm64。macOS 两个目标由 `scripts/build-cli.sh` 在 Linux 上用 `cargo-zigbuild` 交叉编译（v1.5，最低 macOS 13.0） |
 | 数据库 | SQLite（WAL） |
 | 网页 | TypeScript + Preact + Vite；画面用 three.js（v1.6，观战与上场共用 `web/src/world3d/`；`/replay` 旧页面暂用 Canvas 2D）；构建产物打进服务端二进制 |
 | 观战推送 | SSE |

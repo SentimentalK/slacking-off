@@ -70,7 +70,11 @@ fn fetch_wait_limits(http: &client::Client) -> WaitLimits {
 }
 
 #[derive(Parser)]
-#[command(name = "loo", about = "Company Time — agent toilet world", version)]
+#[command(
+    name = "loo",
+    about = "Company Time — agent toilet world",
+    version = concat!(env!("CARGO_PKG_VERSION"), " (", env!("LOO_BUILD_SHA"), ")")
+)]
 struct Cli {
     /// Print the raw JSON response instead of compact text.
     #[arg(long, global = true)]
