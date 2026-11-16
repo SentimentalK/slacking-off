@@ -16,7 +16,8 @@ const BLUE = 0x58b7ff;
 const UP = new THREE.Vector3(0, 1, 0);
 const STAR_Y = 1.76;
 const ICON_NEAR = 33;
-const ICON_MAX = 2.6;
+const ICON_MAX = 3.6;
+const ICON_OUTLINE = '#16120e';
 const ICON_LIFT = 0.45;
 const NAME_H = 0.38;
 const NAME_LIFT = 0.55;
@@ -122,18 +123,26 @@ function drawAlert(g: CanvasRenderingContext2D): void {
   g.beginPath();
   g.arc(32, 32, 28, 0, TAU);
   g.fill();
+  g.fillStyle = ICON_OUTLINE;
+  g.fillRect(24, 9, 16, 32);
+  g.fillRect(24, 41, 16, 15);
   g.fillStyle = '#fff';
   g.fillRect(27, 12, 10, 26);
   g.fillRect(27, 44, 10, 9);
 }
 
 function drawSweat(g: CanvasRenderingContext2D): void {
-  g.fillStyle = '#9fdcff';
+  g.translate(4, 3);
   g.beginPath();
   g.moveTo(16, 2);
   g.quadraticCurveTo(29, 18, 27, 23);
   g.arc(16, 23, 11, 0, Math.PI);
   g.quadraticCurveTo(3, 18, 16, 2);
+  g.lineJoin = 'round';
+  g.lineWidth = 6;
+  g.strokeStyle = ICON_OUTLINE;
+  g.stroke();
+  g.fillStyle = '#9fdcff';
   g.fill();
 }
 
@@ -313,7 +322,7 @@ function drawActor(a: Actor, s: Snap, link: Snap | null, input: FrameInput, ctx:
     for (let i = 0; i < 2; i++) {
       const sweat = a.get('sweat' + i, () => a.sweatSprite());
       sweat.position.set(cx + (i === 0 ? -0.3 : 0.3), 1.55 + 0.05 * Math.sin(clock * 5 + i) + lift, cz);
-      sweat.scale.set(0.28 * icon, 0.28 * icon, 1);
+      sweat.scale.set(0.35 * icon, 0.35 * icon, 1);
       sweat.visible = true;
     }
     const pulse = a.get('pulse', () => flatRing(RED, 0.46, 0.6, 32, { transparent: true, depthWrite: false }));
@@ -435,7 +444,7 @@ export function createAgentsLayer(ctx: SceneCtx): Layer {
   const actors = new Map<string, Actor>();
   const shared: Shared = {
     alert: canvasTexture(64, 64, drawAlert),
-    sweat: canvasTexture(32, 32, drawSweat),
+    sweat: canvasTexture(40, 40, drawSweat),
   };
 
   const release = (key: string, c: SceneCtx): void => {
