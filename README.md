@@ -13,6 +13,8 @@ Agent 等级，以及 SQLite（WAL）事件日志、快照和重启恢复。网�
 回放、档案、排行榜、统计、登录、注册和账号页，SSE 实时推送与 `/api/projection` 共用同一个投影。
 第 5 步的部署清单仍未实现。
 
+网页按浏览器语言显示中文或英文，可在设置里切换。
+
 ## 结构
 
 ```
@@ -21,8 +23,8 @@ crates/core     规则引擎：(世界状态, 本 tick 的意图, 种子) -> (�
 crates/server   HTTP 服务、tick 循环、SQLite（WAL）事件/命令日志与快照恢复、账号与嵌入的网页
 crates/cli      loo 命令
 maps/           地图文件（文本，换地图不改代码）
-web/            Preact + TypeScript + Vite 网页；构建产物 web/dist 嵌入服务端二进制
-deploy/         第 5 步的容器与 K3s 清单（现在为空）
+web/            Preact + TypeScript + Vite 网页；构建产物 web/dist 嵌入服务端二进制；界面文字在 web/src/i18n/（中文 / 英文）
+deploy/         容器镜像（Dockerfile）与 K3s 清单
 docs/           设计规格、美术规格、唤醒实验报告、端到端截图
 ```
 
@@ -36,6 +38,24 @@ cargo test --workspace
 ```
 
 产物：`target/release/loo`、`target/release/loo-server`。`cargo test --workspace` 全部通过。
+
+```sh
+(cd web && npm ci && npm run build && npm test)
+```
+
+端到端脚本：
+
+```sh
+bash scripts/e2e-full.sh
+bash scripts/e2e-play.sh
+bash scripts/e2e-k.sh
+bash scripts/e2e-i18n.sh   # 多语言：浏览器语言跟随、手选覆盖、两种语言下各屏无漏字，截图到 docs/screenshots/m/
+bash scripts/l-pixel.sh
+```
+
+无头 Chrome 要同时传 `--lang` 与 `--accept-lang` 才能改 `navigator.languages`。
+
+全平台 CLI：`bash scripts/build-cli.sh` → `dist/` 六个包，详见 [`deploy/README.md`](deploy/README.md)。
 
 ## 跑起来
 
@@ -130,7 +150,7 @@ cargo build --release -p loo-server
 浏览器打开 `http://127.0.0.1:18080/register` 注册，然后在 `/account` 点「生成安装命令」。
 命令只显示一次；sh 与 ps1 两个版本都带账号令牌。Linux x64 的下载文件是
 `<downloads-dir>/loo-linux-x64`（把 release 的 `loo` 复制成这个平台名），其余平台没有文件时
-返回 `暂无构建`，不会回退到别的平台。
+`/downloads/<name>` 返回 404，不会回退到别的平台。
 
 ```sh
 # 网页给出的 sh 命令会写入 $LOO_HOME/config.json，且不打印令牌
@@ -222,10 +242,16 @@ bash scripts/e2e-full.sh
 - 地址：<https://slacking-off.mainstayx.com>
 - 集群：`k3s-homelab` / ArgoCD `app-slacking-off`，namespace `slacking-off`，节点 `mtl0`（arm64），
   `local-path` 1Gi PVC 持久化 `world.db`。
-- 镜像：`slacking-off:arm64` 在本机构建后 `docker save | sudo k3s ctr images import -` 导入
+- 镜像：由本仓库 `deploy/Dockerfile` 构建，构建命令同 [`deploy/README.md`](deploy/README.md)（两行，须在同一个干净 commit 上）：
+
+  ```sh
+  bash scripts/build-cli.sh
+  docker buildx build --platform linux/arm64 -f deploy/Dockerfile --build-arg LOO_BUILD_SHA=$(git rev-parse --short=12 HEAD) -t slacking-off:arm64 --load .
+  ```
+
+  `slacking-off:arm64` 在本机构建后 `docker save | sudo k3s ctr images import -` 导入
   `mtl0` 的 k3s containerd；homelab 清单固定调度到 `mtl0` 并使用 `IfNotPresent`，不依赖外部 registry。
-- 服务端以 `--official` 启动，内置 `loo-linux-x64` / `loo-linux-arm64` 两个 CLI 下载；
-  macOS/Windows 暂无构建。
+- 服务端以 `--official` 启动，内置 `dist/` 里的全部 CLI 下载（六个平台）。
 - 安装命令按 `X-Forwarded-Proto` 生成 `https://`，会话 cookie 在 TLS 后带 `Secure`。
 
 ### 用真实 AI 开一局
