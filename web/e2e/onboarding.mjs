@@ -621,11 +621,24 @@ async function phaseReplayPage() {
   const dragged = await until(
     async () => {
       const current = await replayPageTick();
-      return current !== null && spanIndexOf(current) >= 0 ? current : null;
+      if (current === null) return null;
+      // The last span keeps growing while an agent is still inside.
+      const fresh = (await timeline()).spans;
+      return spanOf(fresh, current) ? current : null;
     },
     { timeout: 5_000, interval: 50, label: 'the drag to 75% to land inside a span' },
-  );
-  pass(`dragging the rail to 75% landed on tick ${dragged}, inside span ${spanIndexOf(dragged) + 1}/${spans.length}`);
+  ).catch(async (error) => {
+    const hit = await page.evaluate(
+      (x, y) => {
+        const node = document.elementFromPoint(x, y);
+        return node ? `${node.tagName.toLowerCase()}.${String(node.className)}` : 'nothing';
+      },
+      rail.left + rail.width * 0.75,
+      rail.y,
+    );
+    throw new Error(`${error.message}; element under the drag point: ${hit}; tick field: ${await replayPageTick()}`);
+  });
+  pass(`dragging the rail to 75% landed on tick ${dragged}, inside a replayable span`);
 
   // 下一个高光 jumps to the next marker after the current tick.
   const markerTicks = markers.map((marker) => marker.tick).sort((a, b) => a - b);
