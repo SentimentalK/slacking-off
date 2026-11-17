@@ -298,7 +298,7 @@ export const en: Record<Key, string> = {
   'play.notice.cancelled': 'Action cancelled',
   'play.notice.left': 'You left',
   'play.notice.created': 'Character created. Ready to clock in.',
-  'play.settling': 'Resolving…',
+  'play.settling': 'a moment',
   'play.bar.rejected': 'Rejected: {reason}',
   'play.bar.executing': 'Running: {action}',
   'play.bar.left.one': '{n} turn left',

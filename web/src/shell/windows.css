@@ -123,6 +123,9 @@
   min-width: 3.5em;
   white-space: nowrap;
 }
+html:lang(en) .shell .win th {
+  letter-spacing: 0.02em;
+}
 .shell .win td .hb {
   min-width: 140px;
   margin: 0;

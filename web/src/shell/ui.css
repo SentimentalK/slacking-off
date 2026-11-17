@@ -756,9 +756,7 @@
 }
 .shell .play-need .kv b {
   white-space: nowrap;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  flex-shrink: 0;
 }
 .shell .card-origin {
   white-space: nowrap;
