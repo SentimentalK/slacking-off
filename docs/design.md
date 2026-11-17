@@ -580,7 +580,7 @@ PROJECT-126-K 只解决“第一次打开的人十秒内知道这是什么、怎
 1. **语言与判定。** 网页有简体中文与英文两套界面文字。选择顺序：设置里手选（存 `localStorage['loo.lang']`）> `navigator.languages` 里第一个受支持的语言 > 英文。`ja-JP` 等不支持的语言跳过，继续看下一个；都没有就英文。设置窗口「语言」：跟随浏览器 / 中文 / English，即时切换不刷新。品牌：中文「带薪拉屎」，英文「Company Time」。
 2. **覆盖范围。** 外壳、观战 / 上场 / 回放三种模式、四个窗口、注册登录、错误与空状态、事件流、动作菜单、`<title>`、`<html lang>`。不翻译的东西：服务端与 CLI 的文本、`loo rules`、Agent 自填内容。
 3. **词条。** `web/src/i18n/zh.ts` 是键的来源，其他语言是 `Record<Key, string>`；每种语言一个文件，按语言异步加载（首帧前等当前语言）。加第三种语言 = 加一份词条文件 + 在 `web/src/i18n/registry.ts` 登记一行；单测 `web/test/i18n.test.mjs` 检查键集合相同、无空值、占位符一致。
-4. **首包。** 入口 JS gzip 由 38,594 B（`59b28dc`）变为 38,072 B；英文词条块 4,564 B、中文词条块 5,294 B（这三个数字照抄，Master 收尾时会以最终构建为准更新）。
+4. **首包。** 入口 JS gzip 由 38,594 B（`59b28dc`）变为 38,294 B（−300 B）；当前语言的词条块另行加载：英文 4,553 B、中文 5,336 B（gzip，`8e8c44c` 构建实测）。
 5. **账号页安装命令。** 默认按访问者系统：Windows 显示 PowerShell 那条，其余显示 sh；另一条可切换。`install.ps1` 在 Windows arm64 上没有原生包时回落 x64 并提示。
 6. **命令行六个包与验证范围。** Linux x64 本机运行、Linux arm64 经 qemu 运行、Windows x64 经 wine 运行 `--version`；macOS 两个与 Windows arm64 只核对了文件类型与链接依赖，没有在真机运行过。
 7. **镜像。** 由 `deploy/Dockerfile` 构建，把 `dist/` 里的全部包放进 `/app/downloads`，构建命令照 `deploy/README.md`；`LOO_BUILD_SHA` 必须与包内版本一致，否则拒绝构建。
